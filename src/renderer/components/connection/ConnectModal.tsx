@@ -48,21 +48,20 @@ export default function ConnectModal({ onClose }: Props): JSX.Element {
     setSaved(await window.api.config.deleteConnection(id))
   }
 
-  const handleConnect = async (): Promise<void> => {
+  const connectWith = async (
+    opts: {
+      host: string
+      port: number
+      username: string
+      password?: string
+      privateKey?: string
+      passphrase?: string
+    },
+    title: string,
+    save?: ConnectionConfig
+  ): Promise<void> => {
     setError('')
-    if (!host || !username) {
-      setError('Host and username are required.')
-      return
-    }
     setConnecting(true)
-    const opts = {
-      host,
-      port: Number(port) || 22,
-      username,
-      password: authMode === 'password' ? password : undefined,
-      privateKey: authMode === 'key' ? privateKey : undefined,
-      passphrase: authMode === 'key' ? passphrase : undefined
-    }
     const result = await window.api.ssh.connect(opts)
     setConnecting(false)
 
@@ -71,31 +70,63 @@ export default function ConnectModal({ onClose }: Props): JSX.Element {
       return
     }
 
-    const title = name || `${username}@${host}`
     addTab({
       id: result.sessionId,
       sessionId: result.sessionId,
       title,
       status: 'connected',
-      host,
-      username
+      host: opts.host,
+      username: opts.username
     })
 
-    if (remember) {
-      const conn: ConnectionConfig = {
-        id: `${username}@${host}:${port}`,
-        name: title,
-        host,
-        port: Number(port) || 22,
-        username,
-        password: authMode === 'password' ? password : undefined,
-        privateKey: authMode === 'key' ? privateKey : undefined,
-        passphrase: authMode === 'key' ? passphrase : undefined
-      }
-      void window.api.config.saveConnection(conn)
+    if (save) {
+      void window.api.config.saveConnection(save)
     }
 
     onClose()
+  }
+
+  const handleConnect = async (): Promise<void> => {
+    if (!host || !username) {
+      setError('Host and username are required.')
+      return
+    }
+    const title = name || `${username}@${host}`
+    const opts = {
+      host,
+      port: Number(port) || 22,
+      username,
+      password: authMode === 'password' ? password : undefined,
+      privateKey: authMode === 'key' ? privateKey : undefined,
+      passphrase: authMode === 'key' ? passphrase : undefined
+    }
+    const save = remember
+      ? {
+          id: `${username}@${host}:${port}`,
+          name: title,
+          host,
+          port: Number(port) || 22,
+          username,
+          password: authMode === 'password' ? password : undefined,
+          privateKey: authMode === 'key' ? privateKey : undefined,
+          passphrase: authMode === 'key' ? passphrase : undefined
+        }
+      : undefined
+    await connectWith(opts, title, save)
+  }
+
+  const connectSaved = async (c: ConnectionConfig): Promise<void> => {
+    await connectWith(
+      {
+        host: c.host,
+        port: c.port,
+        username: c.username,
+        password: c.password,
+        privateKey: c.privateKey,
+        passphrase: c.passphrase
+      },
+      c.name || `${c.username}@${c.host}`
+    )
   }
 
   return (
@@ -108,7 +139,13 @@ export default function ConnectModal({ onClose }: Props): JSX.Element {
               <label>Saved connections</label>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {saved.map((c) => (
-                  <button key={c.id} className="saved-chip" onClick={() => loadSaved(c)} title="Load">
+                  <button
+                    key={c.id}
+                    className="saved-chip"
+                    onClick={() => loadSaved(c)}
+                    onDoubleClick={() => void connectSaved(c)}
+                    title="Click to load, double-click to connect"
+                  >
                     {c.name}
                     <span
                       onClick={(e) => deleteSaved(e, c.id)}
