@@ -6,6 +6,7 @@ import ConnectModal from './components/connection/ConnectModal'
 import SettingsModal from './components/ai/SettingsModal'
 import { useTabsStore } from './store/tabsStore'
 import { useAIStore } from './store/aiStore'
+import { initAIService } from './lib/aiService'
 
 export default function App(): JSX.Element {
   const { tabs, activeTabId, setStatusBySession } = useTabsStore()
@@ -13,6 +14,10 @@ export default function App(): JSX.Element {
 
   const [showConnect, setShowConnect] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+
+  useEffect(() => {
+    initAIService()
+  }, [])
 
   useEffect(() => {
     const off = window.api.ssh.onStatus((e) => {

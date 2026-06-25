@@ -1,56 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAIStore } from '../../store/aiStore'
 import { useTabsStore } from '../../store/tabsStore'
-import { readTerminalOutput } from '../../lib/terminalRegistry'
+import { sendPrompt } from '../../lib/aiService'
 import ChatMessage from './ChatMessage'
-import type { ChatMessageDTO, TerminalContext } from '../../../shared/types'
 
 export default function SidePanel(): JSX.Element {
-  const {
-    messages,
-    busy,
-    activeRequestId,
-    addMessage,
-    appendToMessage,
-    finishMessage,
-    setBusy,
-    setPanelOpen,
-    clear
-  } = useAIStore()
+  const { messages, busy, activeRequestId, setBusy, setPanelOpen, clear } = useAIStore()
   const activeTab = useTabsStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
 
   const [input, setInput] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
-  // Maps an in-flight requestId to the assistant message being streamed.
-  const pending = useRef<Map<string, string>>(new Map())
-
-  useEffect(() => {
-    const offChunk = window.api.ai.onChunk(({ requestId, delta }) => {
-      const msgId = pending.current.get(requestId)
-      if (msgId) appendToMessage(msgId, delta)
-    })
-    const offDone = window.api.ai.onDone(({ requestId }) => {
-      const msgId = pending.current.get(requestId)
-      if (msgId) finishMessage(msgId)
-      pending.current.delete(requestId)
-      setBusy(false)
-    })
-    const offError = window.api.ai.onError(({ requestId, error }) => {
-      const msgId = pending.current.get(requestId)
-      if (msgId) {
-        appendToMessage(msgId, `\n\n[Error] ${error}`)
-        finishMessage(msgId)
-      }
-      pending.current.delete(requestId)
-      setBusy(false)
-    })
-    return () => {
-      offChunk()
-      offDone()
-      offError()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight })
@@ -59,32 +18,8 @@ export default function SidePanel(): JSX.Element {
   const send = (): void => {
     const text = input.trim()
     if (!text || busy) return
-
-    const history: ChatMessageDTO[] = messages.map((m) => ({
-      role: m.role,
-      content: m.content
-    }))
-    history.push({ role: 'user', content: text })
-
-    const userId = crypto.randomUUID()
-    const assistantId = crypto.randomUUID()
-    const requestId = crypto.randomUUID()
-
-    addMessage({ id: userId, role: 'user', content: text })
-    addMessage({ id: assistantId, role: 'assistant', content: '', streaming: true })
-    pending.current.set(requestId, assistantId)
-    setBusy(true, requestId)
+    sendPrompt(text)
     setInput('')
-
-    const context: TerminalContext | undefined = activeTab
-      ? {
-          recentOutput: readTerminalOutput(activeTab.id, 40),
-          host: activeTab.host,
-          username: activeTab.username
-        }
-      : undefined
-
-    window.api.ai.chat({ requestId, messages: history, context })
   }
 
   const stop = (): void => {

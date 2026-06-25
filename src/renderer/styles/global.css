@@ -11,7 +11,10 @@
   --warn: #f9e2af;
   --ok: #a6e3a1;
   --radius: 8px;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-cjk: 'Noto Sans SC', 'Noto Sans CJK SC', 'Source Han Sans SC', 'Microsoft YaHei',
+    'PingFang SC', 'WenQuanYi Zen Hei', 'WenQuanYi Micro Hei';
+  --font-mono: 'Cascadia Code', 'Fira Code', Menlo, 'DejaVu Sans Mono', var(--font-cjk), monospace;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, var(--font-cjk), sans-serif;
 }
 
 * {
@@ -336,7 +339,7 @@ textarea:focus {
   margin: 0;
   padding: 10px 12px;
   background: #0b0b14;
-  font-family: 'Cascadia Code', 'Fira Code', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
   overflow-x: auto;
   white-space: pre-wrap;
@@ -438,4 +441,32 @@ textarea:focus {
 .error-text {
   color: var(--danger);
   font-size: 12px;
+}
+
+/* ---------- Context menu ---------- */
+.context-menu {
+  position: fixed;
+  z-index: 200;
+  min-width: 140px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.context-menu button {
+  border: none;
+  background: transparent;
+  text-align: left;
+  border-radius: 5px;
+  padding: 7px 10px;
+}
+
+.context-menu button:hover {
+  background: var(--accent);
+  color: #11111b;
 }
