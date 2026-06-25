@@ -6,18 +6,20 @@ import { useBookmarksStore } from '../store/bookmarksStore'
 import { connectFromConfig } from '../lib/connect'
 import { toggleNlForTab } from '../lib/terminalRegistry'
 
+export type SettingsMenuItem = 'ai'
+
 interface Props {
   sidebarOpen: boolean
   onToggleSidebar: () => void
   onNewConnection: () => void
-  onOpenSettings: () => void
+  onSettingsSelect: (item: SettingsMenuItem) => void
 }
 
 export default function TabBar({
   sidebarOpen,
   onToggleSidebar,
   onNewConnection,
-  onOpenSettings
+  onSettingsSelect
 }: Props): JSX.Element {
   const { tabs, activeTabId, setActive, removeTab } = useTabsStore()
   const { panelOpen, togglePanel, setPanelOpen } = useAIStore()
@@ -39,6 +41,7 @@ export default function TabBar({
   const connections = useBookmarksStore((s) => s.connections)
   const getRecentConnections = useBookmarksStore((s) => s.getRecentConnections)
   const [recentOpen, setRecentOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const recent = recentOpen ? getRecentConnections(5) : []
 
@@ -52,6 +55,17 @@ export default function TabBar({
       window.removeEventListener('scroll', close, true)
     }
   }, [recentOpen])
+
+  useEffect(() => {
+    if (!settingsOpen) return
+    const close = (): void => setSettingsOpen(false)
+    window.addEventListener('click', close)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [settingsOpen])
 
   const handleClose = (e: React.MouseEvent, id: string, sessionId: string): void => {
     e.stopPropagation()
@@ -137,9 +151,32 @@ export default function TabBar({
         )}
       </div>
       <div className="tabbar-spacer" />
-      <button className="toolbar-btn" onClick={onOpenSettings} title="AI settings">
-        Settings
-      </button>
+      <div className="toolbar-menu-wrap">
+        <button
+          className={`toolbar-btn toolbar-menu-btn ${settingsOpen ? 'active' : ''}`}
+          onClick={(e) => {
+            e.stopPropagation()
+            setSettingsOpen((v) => !v)
+          }}
+          title="Settings"
+        >
+          Settings
+          <span className={`toolbar-menu-caret ${settingsOpen ? 'open' : ''}`}>▾</span>
+        </button>
+        {settingsOpen && (
+          <div className="toolbar-dropdown-menu" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="toolbar-dropdown-item"
+              onClick={() => {
+                setSettingsOpen(false)
+                onSettingsSelect('ai')
+              }}
+            >
+              AI Settings
+            </button>
+          </div>
+        )}
+      </div>
       <button
         className={`toolbar-btn ${panelOpen ? 'active' : ''}`}
         onClick={handleToggleAI}

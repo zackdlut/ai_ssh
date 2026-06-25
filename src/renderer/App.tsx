@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import TabBar from './components/TabBar'
+import TabBar, { type SettingsMenuItem } from './components/TabBar'
 import TerminalView from './components/TerminalView'
 import SidePanel from './components/ai/SidePanel'
 import SftpPanel from './components/sftp/SftpPanel'
@@ -25,7 +25,7 @@ export default function App(): JSX.Element {
   const loadBookmarks = useBookmarksStore((s) => s.load)
 
   const [connectModal, setConnectModal] = useState<ConnectModalState | null>(null)
-  const [showSettings, setShowSettings] = useState(false)
+  const [settingsPanel, setSettingsPanel] = useState<SettingsMenuItem | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
 
   useEffect(() => {
@@ -53,7 +53,7 @@ export default function App(): JSX.Element {
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
         onNewConnection={() => openNewConnection(null)}
-        onOpenSettings={() => setShowSettings(true)}
+        onSettingsSelect={(item) => setSettingsPanel(item)}
       />
       <div className="app-body">
         {sidebarOpen && (
@@ -96,7 +96,7 @@ export default function App(): JSX.Element {
           onClose={() => setConnectModal(null)}
         />
       )}
-      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {settingsPanel === 'ai' && <SettingsModal onClose={() => setSettingsPanel(null)} />}
     </div>
   )
 }

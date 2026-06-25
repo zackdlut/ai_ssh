@@ -566,6 +566,51 @@ select:focus {
   flex: 1;
 }
 
+.toolbar-menu-wrap {
+  position: relative;
+}
+.toolbar-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.toolbar-menu-caret {
+  font-size: 10px;
+  opacity: 0.7;
+  transition: transform 0.14s ease;
+}
+.toolbar-menu-caret.open {
+  transform: rotate(180deg);
+}
+.toolbar-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 200;
+  min-width: 180px;
+  background: var(--ink-600);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: var(--shadow-pop);
+  animation: modal-in 0.14s ease;
+}
+.toolbar-dropdown-item {
+  border: none;
+  background: transparent;
+  text-align: left;
+  border-radius: 6px;
+  padding: 7px 11px;
+  font-size: 13px;
+  color: var(--text);
+}
+.toolbar-dropdown-item:hover {
+  background: linear-gradient(135deg, rgba(91, 233, 208, 0.18), rgba(116, 168, 255, 0.12));
+}
+
 .toolbar-btn {
   border: 1px solid transparent;
   background: transparent;
