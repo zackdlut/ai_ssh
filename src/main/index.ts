@@ -16,7 +16,7 @@ function createWindow(): void {
     minHeight: 560,
     show: false,
     title: 'AI Terminal',
-    backgroundColor: '#1e1e2e',
+    backgroundColor: '#07090f',
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

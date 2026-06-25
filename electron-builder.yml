@@ -1,0 +1,23 @@
+appId: com.aiterminal.app
+productName: AI Terminal
+directories:
+  output: release
+  buildResources: build
+npmRebuild: false
+files:
+  - out/**/*
+  - package.json
+asarUnpack:
+  - "**/node_modules/ssh2/**"
+  - "**/node_modules/cpu-features/**"
+win:
+  signAndEditExecutable: false
+  target:
+    - target: zip
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-win-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true

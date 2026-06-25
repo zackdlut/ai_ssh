@@ -26,14 +26,35 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
   useEffect(() => {
     const term = new Terminal({
       fontFamily:
-        "'Cascadia Code', 'Fira Code', Menlo, 'DejaVu Sans Mono', 'Noto Sans SC', 'Noto Sans CJK SC', 'WenQuanYi Zen Hei', 'WenQuanYi Micro Hei', monospace",
+        "'JetBrains Mono', 'Cascadia Code', 'Fira Code', Menlo, 'DejaVu Sans Mono', 'Noto Sans SC', 'Noto Sans CJK SC', 'WenQuanYi Zen Hei', 'WenQuanYi Micro Hei', monospace",
       fontSize: 13,
+      lineHeight: 1.25,
+      letterSpacing: 0.2,
       cursorBlink: true,
+      cursorStyle: 'bar',
       scrollback: 5000,
       theme: {
-        background: '#000000',
-        foreground: '#cdd6f4',
-        cursor: '#89b4fa'
+        background: '#04060b',
+        foreground: '#e7ebf6',
+        cursor: '#5be9d0',
+        cursorAccent: '#04060b',
+        selectionBackground: 'rgba(91, 233, 208, 0.28)',
+        black: '#0a0d15',
+        red: '#ff7a93',
+        green: '#82e8b6',
+        yellow: '#ffce6a',
+        blue: '#74a8ff',
+        magenta: '#b292ff',
+        cyan: '#5be9d0',
+        white: '#cdd3e3',
+        brightBlack: '#5d6479',
+        brightRed: '#ff95a9',
+        brightGreen: '#9bf0c7',
+        brightYellow: '#ffd98a',
+        brightBlue: '#93bcff',
+        brightMagenta: '#c8adff',
+        brightCyan: '#7ff0dd',
+        brightWhite: '#f4f7ff'
       }
     })
     const fit = new FitAddon()

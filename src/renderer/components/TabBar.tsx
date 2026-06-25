@@ -18,6 +18,12 @@ export default function TabBar({ onNewConnection, onOpenSettings }: Props): JSX.
 
   return (
     <div className="tabbar">
+      <div className="brand">
+        <span className="brand-mark">A</span>
+        <span className="brand-name">
+          AI <b>Terminal</b>
+        </span>
+      </div>
       {tabs.map((tab) => (
         <div
           key={tab.id}

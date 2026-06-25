@@ -108,11 +108,11 @@ export default function ConnectModal({ onClose }: Props): JSX.Element {
               <label>Saved connections</label>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {saved.map((c) => (
-                  <button key={c.id} onClick={() => loadSaved(c)} title="Load">
+                  <button key={c.id} className="saved-chip" onClick={() => loadSaved(c)} title="Load">
                     {c.name}
                     <span
                       onClick={(e) => deleteSaved(e, c.id)}
-                      style={{ marginLeft: 8, color: 'var(--danger)' }}
+                      style={{ marginLeft: 6, color: 'var(--danger)', fontSize: 15, lineHeight: 1 }}
                     >
                       ×
                     </span>
