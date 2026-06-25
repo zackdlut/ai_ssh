@@ -5,6 +5,7 @@ import type {
   AIDoneEvent,
   AIErrorEvent,
   AISettings,
+  BookmarkFolder,
   ConnectionConfig,
   ConnectOptions,
   ConnectResult,
@@ -46,7 +47,18 @@ const api = {
     saveConnection: (c: ConnectionConfig): Promise<ConnectionConfig[]> =>
       ipcRenderer.invoke('config:saveConnection', c),
     deleteConnection: (id: string): Promise<ConnectionConfig[]> =>
-      ipcRenderer.invoke('config:deleteConnection', id)
+      ipcRenderer.invoke('config:deleteConnection', id),
+    setConnections: (list: ConnectionConfig[]): Promise<ConnectionConfig[]> =>
+      ipcRenderer.invoke('config:setConnections', list),
+    getFolders: (): Promise<BookmarkFolder[]> => ipcRenderer.invoke('config:getFolders'),
+    saveFolder: (f: BookmarkFolder): Promise<BookmarkFolder[]> =>
+      ipcRenderer.invoke('config:saveFolder', f),
+    setFolders: (list: BookmarkFolder[]): Promise<BookmarkFolder[]> =>
+      ipcRenderer.invoke('config:setFolders', list),
+    deleteFolder: (
+      id: string
+    ): Promise<{ folders: BookmarkFolder[]; connections: ConnectionConfig[] }> =>
+      ipcRenderer.invoke('config:deleteFolder', id)
   }
 }
 

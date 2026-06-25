@@ -35,6 +35,10 @@ export default function SidePanel(): JSX.Element {
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    // While an IME (e.g. Chinese pinyin) is composing, Enter confirms the
+    // candidate word — it must not submit the message. keyCode 229 is the
+    // legacy signal browsers emit for keystrokes consumed by the IME.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       send()

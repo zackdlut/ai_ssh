@@ -8,6 +8,7 @@ import type {
   AIDoneEvent,
   AIErrorEvent,
   AISettings,
+  BookmarkFolder,
   ConnectionConfig,
   ConnectOptions
 } from '../shared/types'
@@ -45,6 +46,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
     config.saveConnection(conn)
   )
   ipcMain.handle('config:deleteConnection', (_e, id: string) => config.deleteConnection(id))
+  ipcMain.handle('config:setConnections', (_e, list: ConnectionConfig[]) =>
+    config.setConnections(list)
+  )
+  ipcMain.handle('config:getFolders', () => config.getFolders())
+  ipcMain.handle('config:saveFolder', (_e, folder: BookmarkFolder) => config.saveFolder(folder))
+  ipcMain.handle('config:setFolders', (_e, list: BookmarkFolder[]) => config.setFolders(list))
+  ipcMain.handle('config:deleteFolder', (_e, id: string) => config.deleteFolder(id))
 
   return ssh
 }

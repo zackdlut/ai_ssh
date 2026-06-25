@@ -1,164 +1,118 @@
-import { useEffect, useState } from 'react'
-import { useTabsStore } from '../../store/tabsStore'
+import { useMemo, useState } from 'react'
+import { useBookmarksStore, type TreeNode } from '../../store/bookmarksStore'
+import { connect } from '../../lib/connect'
 import type { ConnectionConfig } from '../../../shared/types'
 
 interface Props {
   onClose: () => void
+  /** When set, edit an existing saved connection instead of creating one. */
+  editConn?: ConnectionConfig | null
+  /** Default parent folder for a newly saved connection. */
+  defaultParentId?: string | null
 }
 
 type AuthMode = 'password' | 'key'
 
-export default function ConnectModal({ onClose }: Props): JSX.Element {
-  const addTab = useTabsStore((s) => s.addTab)
+interface FolderOption {
+  id: string | null
+  label: string
+}
 
-  const [name, setName] = useState('')
-  const [host, setHost] = useState('')
-  const [port, setPort] = useState('22')
-  const [username, setUsername] = useState('')
-  const [authMode, setAuthMode] = useState<AuthMode>('password')
-  const [password, setPassword] = useState('')
-  const [privateKey, setPrivateKey] = useState('')
-  const [passphrase, setPassphrase] = useState('')
-  const [remember, setRemember] = useState(false)
+export default function ConnectModal({ onClose, editConn, defaultParentId }: Props): JSX.Element {
+  const getTree = useBookmarksStore((s) => s.getTree)
+  const upsertConnection = useBookmarksStore((s) => s.upsertConnection)
+
+  const [name, setName] = useState(editConn?.name ?? '')
+  const [host, setHost] = useState(editConn?.host ?? '')
+  const [port, setPort] = useState(String(editConn?.port ?? 22))
+  const [username, setUsername] = useState(editConn?.username ?? '')
+  const [authMode, setAuthMode] = useState<AuthMode>(editConn?.privateKey ? 'key' : 'password')
+  const [password, setPassword] = useState(editConn?.password ?? '')
+  const [privateKey, setPrivateKey] = useState(editConn?.privateKey ?? '')
+  const [passphrase, setPassphrase] = useState(editConn?.passphrase ?? '')
+  const [remember, setRemember] = useState(Boolean(editConn))
+  const [parentId, setParentId] = useState<string | null>(
+    editConn?.parentId ?? defaultParentId ?? null
+  )
   const [error, setError] = useState('')
   const [connecting, setConnecting] = useState(false)
-  const [saved, setSaved] = useState<ConnectionConfig[]>([])
 
-  useEffect(() => {
-    void window.api.config.getConnections().then(setSaved)
-  }, [])
+  const isEditing = Boolean(editConn)
 
-  const loadSaved = (c: ConnectionConfig): void => {
-    setName(c.name)
-    setHost(c.host)
-    setPort(String(c.port))
-    setUsername(c.username)
-    if (c.privateKey) {
-      setAuthMode('key')
-      setPrivateKey(c.privateKey)
-      setPassphrase(c.passphrase ?? '')
-    } else {
-      setAuthMode('password')
-      setPassword(c.password ?? '')
+  const folderOptions = useMemo<FolderOption[]>(() => {
+    const opts: FolderOption[] = [{ id: null, label: '（根目录）' }]
+    const walk = (nodes: TreeNode[], depth: number): void => {
+      for (const n of nodes) {
+        if (n.kind === 'folder') {
+          opts.push({ id: n.id, label: `${'　'.repeat(depth)}${n.folder.name}` })
+          walk(n.children, depth + 1)
+        }
+      }
     }
-  }
+    walk(getTree(), 0)
+    return opts
+  }, [getTree])
 
-  const deleteSaved = async (e: React.MouseEvent, id: string): Promise<void> => {
-    e.stopPropagation()
-    setSaved(await window.api.config.deleteConnection(id))
-  }
-
-  const connectWith = async (
-    opts: {
-      host: string
-      port: number
-      username: string
-      password?: string
-      privateKey?: string
-      passphrase?: string
-    },
-    title: string,
-    save?: ConnectionConfig
-  ): Promise<void> => {
-    setError('')
-    setConnecting(true)
-    const result = await window.api.ssh.connect(opts)
-    setConnecting(false)
-
-    if (result.error || !result.sessionId) {
-      setError(result.error ?? 'Failed to connect.')
-      return
-    }
-
-    addTab({
-      id: result.sessionId,
-      sessionId: result.sessionId,
-      title,
-      status: 'connected',
-      host: opts.host,
-      username: opts.username
-    })
-
-    if (save) {
-      void window.api.config.saveConnection(save)
-    }
-
-    onClose()
-  }
-
-  const handleConnect = async (): Promise<void> => {
-    if (!host || !username) {
-      setError('Host and username are required.')
-      return
-    }
+  const buildConfig = (): ConnectionConfig => {
     const title = name || `${username}@${host}`
-    const opts = {
+    return {
+      id: editConn?.id ?? `${username}@${host}:${port}`,
+      name: title,
       host,
       port: Number(port) || 22,
       username,
       password: authMode === 'password' ? password : undefined,
       privateKey: authMode === 'key' ? privateKey : undefined,
-      passphrase: authMode === 'key' ? passphrase : undefined
+      passphrase: authMode === 'key' ? passphrase : undefined,
+      parentId,
+      order: editConn?.order
     }
-    const save = remember
-      ? {
-          id: `${username}@${host}:${port}`,
-          name: title,
-          host,
-          port: Number(port) || 22,
-          username,
-          password: authMode === 'password' ? password : undefined,
-          privateKey: authMode === 'key' ? privateKey : undefined,
-          passphrase: authMode === 'key' ? passphrase : undefined
-        }
-      : undefined
-    await connectWith(opts, title, save)
   }
 
-  const connectSaved = async (c: ConnectionConfig): Promise<void> => {
-    await connectWith(
-      {
-        host: c.host,
-        port: c.port,
-        username: c.username,
-        password: c.password,
-        privateKey: c.privateKey,
-        passphrase: c.passphrase
+  const validate = (): boolean => {
+    if (!host || !username) {
+      setError('Host and username are required.')
+      return false
+    }
+    return true
+  }
+
+  const handleSaveOnly = async (): Promise<void> => {
+    if (!validate()) return
+    await upsertConnection(buildConfig())
+    onClose()
+  }
+
+  const handleConnect = async (): Promise<void> => {
+    if (!validate()) return
+    const title = name || `${username}@${host}`
+    setError('')
+    setConnecting(true)
+    const err = await connect({
+      opts: {
+        host,
+        port: Number(port) || 22,
+        username,
+        password: authMode === 'password' ? password : undefined,
+        privateKey: authMode === 'key' ? privateKey : undefined,
+        passphrase: authMode === 'key' ? passphrase : undefined
       },
-      c.name || `${c.username}@${c.host}`
-    )
+      title
+    })
+    setConnecting(false)
+    if (err) {
+      setError(err)
+      return
+    }
+    if (remember) await upsertConnection(buildConfig())
+    onClose()
   }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">New SSH Connection</div>
+        <div className="modal-header">{isEditing ? '编辑连接' : 'New SSH Connection'}</div>
         <div className="modal-body">
-          {saved.length > 0 && (
-            <div className="field">
-              <label>Saved connections</label>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {saved.map((c) => (
-                  <button
-                    key={c.id}
-                    className="saved-chip"
-                    onClick={() => loadSaved(c)}
-                    onDoubleClick={() => void connectSaved(c)}
-                    title="Click to load, double-click to connect"
-                  >
-                    {c.name}
-                    <span
-                      onClick={(e) => deleteSaved(e, c.id)}
-                      style={{ marginLeft: 6, color: 'var(--danger)', fontSize: 15, lineHeight: 1 }}
-                    >
-                      ×
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
           <div className="field">
             <label>Name (optional)</label>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-server" />
@@ -223,22 +177,43 @@ export default function ConnectModal({ onClose }: Props): JSX.Element {
             </>
           )}
 
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-            <input
-              type="checkbox"
-              checked={remember}
-              onChange={(e) => setRemember(e.target.checked)}
-              style={{ width: 'auto' }}
-            />
-            Save this connection locally
-          </label>
+          {!isEditing && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+              <input
+                type="checkbox"
+                checked={remember}
+                onChange={(e) => setRemember(e.target.checked)}
+                style={{ width: 'auto' }}
+              />
+              Save this connection locally
+            </label>
+          )}
+
+          {(remember || isEditing) && (
+            <div className="field">
+              <label>分组</label>
+              <select
+                value={parentId ?? ''}
+                onChange={(e) => setParentId(e.target.value || null)}
+              >
+                {folderOptions.map((o) => (
+                  <option key={o.id ?? '__root__'} value={o.id ?? ''}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {error && <div className="error-text">{error}</div>}
         </div>
         <div className="modal-footer">
           <button onClick={onClose}>Cancel</button>
-          <button className="primary" onClick={handleConnect} disabled={connecting}>
-            {connecting ? 'Connecting…' : 'Connect'}
+          {isEditing && (
+            <button onClick={() => void handleSaveOnly()}>保存</button>
+          )}
+          <button className="primary" onClick={() => void handleConnect()} disabled={connecting}>
+            {connecting ? 'Connecting…' : isEditing ? '保存并连接' : 'Connect'}
           </button>
         </div>
       </div>

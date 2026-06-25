@@ -3,20 +3,32 @@ import TabBar from './components/TabBar'
 import TerminalView from './components/TerminalView'
 import SidePanel from './components/ai/SidePanel'
 import ConnectModal from './components/connection/ConnectModal'
+import ConnectionSidebar from './components/connection/ConnectionSidebar'
 import SettingsModal from './components/ai/SettingsModal'
 import { useTabsStore } from './store/tabsStore'
 import { useAIStore } from './store/aiStore'
+import { useBookmarksStore } from './store/bookmarksStore'
 import { initAIService } from './lib/aiService'
+import type { ConnectionConfig } from '../shared/types'
+
+interface ConnectModalState {
+  editConn?: ConnectionConfig | null
+  parentId?: string | null
+}
 
 export default function App(): JSX.Element {
   const { tabs, activeTabId, setStatusBySession } = useTabsStore()
   const panelOpen = useAIStore((s) => s.panelOpen)
+  const loadBookmarks = useBookmarksStore((s) => s.load)
 
-  const [showConnect, setShowConnect] = useState(false)
+  const [connectModal, setConnectModal] = useState<ConnectModalState | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
 
   useEffect(() => {
     initAIService()
+    void loadBookmarks()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -27,19 +39,27 @@ export default function App(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Open the connect dialog automatically on first launch.
-  useEffect(() => {
-    if (tabs.length === 0) setShowConnect(true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  const openNewConnection = (parentId: string | null): void =>
+    setConnectModal({ parentId })
+  const openEditConnection = (conn: ConnectionConfig): void =>
+    setConnectModal({ editConn: conn })
 
   return (
     <div className="app">
       <TabBar
-        onNewConnection={() => setShowConnect(true)}
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((v) => !v)}
+        onNewConnection={() => openNewConnection(null)}
         onOpenSettings={() => setShowSettings(true)}
       />
       <div className="app-body">
+        {sidebarOpen && (
+          <ConnectionSidebar
+            onNewConnection={openNewConnection}
+            onEditConnection={openEditConnection}
+            onClose={() => setSidebarOpen(false)}
+          />
+        )}
         <div className="main-pane">
           <div className="terminal-area">
             {tabs.length === 0 ? (
@@ -51,7 +71,7 @@ export default function App(): JSX.Element {
                     连接到一台主机即可开始。AI Copilot 会感知当前终端的输出，帮你生成可执行命令。
                   </div>
                 </div>
-                <button className="primary" onClick={() => setShowConnect(true)}>
+                <button className="primary" onClick={() => openNewConnection(null)}>
                   + 新建 SSH 连接
                 </button>
               </div>
@@ -65,7 +85,13 @@ export default function App(): JSX.Element {
         {panelOpen && <SidePanel />}
       </div>
 
-      {showConnect && <ConnectModal onClose={() => setShowConnect(false)} />}
+      {connectModal && (
+        <ConnectModal
+          editConn={connectModal.editConn}
+          defaultParentId={connectModal.parentId}
+          onClose={() => setConnectModal(null)}
+        />
+      )}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
     </div>
   )

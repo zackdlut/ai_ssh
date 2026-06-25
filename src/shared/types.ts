@@ -9,6 +9,22 @@ export interface ConnectionConfig {
   /** Path to a private key file, or the key contents. */
   privateKey?: string
   passphrase?: string
+  /** Parent folder id, or null/undefined for the tree root. */
+  parentId?: string | null
+  /** Sort order within the parent. */
+  order?: number
+  /** Number of times this connection has been opened. */
+  useCount?: number
+  /** Timestamp (ms) when this connection was last opened. */
+  lastUsedAt?: number
+}
+
+/** A bookmark folder used to group saved connections into a nested tree. */
+export interface BookmarkFolder {
+  id: string
+  name: string
+  parentId: string | null
+  order: number
 }
 
 export interface ConnectOptions {
