@@ -254,7 +254,14 @@ export default function ConnectionSidebar({
   return (
     <div className="conn-sidebar">
       <div className="conn-sidebar-header">
-        <span className="conn-sidebar-title">连接</span>
+        <div className="conn-sidebar-title-wrap">
+          <span className="conn-sidebar-title">连接</span>
+          {connections.length > 0 && (
+            <span className="conn-count" title={`${connections.length} 个已保存连接`}>
+              {connections.length}
+            </span>
+          )}
+        </div>
         <div className="conn-sidebar-actions">
           <button
             className="icon-btn"

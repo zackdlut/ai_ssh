@@ -78,7 +78,7 @@ export default function TabBar({
       ))}
       <div className="tab-add-wrap">
         <button className="tab-add" onClick={onNewConnection} title="New SSH connection">
-          +
+          <span className="tab-add-glyph">+</span>
         </button>
         <button
           className={`tab-add-caret ${recentOpen ? 'active' : ''}`}
@@ -88,7 +88,7 @@ export default function TabBar({
           }}
           title="最近常用连接"
         >
-          ▾
+          <span className="tab-add-caret-glyph">▾</span>
         </button>
         {recentOpen && (
           <div className="recent-menu" onClick={(e) => e.stopPropagation()}>
