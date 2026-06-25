@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import mermaid from 'mermaid'
+import { mermaidThemeFor } from '../../lib/themes'
+import { useThemeStore } from '../../store/themeStore'
 
-let initialized = false
-function ensureInit(): void {
-  if (initialized) return
-  initialized = true
+let lastMermaidTheme: 'dark' | 'default' | null = null
+function ensureInit(theme: 'dark' | 'default'): void {
+  if (lastMermaidTheme === theme) return
+  lastMermaidTheme = theme
   mermaid.initialize({
     startOnLoad: false,
-    theme: 'dark',
+    theme,
     securityLevel: 'strict',
     // Must include a CJK-capable family or Chinese labels render as tofu boxes.
     fontFamily:
@@ -53,9 +55,10 @@ export default function MermaidBlock({ code }: Props): JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const appTheme = useThemeStore((s) => s.theme)
 
   useEffect(() => {
-    ensureInit()
+    ensureInit(mermaidThemeFor(appTheme))
     let cancelled = false
 
     const renderOnce = (src: string): Promise<string> =>
@@ -83,7 +86,7 @@ export default function MermaidBlock({ code }: Props): JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [code])
+  }, [code, appTheme])
 
   const copy = async (): Promise<void> => {
     await navigator.clipboard.writeText(code)

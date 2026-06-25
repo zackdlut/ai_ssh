@@ -60,6 +60,9 @@ export interface AISettings {
   model: string
 }
 
+/** Application color theme. `aurora` is the default dark palette. */
+export type AppTheme = 'aurora' | 'dawn'
+
 export interface ChatMessageDTO {
   role: 'system' | 'user' | 'assistant'
   content: string

@@ -18,6 +18,9 @@ import '@fontsource/jetbrains-mono/700.css'
 import '@fontsource/noto-sans-sc/chinese-simplified-400.css'
 import '@fontsource/noto-sans-sc/chinese-simplified-500.css'
 import './styles/global.css'
+import { applyTheme, readCachedTheme } from './lib/themes'
+
+applyTheme(readCachedTheme())
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

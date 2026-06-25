@@ -5,6 +5,7 @@ import type {
   AIDoneEvent,
   AIErrorEvent,
   AISettings,
+  AppTheme,
   AITranslateRequest,
   AITranslateResult,
   AISummarizeRequest,
@@ -69,6 +70,8 @@ const api = {
   config: {
     getAISettings: (): Promise<AISettings> => ipcRenderer.invoke('config:getAI'),
     setAISettings: (s: AISettings): Promise<AISettings> => ipcRenderer.invoke('config:setAI', s),
+    getTheme: (): Promise<AppTheme> => ipcRenderer.invoke('config:getTheme'),
+    setTheme: (theme: AppTheme): Promise<AppTheme> => ipcRenderer.invoke('config:setTheme', theme),
     getConnections: (): Promise<ConnectionConfig[]> => ipcRenderer.invoke('config:getConnections'),
     saveConnection: (c: ConnectionConfig): Promise<ConnectionConfig[]> =>
       ipcRenderer.invoke('config:saveConnection', c),

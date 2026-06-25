@@ -9,6 +9,7 @@ import type {
   AIDoneEvent,
   AIErrorEvent,
   AISettings,
+  AppTheme,
   AITranslateRequest,
   AITranslateResult,
   AISummarizeRequest,
@@ -161,6 +162,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
   // --- Config ---
   ipcMain.handle('config:getAI', () => config.getAISettings())
   ipcMain.handle('config:setAI', (_e, settings: AISettings) => config.setAISettings(settings))
+  ipcMain.handle('config:getTheme', () => config.getTheme())
+  ipcMain.handle('config:setTheme', (_e, theme: AppTheme) => config.setTheme(theme))
   ipcMain.handle('config:getConnections', () => config.getConnections())
   ipcMain.handle('config:saveConnection', (_e, conn: ConnectionConfig) =>
     config.saveConnection(conn)

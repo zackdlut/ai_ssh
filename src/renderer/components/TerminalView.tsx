@@ -7,6 +7,8 @@ import { useTabsStore } from '../store/tabsStore'
 import { registerNlToggle, registerTerminal, unregisterTerminal } from '../lib/terminalRegistry'
 import { askAboutSelection } from '../lib/aiService'
 import { extractCommands, isDangerous } from '../lib/commands'
+import { XTERM_THEMES } from '../lib/themes'
+import { useThemeStore } from '../store/themeStore'
 import type { CommandRun } from '../../shared/types'
 
 interface Props {
@@ -193,6 +195,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
   const fitRef = useRef<FitAddon | null>(null)
   const nlRef = useRef<NlState>({ mode: 'normal', buffer: '', busy: false })
   const [menu, setMenu] = useState<MenuState | null>(null)
+  const appTheme = useThemeStore((s) => s.theme)
 
   useEffect(() => {
     const term = new Terminal({
@@ -204,29 +207,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       cursorBlink: true,
       cursorStyle: 'bar',
       scrollback: 5000,
-      theme: {
-        background: '#04060b',
-        foreground: '#e7ebf6',
-        cursor: '#5be9d0',
-        cursorAccent: '#04060b',
-        selectionBackground: 'rgba(91, 233, 208, 0.28)',
-        black: '#0a0d15',
-        red: '#ff7a93',
-        green: '#82e8b6',
-        yellow: '#ffce6a',
-        blue: '#74a8ff',
-        magenta: '#b292ff',
-        cyan: '#5be9d0',
-        white: '#cdd3e3',
-        brightBlack: '#5d6479',
-        brightRed: '#ff95a9',
-        brightGreen: '#9bf0c7',
-        brightYellow: '#ffd98a',
-        brightBlue: '#93bcff',
-        brightMagenta: '#c8adff',
-        brightCyan: '#7ff0dd',
-        brightWhite: '#f4f7ff'
-      }
+      theme: XTERM_THEMES[useThemeStore.getState().theme]
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
@@ -519,6 +500,12 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       })
     }
   }, [active])
+
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    term.options.theme = XTERM_THEMES[appTheme]
+  }, [appTheme])
 
   // Dismiss the context menu on any outside interaction.
   useEffect(() => {

@@ -6,10 +6,12 @@ import SftpPanel from './components/sftp/SftpPanel'
 import ConnectModal from './components/connection/ConnectModal'
 import ConnectionSidebar from './components/connection/ConnectionSidebar'
 import SettingsModal from './components/ai/SettingsModal'
+import ThemesModal from './components/settings/ThemesModal'
 import { useTabsStore } from './store/tabsStore'
 import { useAIStore } from './store/aiStore'
 import { useSftpStore } from './store/sftpStore'
 import { useBookmarksStore } from './store/bookmarksStore'
+import { useThemeStore } from './store/themeStore'
 import { initAIService } from './lib/aiService'
 import type { ConnectionConfig } from '../shared/types'
 
@@ -23,6 +25,7 @@ export default function App(): JSX.Element {
   const panelOpen = useAIStore((s) => s.panelOpen)
   const sftpOpen = useSftpStore((s) => s.panelOpen)
   const loadBookmarks = useBookmarksStore((s) => s.load)
+  const loadTheme = useThemeStore((s) => s.load)
 
   const [connectModal, setConnectModal] = useState<ConnectModalState | null>(null)
   const [settingsPanel, setSettingsPanel] = useState<SettingsMenuItem | null>(null)
@@ -31,6 +34,7 @@ export default function App(): JSX.Element {
   useEffect(() => {
     initAIService()
     void loadBookmarks()
+    void loadTheme()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -97,6 +101,7 @@ export default function App(): JSX.Element {
         />
       )}
       {settingsPanel === 'ai' && <SettingsModal onClose={() => setSettingsPanel(null)} />}
+      {settingsPanel === 'themes' && <ThemesModal onClose={() => setSettingsPanel(null)} />}
     </div>
   )
 }

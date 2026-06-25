@@ -1,8 +1,9 @@
 import Store from 'electron-store'
-import type { AISettings, BookmarkFolder, ConnectionConfig } from '../../shared/types'
+import type { AISettings, AppTheme, BookmarkFolder, ConnectionConfig } from '../../shared/types'
 
 interface StoreSchema {
   ai: AISettings
+  theme: AppTheme
   connections: ConnectionConfig[]
   folders: BookmarkFolder[]
 }
@@ -23,6 +24,7 @@ function store(): Store<StoreSchema> {
           apiKey: 'ollam',
           model: 'qwen3.5:9b'
         },
+        theme: 'aurora',
         connections: [],
         folders: []
       }
@@ -38,6 +40,16 @@ export function getAISettings(): AISettings {
 export function setAISettings(settings: AISettings): AISettings {
   store().set('ai', settings)
   return store().get('ai')
+}
+
+export function getTheme(): AppTheme {
+  const theme = store().get('theme')
+  return theme === 'dawn' ? 'dawn' : 'aurora'
+}
+
+export function setTheme(theme: AppTheme): AppTheme {
+  store().set('theme', theme === 'dawn' ? 'dawn' : 'aurora')
+  return getTheme()
 }
 
 export function getConnections(): ConnectionConfig[] {

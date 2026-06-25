@@ -6,7 +6,7 @@ import { useBookmarksStore } from '../store/bookmarksStore'
 import { connectFromConfig } from '../lib/connect'
 import { toggleNlForTab } from '../lib/terminalRegistry'
 
-export type SettingsMenuItem = 'ai'
+export type SettingsMenuItem = 'ai' | 'themes'
 
 interface Props {
   sidebarOpen: boolean
@@ -165,6 +165,15 @@ export default function TabBar({
         </button>
         {settingsOpen && (
           <div className="toolbar-dropdown-menu" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="toolbar-dropdown-item"
+              onClick={() => {
+                setSettingsOpen(false)
+                onSettingsSelect('themes')
+              }}
+            >
+              Themes
+            </button>
             <button
               className="toolbar-dropdown-item"
               onClick={() => {
