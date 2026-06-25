@@ -18,6 +18,51 @@ export interface StreamCallbacks {
   onError: (error: string) => void
 }
 
+function ollamaDirectAnswerBody(
+  model: string,
+  messages: OpenAI.Chat.ChatCompletionMessageParam[]
+): OpenAI.Chat.ChatCompletionCreateParamsNonStreaming {
+  return {
+    model,
+    messages,
+    stream: false,
+    // Ollama reasoning models (Qwen3, etc.) otherwise return empty `content`.
+    ...({ reasoning_effort: 'none' } as Record<string, unknown>)
+  } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming
+}
+
+function ollamaDirectAnswerStreamBody(
+  model: string,
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  maxTokens: number
+): OpenAI.Chat.ChatCompletionCreateParamsStreaming {
+  return {
+    model,
+    messages,
+    stream: true,
+    max_tokens: maxTokens,
+    ...({ reasoning_effort: 'none' } as Record<string, unknown>)
+  } as OpenAI.Chat.ChatCompletionCreateParamsStreaming
+}
+
+/** Read streamed text from OpenAI-compatible chunks (incl. Ollama `delta.reasoning`). */
+function extractStreamDelta(part: OpenAI.Chat.ChatCompletionChunk): string {
+  const delta = part.choices[0]?.delta
+  if (!delta) return ''
+  if (delta.content) return delta.content
+  const extra = delta as { reasoning?: string; reasoning_content?: string }
+  return extra.reasoning ?? extra.reasoning_content ?? ''
+}
+
+function extractMessageText(
+  message: OpenAI.Chat.ChatCompletionMessage | undefined
+): string {
+  if (!message) return ''
+  if (message.content) return message.content
+  const extra = message as { reasoning?: string; reasoning_content?: string }
+  return extra.reasoning ?? extra.reasoning_content ?? ''
+}
+
 /**
  * Thin wrapper around an OpenAI-compatible Chat Completions endpoint with
  * streaming support and per-request cancellation.
@@ -65,7 +110,7 @@ export class AIProvider {
       )
 
       for await (const part of stream) {
-        const delta = part.choices[0]?.delta?.content ?? ''
+        const delta = extractStreamDelta(part)
         if (delta) {
           full += delta
           cb.onChunk(delta)
@@ -113,22 +158,21 @@ export class AIProvider {
     }
     messages.push({ role: 'user', content: req.prompt })
 
-    const completion = await client.chat.completions.create({
-      model: settings.model || 'gpt-4o-mini',
-      messages,
-      stream: false
-    })
-    return completion.choices[0]?.message?.content ?? ''
+    const completion = await client.chat.completions.create(
+      ollamaDirectAnswerBody(settings.model || 'gpt-4o-mini', messages)
+    )
+    return extractMessageText(completion.choices[0]?.message)
   }
 
   /**
-   * One-shot, non-streaming summary of command execution results, used by the
-   * in-terminal NL mode to report back to the user in natural language.
+   * Stream a summary of command execution results back to the user in natural
+   * language. Uses streaming so the terminal can render tokens as they arrive.
    */
-  async summarize(req: AISummarizeRequest): Promise<string> {
+  async summarize(req: AISummarizeRequest, cb: StreamCallbacks): Promise<void> {
     const settings = this.getSettings()
     if (!settings.apiKey) {
-      throw new Error('AI is not configured. Set the API key in Settings.')
+      cb.onError('AI is not configured. Set the API key in Settings.')
+      return
     }
 
     const client = new OpenAI({
@@ -136,10 +180,14 @@ export class AIProvider {
       baseURL: normalizeBaseURL(settings.baseURL)
     })
 
+    const controller = new AbortController()
+    this.controllers.set(req.requestId, controller)
+
     const runsText = req.runs
       .map((r, i) => {
         const code = r.code === null ? '未知' : String(r.code)
-        return `# 命令 ${i + 1}（退出码 ${code}）\n$ ${r.command}\n输出:\n${r.output || '(无输出)'}`
+        const output = (r.output || '(无输出)').slice(0, 1500)
+        return `# 命令 ${i + 1}（退出码 ${code}）\n$ ${r.command}\n输出:\n${output}`
       })
       .join('\n\n')
 
@@ -154,12 +202,30 @@ export class AIProvider {
     }
     messages.push({ role: 'user', content: userContent })
 
-    const completion = await client.chat.completions.create({
-      model: settings.model || 'gpt-4o-mini',
-      messages,
-      stream: false
-    })
-    return completion.choices[0]?.message?.content ?? ''
+    let full = ''
+    try {
+      const stream = await client.chat.completions.create(
+        ollamaDirectAnswerStreamBody(settings.model || 'gpt-4o-mini', messages, 256),
+        { signal: controller.signal }
+      )
+
+      for await (const part of stream) {
+        const delta = extractStreamDelta(part)
+        if (delta) {
+          full += delta
+          cb.onChunk(delta)
+        }
+      }
+      cb.onDone(full)
+    } catch (e) {
+      if (controller.signal.aborted) {
+        cb.onDone(full)
+      } else {
+        cb.onError(e instanceof Error ? e.message : String(e))
+      }
+    } finally {
+      this.controllers.delete(req.requestId)
+    }
   }
 }
 

@@ -12,7 +12,6 @@ import type {
   AITranslateRequest,
   AITranslateResult,
   AISummarizeRequest,
-  AISummarizeResult,
   BookmarkFolder,
   ConnectionConfig,
   ConnectOptions,
@@ -63,17 +62,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
     }
   )
 
-  // Summarize command execution results for the in-terminal NL mode.
-  ipcMain.handle(
-    'ai:summarize',
-    async (_e, req: AISummarizeRequest): Promise<AISummarizeResult> => {
-      try {
-        return { content: await ai.summarize(req) }
-      } catch (err) {
-        return { error: errMessage(err) }
-      }
-    }
-  )
+  // Stream command execution summary for the in-terminal NL mode.
+  ipcMain.on('ai:summarize', (e, req: AISummarizeRequest) => {
+    void ai.summarize(req, {
+      onChunk: (delta) =>
+        e.sender.send('ai:chunk', { requestId: req.requestId, delta } satisfies AIChunkEvent),
+      onDone: (content) =>
+        e.sender.send('ai:done', { requestId: req.requestId, content } satisfies AIDoneEvent),
+      onError: (error) =>
+        e.sender.send('ai:error', { requestId: req.requestId, error } satisfies AIErrorEvent)
+    })
+  })
 
   // --- SFTP ---
   ipcMain.handle('sftp:list', async (_e, sessionId: string, path: string): Promise<SftpListResult> => {

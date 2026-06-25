@@ -100,6 +100,7 @@ export interface CommandRun {
 
 /** Ask the AI to evaluate execution results against the original NL request. */
 export interface AISummarizeRequest {
+  requestId: string
   request: string
   runs: CommandRun[]
   context?: TerminalContext

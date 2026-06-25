@@ -55,7 +55,9 @@ const CYAN = '\x1b[36m'
 const NL_PROMPT = `${ORANGE}(AI Mode)$${RESET} `
 
 // Max captured output (chars) fed to the summarizer.
-const MAX_CAPTURE = 4000
+const MAX_CAPTURE = 2000
+// Skip the summarize LLM call when a single command returns short, plain output.
+const DIRECT_ANSWER_MAX = 200
 // Safety timeout (ms) for a single command's output capture.
 const CAPTURE_TIMEOUT = 20000
 // Treat command output as complete after this idle period (ms).
@@ -95,6 +97,94 @@ function formatCaptured(raw: string, cmd: string, username?: string): string {
     else break
   }
   return lines.join('\n').trim().slice(0, MAX_CAPTURE)
+}
+
+/** Short single-command output can be shown directly without a second LLM call. */
+function tryDirectAnswer(runs: CommandRun[]): string | null {
+  if (runs.length !== 1) return null
+  const out = runs[0].output.trim()
+  if (!out || out.length > DIRECT_ANSWER_MAX) return null
+  if (out.includes('\n') && out.split('\n').length > 5) return null
+  return out
+}
+
+function writeAnswer(term: Terminal, text: string): void {
+  term.write(`${CYAN}↳${RESET} ${text.trim().replace(/\n/g, '\r\n  ')}\r\n`)
+}
+
+/** When the model returns nothing, fall back to captured command output. */
+function formatRunsFallback(runs: CommandRun[]): string | null {
+  const parts = runs.map((r) => r.output.trim()).filter(Boolean)
+  if (parts.length === 0) return null
+  return parts.join('\n\n').slice(0, 800)
+}
+
+/** Stream summarize tokens into the terminal as they arrive from the model. */
+function streamSummarize(
+  term: Terminal,
+  req: { request: string; runs: CommandRun[]; context?: { host: string; username: string } }
+): Promise<void> {
+  const requestId = crypto.randomUUID()
+  let wrotePrefix = false
+
+  return new Promise((resolve) => {
+    const cleanup = (): void => {
+      clearTimeout(timer)
+      unsubChunk()
+      unsubDone()
+      unsubError()
+    }
+
+    const timer = setTimeout(() => {
+      cleanup()
+      term.write(`${YELLOW}整理回答超时${RESET}\r\n`)
+      const fallback = formatRunsFallback(req.runs)
+      if (fallback) writeAnswer(term, fallback)
+      resolve()
+    }, 90000)
+
+    const finish = (text: string | null | undefined): void => {
+      cleanup()
+      const answer = text?.trim() || formatRunsFallback(req.runs)
+      if (!wrotePrefix) {
+        if (answer) writeAnswer(term, answer)
+        else term.write(`${YELLOW}未能生成回答，请查看上方命令输出${RESET}\r\n`)
+      } else {
+        term.write('\r\n')
+      }
+      resolve()
+    }
+
+    const unsubChunk = window.api.ai.onChunk(({ requestId: id, delta }) => {
+      if (id !== requestId) return
+      if (!wrotePrefix) {
+        term.write(`${CYAN}↳${RESET} `)
+        wrotePrefix = true
+      }
+      term.write(delta.replace(/\n/g, '\r\n  '))
+    })
+    const unsubDone = window.api.ai.onDone(({ requestId: id, content }) => {
+      if (id !== requestId) return
+      finish(content)
+    })
+    const unsubError = window.api.ai.onError(({ requestId: id, error }) => {
+      if (id !== requestId) return
+      cleanup()
+      term.write(`${RED}${error}${RESET}\r\n`)
+      const fallback = formatRunsFallback(req.runs)
+      if (fallback) writeAnswer(term, fallback)
+      resolve()
+    })
+
+    window.api.ai.summarize({
+      requestId,
+      request: req.request,
+      runs: req.runs,
+      context: req.context
+        ? { recentOutput: '', host: req.context.host, username: req.context.username }
+        : undefined
+    })
+  })
 }
 
 export default function TerminalView({ tab, active }: Props): JSX.Element {
@@ -220,7 +310,6 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
         }
         nl.capture = cap
         window.api.ssh.write(tab.sessionId, cmd + '\n')
-        cap.bumpIdle()
       })
 
     const runNL = async (text: string): Promise<void> => {
@@ -282,16 +371,20 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
 
       // Answer the user's original request based on the execution results.
       if (runs.length > 0 && nl.mode === 'nl') {
-        term.write(`${DIM}正在整理回答…${RESET}\r\n`)
-        try {
-          const sum = await window.api.ai.summarize({ request: text, runs, context })
-          if (sum.error) {
-            term.write(`${RED}${sum.error}${RESET}\r\n`)
-          } else if (sum.content?.trim()) {
-            term.write(`${CYAN}↳${RESET} ${sum.content.trim().replace(/\n/g, '\r\n  ')}\r\n`)
+        const direct = tryDirectAnswer(runs)
+        if (direct) {
+          writeAnswer(term, direct)
+        } else {
+          term.write(`${DIM}正在整理回答…${RESET}\r\n`)
+          try {
+            await streamSummarize(term, {
+              request: text,
+              runs,
+              context: { host: tab.host, username: tab.username }
+            })
+          } catch (e) {
+            term.write(`${RED}${e instanceof Error ? e.message : String(e)}${RESET}\r\n`)
           }
-        } catch (e) {
-          term.write(`${RED}${e instanceof Error ? e.message : String(e)}${RESET}\r\n`)
         }
       }
       finishNl()

@@ -8,7 +8,6 @@ import type {
   AITranslateRequest,
   AITranslateResult,
   AISummarizeRequest,
-  AISummarizeResult,
   BookmarkFolder,
   ConnectionConfig,
   ConnectOptions,
@@ -61,8 +60,7 @@ const api = {
     chat: (req: AIChatRequest): void => ipcRenderer.send('ai:chat', req),
     translate: (req: AITranslateRequest): Promise<AITranslateResult> =>
       ipcRenderer.invoke('ai:translate', req),
-    summarize: (req: AISummarizeRequest): Promise<AISummarizeResult> =>
-      ipcRenderer.invoke('ai:summarize', req),
+    summarize: (req: AISummarizeRequest): void => ipcRenderer.send('ai:summarize', req),
     cancel: (requestId: string): void => ipcRenderer.send('ai:cancel', requestId),
     onChunk: (cb: (e: AIChunkEvent) => void): Unsubscribe => on('ai:chunk', cb),
     onDone: (cb: (e: AIDoneEvent) => void): Unsubscribe => on('ai:done', cb),
