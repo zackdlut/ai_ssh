@@ -254,7 +254,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
         nl.mode = 'nl'
         nl.buffer = ''
         useTabsStore.getState().setNlMode(tab.id, true)
-        term.write(`\r\n${ORANGE}自然语言模式已开启（再按 F12 或双击标签退出）${RESET}\r\n`)
+        term.write(`\r\n${ORANGE}自然语言模式已开启（输入 exit、F12 或双击标签退出）${RESET}\r\n`)
         writeNlPrompt()
       } else {
         nl.mode = 'normal'
@@ -396,7 +396,12 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
         if (ch === '\r' || ch === '\n') {
           const text = nl.buffer.trim()
           nl.buffer = ''
-          if (text) void runNL(text)
+          if (!text) return
+          if (text.toLowerCase() === 'exit') {
+            toggleNl()
+            return
+          }
+          void runNL(text)
           return
         }
         if (ch === '\x7f' || ch === '\b') {
