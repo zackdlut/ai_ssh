@@ -4,6 +4,7 @@ import { useAIStore } from '../store/aiStore'
 import { useSftpStore } from '../store/sftpStore'
 import { useBookmarksStore } from '../store/bookmarksStore'
 import { connectFromConfig } from '../lib/connect'
+import { toggleNlForTab } from '../lib/terminalRegistry'
 
 interface Props {
   sidebarOpen: boolean
@@ -78,7 +79,11 @@ export default function TabBar({
           key={tab.id}
           className={`tab ${tab.id === activeTabId ? 'active' : ''}`}
           onClick={() => setActive(tab.id)}
-          title={`${tab.username}@${tab.host}${tab.nlMode ? ' · 自然语言模式' : ''}`}
+          onDoubleClick={() => {
+            setActive(tab.id)
+            toggleNlForTab(tab.id)
+          }}
+          title={`${tab.username}@${tab.host}${tab.nlMode ? ' · 自然语言模式' : ''}（双击切换自然语言模式）`}
         >
           <span className={`status-dot ${tab.nlMode ? 'nl' : tab.status}`} />
           <span className="tab-title">{tab.title}</span>

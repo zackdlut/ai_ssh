@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import type { TerminalTab } from '../store/tabsStore'
 import { useTabsStore } from '../store/tabsStore'
-import { registerTerminal, unregisterTerminal } from '../lib/terminalRegistry'
+import { registerNlToggle, registerTerminal, unregisterTerminal } from '../lib/terminalRegistry'
 import { askAboutSelection } from '../lib/aiService'
 import { extractCommands, isDangerous } from '../lib/commands'
 import type { CommandRun } from '../../shared/types'
@@ -164,7 +164,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
         nl.mode = 'nl'
         nl.buffer = ''
         useTabsStore.getState().setNlMode(tab.id, true)
-        term.write(`\r\n${ORANGE}自然语言模式已开启（再按 F12 退出）${RESET}\r\n`)
+        term.write(`\r\n${ORANGE}自然语言模式已开启（再按 F12 或双击标签退出）${RESET}\r\n`)
         writeNlPrompt()
       } else {
         nl.mode = 'normal'
@@ -376,6 +376,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
     })
 
     registerTerminal(tab.id, (maxLines = 40) => serializeBuffer(term, maxLines))
+    registerNlToggle(tab.id, toggleNl)
 
     const resizeObserver = new ResizeObserver(() => {
       try {
