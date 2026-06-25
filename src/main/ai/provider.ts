@@ -1,4 +1,5 @@
 import OpenAI from 'openai'
+import { resolveActiveModel } from '../../shared/aiSettings'
 import type {
   AISettings,
   AIChatRequest,
@@ -102,7 +103,7 @@ export class AIProvider {
     try {
       const stream = await client.chat.completions.create(
         {
-          model: settings.model || 'gpt-4o-mini',
+          model: resolveActiveModel(settings),
           messages,
           stream: true
         },
@@ -159,7 +160,7 @@ export class AIProvider {
     messages.push({ role: 'user', content: req.prompt })
 
     const completion = await client.chat.completions.create(
-      ollamaDirectAnswerBody(settings.model || 'gpt-4o-mini', messages)
+      ollamaDirectAnswerBody(resolveActiveModel(settings), messages)
     )
     return extractMessageText(completion.choices[0]?.message)
   }
@@ -205,7 +206,7 @@ export class AIProvider {
     let full = ''
     try {
       const stream = await client.chat.completions.create(
-        ollamaDirectAnswerStreamBody(settings.model || 'gpt-4o-mini', messages, 256),
+        ollamaDirectAnswerStreamBody(resolveActiveModel(settings), messages, 256),
         { signal: controller.signal }
       )
 

@@ -54,10 +54,15 @@ export interface SshDataEvent {
   data: string
 }
 
+export type ModelProfile = 'default' | 'fast' | 'medium' | 'high' | 'custom'
+
 export interface AISettings {
   baseURL: string
   apiKey: string
-  model: string
+  /** Currently active model profile. */
+  modelProfile: ModelProfile
+  /** Model name per profile tier. */
+  models: Record<ModelProfile, string>
 }
 
 /** Application color theme. `aurora` is the default dark palette. */

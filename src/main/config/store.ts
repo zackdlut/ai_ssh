@@ -1,4 +1,5 @@
 import Store from 'electron-store'
+import { DEFAULT_MODELS, cloneModels, normalizeAISettings } from '../../shared/aiSettings'
 import type { AISettings, AppTheme, BookmarkFolder, ConnectionConfig } from '../../shared/types'
 
 interface StoreSchema {
@@ -22,7 +23,8 @@ function store(): Store<StoreSchema> {
           // Ollama exposes an OpenAI-compatible API under /v1.
           baseURL: 'http://10.67.34.44:11434/v1',
           apiKey: 'ollam',
-          model: 'qwen3.5:9b'
+          modelProfile: 'default',
+          models: { ...DEFAULT_MODELS }
         },
         theme: 'aurora',
         connections: [],
@@ -34,12 +36,16 @@ function store(): Store<StoreSchema> {
 }
 
 export function getAISettings(): AISettings {
-  return store().get('ai')
+  return normalizeAISettings(store().get('ai'))
 }
 
 export function setAISettings(settings: AISettings): AISettings {
-  store().set('ai', settings)
-  return store().get('ai')
+  const normalized = normalizeAISettings(settings)
+  store().set('ai', {
+    ...normalized,
+    models: cloneModels(normalized.models)
+  })
+  return getAISettings()
 }
 
 export function getTheme(): AppTheme {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import type { AISettings } from '../../../shared/types'
+import { DEFAULT_MODELS, MODEL_PROFILES, normalizeAISettings } from '../../../shared/aiSettings'
+import type { AISettings, ModelProfile } from '../../../shared/types'
 
 interface Props {
   onClose: () => void
@@ -8,20 +9,35 @@ interface Props {
 export default function SettingsModal({ onClose }: Props): JSX.Element {
   const [baseURL, setBaseURL] = useState('')
   const [apiKey, setApiKey] = useState('')
-  const [model, setModel] = useState('')
+  const [modelProfile, setModelProfile] = useState<ModelProfile>('default')
+  const [models, setModels] = useState<Record<ModelProfile, string>>({ ...DEFAULT_MODELS })
   const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
     void window.api.config.getAISettings().then((s: AISettings) => {
-      setBaseURL(s.baseURL)
-      setApiKey(s.apiKey)
-      setModel(s.model)
+      const normalized = normalizeAISettings(s)
+      setBaseURL(normalized.baseURL)
+      setApiKey(normalized.apiKey)
+      setModelProfile(normalized.modelProfile)
+      setModels({ ...normalized.models })
       setLoaded(true)
     })
   }, [])
 
+  const activeProfileLabel =
+    MODEL_PROFILES.find((p) => p.id === modelProfile)?.label ?? modelProfile
+
+  const updateModel = (profile: ModelProfile, value: string): void => {
+    setModels((prev) => ({ ...prev, [profile]: value }))
+  }
+
   const handleSave = async (): Promise<void> => {
-    await window.api.config.setAISettings({ baseURL, apiKey, model })
+    await window.api.config.setAISettings({
+      baseURL,
+      apiKey,
+      modelProfile,
+      models: { ...models }
+    })
     onClose()
   }
 
@@ -48,12 +64,33 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
             />
           </div>
           <div className="field">
-            <label>Model</label>
-            <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-4o-mini" />
+            <label>Model Profile</label>
+            <div className="seg seg-profile">
+              {MODEL_PROFILES.map((profile) => (
+                <button
+                  key={profile.id}
+                  type="button"
+                  className={modelProfile === profile.id ? 'active' : ''}
+                  onClick={() => setModelProfile(profile.id)}
+                >
+                  {profile.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="field">
+            <label>Model ({activeProfileLabel})</label>
+            <input
+              key={modelProfile}
+              value={models[modelProfile]}
+              onChange={(e) => updateModel(modelProfile, e.target.value)}
+              placeholder="gpt-4o-mini"
+            />
           </div>
           <div className="context-hint">
             Works with OpenAI, DeepSeek, local vLLM/Ollama and other OpenAI-compatible endpoints. The
-            key is stored locally and only used by the main process.
+            key is stored locally and only used by the main process. Each profile can use a different
+            model; the active profile is used for AI requests.
           </div>
         </div>
         <div className="modal-footer">

@@ -1422,6 +1422,11 @@ select:focus {
   font-weight: 700;
 }
 
+.seg-profile button {
+  font-size: 12px;
+  padding: 7px 4px;
+}
+
 .error-text {
   color: var(--danger);
   font-size: 12px;
