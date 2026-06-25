@@ -84,7 +84,7 @@ export default function SidePanel(): JSX.Element {
         onMouseDown={startResize}
         onKeyDown={onHandleKey}
         onDoubleClick={() => setPanelWidth(392)}
-        title="拖动调整宽度（双击重置）"
+        data-tip="拖动调整宽度（双击重置）"
       />
       <div className="side-panel-header">
         <span className="panel-title">

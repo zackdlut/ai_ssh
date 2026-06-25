@@ -498,6 +498,35 @@ select:focus {
   transition: background 0.16s ease, height 0.16s ease;
 }
 
+/* Custom tooltip rendered in-DOM so it uses the bundled CJK font
+   (native `title` tooltips fall back to OS fonts and show tofu on WSL). */
+.panel-resizer::before {
+  content: attr(data-tip);
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%) translateX(-4px);
+  white-space: nowrap;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--text);
+  background: var(--ink-600);
+  border: 1px solid var(--line-strong);
+  padding: 5px 10px;
+  border-radius: 8px;
+  box-shadow: var(--shadow-pop);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  z-index: 20;
+}
+
+.panel-resizer:hover::before,
+.panel-resizer:focus-visible::before {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
 .panel-resizer:hover,
 .panel-resizer:focus-visible,
 .panel-resizer.active {
