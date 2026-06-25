@@ -79,6 +79,76 @@ export interface AIChatRequest {
   context?: TerminalContext
 }
 
+/** One-shot natural-language -> shell command translation (non-streaming). */
+export interface AITranslateRequest {
+  prompt: string
+  context?: TerminalContext
+}
+
+export interface AITranslateResult {
+  content?: string
+  error?: string
+}
+
+/** A single executed command and its captured output, for result summary. */
+export interface CommandRun {
+  command: string
+  output: string
+  /** Shell exit code, or null when it could not be determined. */
+  code: number | null
+}
+
+/** Ask the AI to evaluate execution results against the original NL request. */
+export interface AISummarizeRequest {
+  request: string
+  runs: CommandRun[]
+  context?: TerminalContext
+}
+
+export interface AISummarizeResult {
+  content?: string
+  error?: string
+}
+
+export type SftpEntryType = 'file' | 'dir' | 'link' | 'other'
+
+export interface SftpEntry {
+  name: string
+  /** Absolute path of the entry. */
+  path: string
+  type: SftpEntryType
+  /** Size in bytes. */
+  size: number
+  /** Last modified time (ms since epoch). */
+  mtime: number
+  /** POSIX mode bits. */
+  mode: number
+}
+
+export interface SftpListResult {
+  cwd?: string
+  entries?: SftpEntry[]
+  error?: string
+}
+
+export interface SftpRealpathResult {
+  path?: string
+  error?: string
+}
+
+export interface SftpOpResult {
+  ok?: true
+  error?: string
+}
+
+export interface SftpTransferResult {
+  /** Number of files transferred (download is always 0 or 1). */
+  count?: number
+  /** True when the user cancelled the file dialog. */
+  cancelled?: boolean
+  error?: string
+}
+
 export interface AIChunkEvent {
   requestId: string
   delta: string

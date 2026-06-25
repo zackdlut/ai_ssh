@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTabsStore } from '../store/tabsStore'
 import { useAIStore } from '../store/aiStore'
+import { useSftpStore } from '../store/sftpStore'
 import { useBookmarksStore } from '../store/bookmarksStore'
 import { connectFromConfig } from '../lib/connect'
 
@@ -18,7 +19,21 @@ export default function TabBar({
   onOpenSettings
 }: Props): JSX.Element {
   const { tabs, activeTabId, setActive, removeTab } = useTabsStore()
-  const { panelOpen, togglePanel } = useAIStore()
+  const { panelOpen, togglePanel, setPanelOpen } = useAIStore()
+  const sftpOpen = useSftpStore((s) => s.panelOpen)
+  const toggleSftp = useSftpStore((s) => s.togglePanel)
+  const setSftpOpen = useSftpStore((s) => s.setPanelOpen)
+
+  // The AI Copilot and SFTP panels share the right slot, so they are mutually
+  // exclusive: opening one closes the other.
+  const handleToggleAI = (): void => {
+    if (!panelOpen) setSftpOpen(false)
+    togglePanel()
+  }
+  const handleToggleSftp = (): void => {
+    if (!sftpOpen) setPanelOpen(false)
+    toggleSftp()
+  }
   // Subscribe to connections so the recent list refreshes as usage changes.
   const connections = useBookmarksStore((s) => s.connections)
   const getRecentConnections = useBookmarksStore((s) => s.getRecentConnections)
@@ -63,9 +78,9 @@ export default function TabBar({
           key={tab.id}
           className={`tab ${tab.id === activeTabId ? 'active' : ''}`}
           onClick={() => setActive(tab.id)}
-          title={`${tab.username}@${tab.host}`}
+          title={`${tab.username}@${tab.host}${tab.nlMode ? ' · 自然语言模式' : ''}`}
         >
-          <span className={`status-dot ${tab.status}`} />
+          <span className={`status-dot ${tab.nlMode ? 'nl' : tab.status}`} />
           <span className="tab-title">{tab.title}</span>
           <button
             className="close-btn"
@@ -122,10 +137,17 @@ export default function TabBar({
       </button>
       <button
         className={`toolbar-btn ${panelOpen ? 'active' : ''}`}
-        onClick={togglePanel}
+        onClick={handleToggleAI}
         title="Toggle AI panel"
       >
         AI Copilot
+      </button>
+      <button
+        className={`toolbar-btn ${sftpOpen ? 'active' : ''}`}
+        onClick={handleToggleSftp}
+        title="Toggle SFTP panel"
+      >
+        SFTP
       </button>
     </div>
   )

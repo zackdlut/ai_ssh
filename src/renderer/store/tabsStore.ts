@@ -9,6 +9,8 @@ export interface TerminalTab {
   host: string
   username: string
   message?: string
+  /** Whether the in-terminal natural-language mode is active for this tab. */
+  nlMode?: boolean
 }
 
 interface TabsState {
@@ -18,6 +20,8 @@ interface TabsState {
   removeTab: (id: string) => void
   setActive: (id: string) => void
   setStatusBySession: (sessionId: string, status: SshStatus, message?: string) => void
+  setNlMode: (id: string, on: boolean) => void
+  toggleNlMode: (id: string) => void
   activeTab: () => TerminalTab | undefined
 }
 
@@ -41,6 +45,14 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       tabs: s.tabs.map((t) =>
         t.sessionId === sessionId ? { ...t, status, message } : t
       )
+    })),
+  setNlMode: (id, on) =>
+    set((s) => ({
+      tabs: s.tabs.map((t) => (t.id === id ? { ...t, nlMode: on } : t))
+    })),
+  toggleNlMode: (id) =>
+    set((s) => ({
+      tabs: s.tabs.map((t) => (t.id === id ? { ...t, nlMode: !t.nlMode } : t))
     })),
   activeTab: () => get().tabs.find((t) => t.id === get().activeTabId)
 }))

@@ -5,10 +5,18 @@ import type {
   AIDoneEvent,
   AIErrorEvent,
   AISettings,
+  AITranslateRequest,
+  AITranslateResult,
+  AISummarizeRequest,
+  AISummarizeResult,
   BookmarkFolder,
   ConnectionConfig,
   ConnectOptions,
   ConnectResult,
+  SftpListResult,
+  SftpOpResult,
+  SftpRealpathResult,
+  SftpTransferResult,
   SshDataEvent,
   SshStatusEvent
 } from '../shared/types'
@@ -33,8 +41,28 @@ const api = {
     onData: (cb: (e: SshDataEvent) => void): Unsubscribe => on('ssh:data', cb),
     onStatus: (cb: (e: SshStatusEvent) => void): Unsubscribe => on('ssh:status', cb)
   },
+  sftp: {
+    list: (sessionId: string, path: string): Promise<SftpListResult> =>
+      ipcRenderer.invoke('sftp:list', sessionId, path),
+    realpath: (sessionId: string, path: string): Promise<SftpRealpathResult> =>
+      ipcRenderer.invoke('sftp:realpath', sessionId, path),
+    mkdir: (sessionId: string, path: string): Promise<SftpOpResult> =>
+      ipcRenderer.invoke('sftp:mkdir', sessionId, path),
+    rename: (sessionId: string, from: string, to: string): Promise<SftpOpResult> =>
+      ipcRenderer.invoke('sftp:rename', sessionId, from, to),
+    delete: (sessionId: string, path: string, isDir: boolean): Promise<SftpOpResult> =>
+      ipcRenderer.invoke('sftp:delete', sessionId, path, isDir),
+    download: (sessionId: string, remotePath: string): Promise<SftpTransferResult> =>
+      ipcRenderer.invoke('sftp:download', sessionId, remotePath),
+    upload: (sessionId: string, remoteDir: string): Promise<SftpTransferResult> =>
+      ipcRenderer.invoke('sftp:upload', sessionId, remoteDir)
+  },
   ai: {
     chat: (req: AIChatRequest): void => ipcRenderer.send('ai:chat', req),
+    translate: (req: AITranslateRequest): Promise<AITranslateResult> =>
+      ipcRenderer.invoke('ai:translate', req),
+    summarize: (req: AISummarizeRequest): Promise<AISummarizeResult> =>
+      ipcRenderer.invoke('ai:summarize', req),
     cancel: (requestId: string): void => ipcRenderer.send('ai:cancel', requestId),
     onChunk: (cb: (e: AIChunkEvent) => void): Unsubscribe => on('ai:chunk', cb),
     onDone: (cb: (e: AIDoneEvent) => void): Unsubscribe => on('ai:done', cb),

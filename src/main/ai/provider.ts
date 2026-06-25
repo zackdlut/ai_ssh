@@ -1,6 +1,16 @@
 import OpenAI from 'openai'
-import type { AISettings, AIChatRequest } from '../../shared/types'
-import { SYSTEM_PROMPT, buildContextMessage } from './prompt'
+import type {
+  AISettings,
+  AIChatRequest,
+  AITranslateRequest,
+  AISummarizeRequest
+} from '../../shared/types'
+import {
+  SYSTEM_PROMPT,
+  TRANSLATE_SYSTEM_PROMPT,
+  SUMMARIZE_SYSTEM_PROMPT,
+  buildContextMessage
+} from './prompt'
 
 export interface StreamCallbacks {
   onChunk: (delta: string) => void
@@ -76,6 +86,80 @@ export class AIProvider {
   cancel(requestId: string): void {
     this.controllers.get(requestId)?.abort()
     this.controllers.delete(requestId)
+  }
+
+  /**
+   * One-shot, non-streaming translation of a natural-language intent into
+   * shell command(s) for the in-terminal NL mode. Returns the raw model
+   * content (bash code blocks) for the renderer to parse.
+   */
+  async translate(req: AITranslateRequest): Promise<string> {
+    const settings = this.getSettings()
+    if (!settings.apiKey) {
+      throw new Error('AI is not configured. Set the API key in Settings.')
+    }
+
+    const client = new OpenAI({
+      apiKey: settings.apiKey,
+      baseURL: normalizeBaseURL(settings.baseURL)
+    })
+
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      { role: 'system', content: TRANSLATE_SYSTEM_PROMPT }
+    ]
+    const contextMessage = buildContextMessage(req.context)
+    if (contextMessage) {
+      messages.push({ role: 'system', content: contextMessage })
+    }
+    messages.push({ role: 'user', content: req.prompt })
+
+    const completion = await client.chat.completions.create({
+      model: settings.model || 'gpt-4o-mini',
+      messages,
+      stream: false
+    })
+    return completion.choices[0]?.message?.content ?? ''
+  }
+
+  /**
+   * One-shot, non-streaming summary of command execution results, used by the
+   * in-terminal NL mode to report back to the user in natural language.
+   */
+  async summarize(req: AISummarizeRequest): Promise<string> {
+    const settings = this.getSettings()
+    if (!settings.apiKey) {
+      throw new Error('AI is not configured. Set the API key in Settings.')
+    }
+
+    const client = new OpenAI({
+      apiKey: settings.apiKey,
+      baseURL: normalizeBaseURL(settings.baseURL)
+    })
+
+    const runsText = req.runs
+      .map((r, i) => {
+        const code = r.code === null ? '未知' : String(r.code)
+        return `# 命令 ${i + 1}（退出码 ${code}）\n$ ${r.command}\n输出:\n${r.output || '(无输出)'}`
+      })
+      .join('\n\n')
+
+    const userContent = `用户的原始请求：\n${req.request}\n\n执行情况：\n${runsText}`
+
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      { role: 'system', content: SUMMARIZE_SYSTEM_PROMPT }
+    ]
+    const contextMessage = buildContextMessage(req.context)
+    if (contextMessage) {
+      messages.push({ role: 'system', content: contextMessage })
+    }
+    messages.push({ role: 'user', content: userContent })
+
+    const completion = await client.chat.completions.create({
+      model: settings.model || 'gpt-4o-mini',
+      messages,
+      stream: false
+    })
+    return completion.choices[0]?.message?.content ?? ''
   }
 }
 

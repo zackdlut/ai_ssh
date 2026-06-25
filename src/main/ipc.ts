@@ -1,4 +1,5 @@
-import { ipcMain, type BrowserWindow } from 'electron'
+import { ipcMain, dialog, type BrowserWindow } from 'electron'
+import { basename } from 'path'
 import { SshManager } from './ssh/manager'
 import { AIProvider } from './ai/provider'
 import * as config from './config/store'
@@ -8,10 +9,22 @@ import type {
   AIDoneEvent,
   AIErrorEvent,
   AISettings,
+  AITranslateRequest,
+  AITranslateResult,
+  AISummarizeRequest,
+  AISummarizeResult,
   BookmarkFolder,
   ConnectionConfig,
-  ConnectOptions
+  ConnectOptions,
+  SftpListResult,
+  SftpOpResult,
+  SftpRealpathResult,
+  SftpTransferResult
 } from '../shared/types'
+
+function errMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
 
 export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
   const ssh = new SshManager(getWindow)
@@ -37,6 +50,114 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
     })
   })
   ipcMain.on('ai:cancel', (_e, requestId: string) => ai.cancel(requestId))
+
+  // One-shot NL -> command translation for the in-terminal NL mode.
+  ipcMain.handle(
+    'ai:translate',
+    async (_e, req: AITranslateRequest): Promise<AITranslateResult> => {
+      try {
+        return { content: await ai.translate(req) }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
+
+  // Summarize command execution results for the in-terminal NL mode.
+  ipcMain.handle(
+    'ai:summarize',
+    async (_e, req: AISummarizeRequest): Promise<AISummarizeResult> => {
+      try {
+        return { content: await ai.summarize(req) }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
+
+  // --- SFTP ---
+  ipcMain.handle('sftp:list', async (_e, sessionId: string, path: string): Promise<SftpListResult> => {
+    try {
+      return await ssh.sftpList(sessionId, path)
+    } catch (err) {
+      return { error: errMessage(err) }
+    }
+  })
+  ipcMain.handle(
+    'sftp:realpath',
+    async (_e, sessionId: string, path: string): Promise<SftpRealpathResult> => {
+      try {
+        return { path: await ssh.sftpRealpath(sessionId, path) }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
+  ipcMain.handle('sftp:mkdir', async (_e, sessionId: string, path: string): Promise<SftpOpResult> => {
+    try {
+      await ssh.sftpMkdir(sessionId, path)
+      return { ok: true }
+    } catch (err) {
+      return { error: errMessage(err) }
+    }
+  })
+  ipcMain.handle(
+    'sftp:rename',
+    async (_e, sessionId: string, from: string, to: string): Promise<SftpOpResult> => {
+      try {
+        await ssh.sftpRename(sessionId, from, to)
+        return { ok: true }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
+  ipcMain.handle(
+    'sftp:delete',
+    async (_e, sessionId: string, path: string, isDir: boolean): Promise<SftpOpResult> => {
+      try {
+        await ssh.sftpDelete(sessionId, path, isDir)
+        return { ok: true }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
+  ipcMain.handle(
+    'sftp:download',
+    async (_e, sessionId: string, remotePath: string): Promise<SftpTransferResult> => {
+      const win = getWindow()
+      const result = win
+        ? await dialog.showSaveDialog(win, { defaultPath: basename(remotePath) })
+        : await dialog.showSaveDialog({ defaultPath: basename(remotePath) })
+      if (result.canceled || !result.filePath) return { cancelled: true }
+      try {
+        await ssh.sftpDownload(sessionId, remotePath, result.filePath)
+        return { count: 1 }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
+  ipcMain.handle(
+    'sftp:upload',
+    async (_e, sessionId: string, remoteDir: string): Promise<SftpTransferResult> => {
+      const win = getWindow()
+      const opts = { properties: ['openFile', 'multiSelections'] as const }
+      const result = win
+        ? await dialog.showOpenDialog(win, { properties: [...opts.properties] })
+        : await dialog.showOpenDialog({ properties: [...opts.properties] })
+      if (result.canceled || result.filePaths.length === 0) return { cancelled: true }
+      try {
+        for (const local of result.filePaths) {
+          await ssh.sftpUpload(sessionId, local, remoteDir)
+        }
+        return { count: result.filePaths.length }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
 
   // --- Config ---
   ipcMain.handle('config:getAI', () => config.getAISettings())

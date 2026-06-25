@@ -3,8 +3,11 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import type { TerminalTab } from '../store/tabsStore'
+import { useTabsStore } from '../store/tabsStore'
 import { registerTerminal, unregisterTerminal } from '../lib/terminalRegistry'
 import { askAboutSelection } from '../lib/aiService'
+import { extractCommands, isDangerous } from '../lib/commands'
+import type { CommandRun } from '../../shared/types'
 
 interface Props {
   tab: TerminalTab
@@ -17,10 +20,88 @@ interface MenuState {
   text: string
 }
 
+/**
+ * Captures the output of a single command executed in NL mode by watching the
+ * SSH data stream until output goes idle.
+ */
+interface Capture {
+  buffer: string
+  done: boolean
+  finish: () => void
+  timer: ReturnType<typeof setTimeout>
+  idleTimer?: ReturnType<typeof setTimeout>
+  bumpIdle: () => void
+}
+
+/** Local state machine for the in-terminal natural-language mode. */
+interface NlState {
+  mode: 'normal' | 'nl'
+  buffer: string
+  busy: boolean
+  confirmResolver?: (ok: boolean) => void
+  capture?: Capture
+}
+
+// ANSI helpers for the in-terminal NL prompts.
+const ORANGE = '\x1b[38;5;208m'
+const RESET = '\x1b[0m'
+const DIM = '\x1b[2m'
+const YELLOW = '\x1b[33m'
+const GREEN = '\x1b[32m'
+const RED = '\x1b[31m'
+const CYAN = '\x1b[36m'
+
+// In-terminal natural-language prompt shown instead of the remote shell prompt.
+const NL_PROMPT = `${ORANGE}(AI Mode)$${RESET} `
+
+// Max captured output (chars) fed to the summarizer.
+const MAX_CAPTURE = 4000
+// Safety timeout (ms) for a single command's output capture.
+const CAPTURE_TIMEOUT = 20000
+// Treat command output as complete after this idle period (ms).
+const CAPTURE_IDLE_MS = 500
+
+/** Strip ANSI escape / control sequences from captured terminal output. */
+function stripAnsi(s: string): string {
+  return s
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b[@-Z\\-_]/g, '')
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Format captured command output for display / summary: strip ANSI, drop the
+ * echoed command line and any trailing shell prompt, then trim and clamp.
+ */
+function formatCaptured(raw: string, cmd: string, username?: string): string {
+  const lines = stripAnsi(raw).split(/\r?\n/)
+  const cmdTrim = cmd.trim()
+  // Drop the shell-echoed command line(s) at the top.
+  while (lines.length && (lines[0].trim() === '' || lines[0].trim() === cmdTrim)) {
+    lines.shift()
+  }
+  // Drop trailing shell prompt(s) and blank lines at the bottom.
+  const promptRe = username
+    ? new RegExp(`${escapeRegExp(username)}@.*[#$%>]\\s*$`)
+    : /\S+@\S+.*[#$%>]\s*$/
+  while (lines.length) {
+    const last = lines[lines.length - 1].trim()
+    if (last === '' || promptRe.test(last)) lines.pop()
+    else break
+  }
+  return lines.join('\n').trim().slice(0, MAX_CAPTURE)
+}
+
 export default function TerminalView({ tab, active }: Props): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const nlRef = useRef<NlState>({ mode: 'normal', buffer: '', busy: false })
   const [menu, setMenu] = useState<MenuState | null>(null)
 
   useEffect(() => {
@@ -65,8 +146,208 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
     termRef.current = term
     fitRef.current = fit
 
+    // --- In-terminal natural-language mode ---
+    const writeNlPrompt = (): void => {
+      term.write(`\r\n${NL_PROMPT}`)
+    }
+
+    const finishNl = (): void => {
+      nlRef.current.busy = false
+      // Return to an idle NL prompt instead of letting the shell prompt show.
+      if (nlRef.current.mode === 'nl') writeNlPrompt()
+    }
+
+    const toggleNl = (): void => {
+      const nl = nlRef.current
+      if (nl.busy) return // don't toggle while an AI request / confirm is in flight
+      if (nl.mode === 'normal') {
+        nl.mode = 'nl'
+        nl.buffer = ''
+        useTabsStore.getState().setNlMode(tab.id, true)
+        term.write(`\r\n${ORANGE}自然语言模式已开启（再按 F12 退出）${RESET}\r\n`)
+        writeNlPrompt()
+      } else {
+        nl.mode = 'normal'
+        nl.buffer = ''
+        nl.confirmResolver = undefined
+        useTabsStore.getState().setNlMode(tab.id, false)
+        term.write(`\r\n${DIM}已退出自然语言模式${RESET}\r\n`)
+        // Redraw the real shell prompt for normal mode.
+        window.api.ssh.write(tab.sessionId, '\n')
+      }
+    }
+
+    const waitConfirm = (): Promise<boolean> =>
+      new Promise((resolve) => {
+        nlRef.current.confirmResolver = resolve
+      })
+
+    const handleConfirmKey = (data: string): void => {
+      const resolve = nlRef.current.confirmResolver
+      if (!resolve) return
+      const ch = data[0]
+      const yes = ch === 'y' || ch === 'Y'
+      term.write(yes ? 'y' : 'n')
+      nlRef.current.confirmResolver = undefined
+      resolve(yes)
+    }
+
+    // Run a command, capturing its output until the SSH stream goes idle. The
+    // raw stream (incl. command echo and shell prompt) is suppressed while
+    // capturing; the cleaned output is rendered here once the command finishes.
+    const runCommandAndCapture = (cmd: string): Promise<CommandRun> =>
+      new Promise((resolve) => {
+        const nl = nlRef.current
+        const done = (): void => {
+          if (cap.done) return
+          cap.done = true
+          clearTimeout(cap.timer)
+          if (cap.idleTimer) clearTimeout(cap.idleTimer)
+          if (nlRef.current.capture === cap) nlRef.current.capture = undefined
+          const output = formatCaptured(cap.buffer, cmd, tab.username)
+          if (output) term.write(output.replace(/\n/g, '\r\n') + '\r\n')
+          resolve({ command: cmd, output, code: null })
+        }
+        const cap: Capture = {
+          buffer: '',
+          done: false,
+          finish: done,
+          timer: setTimeout(done, CAPTURE_TIMEOUT),
+          bumpIdle() {
+            if (cap.idleTimer) clearTimeout(cap.idleTimer)
+            cap.idleTimer = setTimeout(done, CAPTURE_IDLE_MS)
+          }
+        }
+        nl.capture = cap
+        window.api.ssh.write(tab.sessionId, cmd + '\n')
+        cap.bumpIdle()
+      })
+
+    const runNL = async (text: string): Promise<void> => {
+      const nl = nlRef.current
+      nl.busy = true
+      term.write(`\r\n${DIM}正在解析…${RESET}\r\n`)
+
+      const context = {
+        recentOutput: serializeBuffer(term, 40),
+        host: tab.host,
+        username: tab.username
+      }
+
+      let result: { content?: string; error?: string }
+      try {
+        result = await window.api.ai.translate({ prompt: text, context })
+      } catch (e) {
+        term.write(`${RED}解析失败: ${e instanceof Error ? e.message : String(e)}${RESET}\r\n`)
+        finishNl()
+        return
+      }
+
+      if (result.error) {
+        term.write(`${RED}解析失败: ${result.error}${RESET}\r\n`)
+        finishNl()
+        return
+      }
+
+      const commands = extractCommands(result.content ?? '')
+      if (commands.length === 0) {
+        // No runnable command. Surface the model's reply (if any) so the user
+        // gets feedback instead of a dead end.
+        const reply = (result.content ?? '').trim()
+        if (reply) {
+          term.write(`${CYAN}↳${RESET} ${reply.replace(/\n/g, '\r\n  ')}\r\n`)
+        } else {
+          term.write(`${YELLOW}未解析出可执行命令，请换种说法${RESET}\r\n`)
+        }
+        finishNl()
+        return
+      }
+
+      const runs: CommandRun[] = []
+      for (const cmd of commands) {
+        if (nl.mode !== 'nl') break // user exited mid-way
+        if (isDangerous(cmd)) {
+          term.write(`${YELLOW}⚠ 危险命令:${RESET} ${cmd}\r\n${YELLOW}执行? [y/N] ${RESET}`)
+          const ok = await waitConfirm()
+          if (!ok) {
+            term.write(`\r\n${DIM}已跳过${RESET}\r\n`)
+            continue
+          }
+          term.write('\r\n')
+        } else {
+          term.write(`${GREEN}▶${RESET} ${cmd}\r\n`)
+        }
+        runs.push(await runCommandAndCapture(cmd))
+      }
+
+      // Answer the user's original request based on the execution results.
+      if (runs.length > 0 && nl.mode === 'nl') {
+        term.write(`${DIM}正在整理回答…${RESET}\r\n`)
+        try {
+          const sum = await window.api.ai.summarize({ request: text, runs, context })
+          if (sum.error) {
+            term.write(`${RED}${sum.error}${RESET}\r\n`)
+          } else if (sum.content?.trim()) {
+            term.write(`${CYAN}↳${RESET} ${sum.content.trim().replace(/\n/g, '\r\n  ')}\r\n`)
+          }
+        } catch (e) {
+          term.write(`${RED}${e instanceof Error ? e.message : String(e)}${RESET}\r\n`)
+        }
+      }
+      finishNl()
+    }
+
+    const handleNlInput = (data: string): void => {
+      const nl = nlRef.current
+      for (const ch of data) {
+        if (ch === '\r' || ch === '\n') {
+          const text = nl.buffer.trim()
+          nl.buffer = ''
+          if (text) void runNL(text)
+          return
+        }
+        if (ch === '\x7f' || ch === '\b') {
+          if (nl.buffer.length > 0) {
+            nl.buffer = nl.buffer.slice(0, -1)
+            term.write('\b \b')
+          }
+          continue
+        }
+        // Ignore escape sequences (arrows, etc.) and other control chars.
+        if (ch === '\x1b') break
+        if (ch.charCodeAt(0) < 0x20) continue
+        nl.buffer += ch
+        term.write(ch)
+      }
+    }
+
+    // F12 toggles NL mode. Returning false stops xterm from emitting the
+    // function-key escape sequence (which would otherwise hit the shell).
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type === 'keydown' && e.key === 'F12') {
+        toggleNl()
+        return false
+      }
+      return true
+    })
+
     const onDataDisposable = term.onData((data) => {
-      window.api.ssh.write(tab.sessionId, data)
+      const nl = nlRef.current
+      if (nl.mode === 'normal') {
+        window.api.ssh.write(tab.sessionId, data)
+        return
+      }
+      if (nl.confirmResolver) {
+        handleConfirmKey(data)
+        return
+      }
+      if (nl.busy) {
+        // Let Ctrl+C interrupt a running/stuck command so capture can finish
+        // after output goes idle and input isn't locked forever.
+        if (data.includes('\x03')) window.api.ssh.write(tab.sessionId, '\x03')
+        return
+      }
+      handleNlInput(data)
     })
 
     const onResizeDisposable = term.onResize(({ cols, rows }) => {
@@ -74,7 +355,24 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
     })
 
     const dataUnsub = window.api.ssh.onData((e) => {
-      if (e.sessionId === tab.sessionId) term.write(e.data)
+      if (e.sessionId !== tab.sessionId) return
+
+      const nl = nlRef.current
+      const cap = nl.capture
+      // While capturing an NL command, buffer the raw stream but don't echo it
+      // (command echo and shell prompt are suppressed; cleaned output is
+      // rendered when the command finishes).
+      if (cap && !cap.done) {
+        cap.buffer += e.data
+        if (cap.buffer.length > 200000) cap.buffer = cap.buffer.slice(-100000)
+        cap.bumpIdle()
+        return
+      }
+      // In NL mode (but not running a command), suppress stray shell output
+      // such as the prompt redraw so the terminal stays a clean AI prompt.
+      if (nl.mode === 'nl') return
+
+      term.write(e.data)
     })
 
     registerTerminal(tab.id, (maxLines = 40) => serializeBuffer(term, maxLines))
@@ -98,6 +396,10 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       dataUnsub()
       resizeObserver.disconnect()
       unregisterTerminal(tab.id)
+      if (nlRef.current.capture) {
+        clearTimeout(nlRef.current.capture.timer)
+        if (nlRef.current.capture.idleTimer) clearTimeout(nlRef.current.capture.idleTimer)
+      }
       term.dispose()
       termRef.current = null
       fitRef.current = null

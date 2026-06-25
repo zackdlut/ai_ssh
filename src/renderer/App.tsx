@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react'
 import TabBar from './components/TabBar'
 import TerminalView from './components/TerminalView'
 import SidePanel from './components/ai/SidePanel'
+import SftpPanel from './components/sftp/SftpPanel'
 import ConnectModal from './components/connection/ConnectModal'
 import ConnectionSidebar from './components/connection/ConnectionSidebar'
 import SettingsModal from './components/ai/SettingsModal'
 import { useTabsStore } from './store/tabsStore'
 import { useAIStore } from './store/aiStore'
+import { useSftpStore } from './store/sftpStore'
 import { useBookmarksStore } from './store/bookmarksStore'
 import { initAIService } from './lib/aiService'
 import type { ConnectionConfig } from '../shared/types'
@@ -19,6 +21,7 @@ interface ConnectModalState {
 export default function App(): JSX.Element {
   const { tabs, activeTabId, setStatusBySession } = useTabsStore()
   const panelOpen = useAIStore((s) => s.panelOpen)
+  const sftpOpen = useSftpStore((s) => s.panelOpen)
   const loadBookmarks = useBookmarksStore((s) => s.load)
 
   const [connectModal, setConnectModal] = useState<ConnectModalState | null>(null)
@@ -83,6 +86,7 @@ export default function App(): JSX.Element {
           </div>
         </div>
         {panelOpen && <SidePanel />}
+        {sftpOpen && <SftpPanel />}
       </div>
 
       {connectModal && (

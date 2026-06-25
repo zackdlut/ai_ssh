@@ -1,12 +1,21 @@
-import { Client, type ClientChannel } from 'ssh2'
+import { Client, type ClientChannel, type SFTPWrapper, type FileEntry } from 'ssh2'
 import { readFileSync } from 'fs'
+import { basename } from 'path'
 import { randomUUID } from 'crypto'
 import type { BrowserWindow } from 'electron'
-import type { ConnectOptions, ConnectResult, SshDataEvent, SshStatusEvent } from '../../shared/types'
+import type {
+  ConnectOptions,
+  ConnectResult,
+  SftpEntry,
+  SftpEntryType,
+  SshDataEvent,
+  SshStatusEvent
+} from '../../shared/types'
 
 interface Session {
   client: Client
   stream?: ClientChannel
+  sftp?: SFTPWrapper
 }
 
 /**
@@ -114,7 +123,104 @@ export class SshManager {
   }
 
   private cleanup(sessionId: string): void {
+    const session = this.sessions.get(sessionId)
+    try {
+      session?.sftp?.end()
+    } catch {
+      // ignore
+    }
     this.sessions.delete(sessionId)
+  }
+
+  // --- SFTP -------------------------------------------------------------
+
+  /** Lazily open (and cache) an SFTP channel on the session's SSH client. */
+  private getSftp(sessionId: string): Promise<SFTPWrapper> {
+    const session = this.sessions.get(sessionId)
+    if (!session) return Promise.reject(new Error('Session not found.'))
+    if (session.sftp) return Promise.resolve(session.sftp)
+    return new Promise((resolve, reject) => {
+      session.client.sftp((err, sftp) => {
+        if (err) return reject(err)
+        session.sftp = sftp
+        // If the channel dies, drop the cache so the next call reopens it.
+        sftp.on('close', () => {
+          if (session.sftp === sftp) session.sftp = undefined
+        })
+        resolve(sftp)
+      })
+    })
+  }
+
+  async sftpRealpath(sessionId: string, path: string): Promise<string> {
+    const sftp = await this.getSftp(sessionId)
+    return new Promise((resolve, reject) => {
+      sftp.realpath(path, (err, absPath) => (err ? reject(err) : resolve(absPath)))
+    })
+  }
+
+  async sftpList(sessionId: string, path: string): Promise<{ cwd: string; entries: SftpEntry[] }> {
+    const sftp = await this.getSftp(sessionId)
+    const cwd = await this.sftpRealpath(sessionId, path)
+    const list: FileEntry[] = await new Promise((resolve, reject) => {
+      sftp.readdir(cwd, (err, entries) => (err ? reject(err) : resolve(entries)))
+    })
+    const sep = cwd.endsWith('/') ? '' : '/'
+    const entries: SftpEntry[] = list.map((e) => {
+      const attrs = e.attrs
+      const type = fileTypeFromMode(attrs.mode ?? 0)
+      return {
+        name: e.filename,
+        path: `${cwd}${sep}${e.filename}`,
+        type,
+        size: attrs.size ?? 0,
+        mtime: (attrs.mtime ?? 0) * 1000,
+        mode: attrs.mode ?? 0
+      }
+    })
+    entries.sort((a, b) => {
+      if ((a.type === 'dir') !== (b.type === 'dir')) return a.type === 'dir' ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
+    return { cwd, entries }
+  }
+
+  async sftpMkdir(sessionId: string, path: string): Promise<void> {
+    const sftp = await this.getSftp(sessionId)
+    return new Promise((resolve, reject) => {
+      sftp.mkdir(path, (err) => (err ? reject(err) : resolve()))
+    })
+  }
+
+  async sftpRename(sessionId: string, from: string, to: string): Promise<void> {
+    const sftp = await this.getSftp(sessionId)
+    return new Promise((resolve, reject) => {
+      sftp.rename(from, to, (err) => (err ? reject(err) : resolve()))
+    })
+  }
+
+  async sftpDelete(sessionId: string, path: string, isDir: boolean): Promise<void> {
+    const sftp = await this.getSftp(sessionId)
+    return new Promise((resolve, reject) => {
+      const cb = (err: Error | null | undefined): void => (err ? reject(err) : resolve())
+      if (isDir) sftp.rmdir(path, cb)
+      else sftp.unlink(path, cb)
+    })
+  }
+
+  async sftpDownload(sessionId: string, remotePath: string, localPath: string): Promise<void> {
+    const sftp = await this.getSftp(sessionId)
+    return new Promise((resolve, reject) => {
+      sftp.fastGet(remotePath, localPath, (err) => (err ? reject(err) : resolve()))
+    })
+  }
+
+  async sftpUpload(sessionId: string, localPath: string, remoteDir: string): Promise<void> {
+    const sftp = await this.getSftp(sessionId)
+    const remotePath = `${remoteDir.endsWith('/') ? remoteDir.slice(0, -1) : remoteDir}/${basename(localPath)}`
+    return new Promise((resolve, reject) => {
+      sftp.fastPut(localPath, remotePath, (err) => (err ? reject(err) : resolve()))
+    })
   }
 
   disposeAll(): void {
@@ -122,6 +228,20 @@ export class SshManager {
       this.close(id)
     }
   }
+}
+
+// POSIX file-type bits (the high bits of the mode field).
+const S_IFMT = 0o170000
+const S_IFDIR = 0o040000
+const S_IFLNK = 0o120000
+const S_IFREG = 0o100000
+
+function fileTypeFromMode(mode: number): SftpEntryType {
+  const t = mode & S_IFMT
+  if (t === S_IFDIR) return 'dir'
+  if (t === S_IFLNK) return 'link'
+  if (t === S_IFREG) return 'file'
+  return 'other'
 }
 
 /**
