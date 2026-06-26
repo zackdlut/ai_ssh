@@ -5,11 +5,11 @@
 
 :root {
   /* Ink surface ramp */
-  --ink-900: #07090f;
-  --ink-800: #0a0d15;
-  --ink-700: #0e121d;
-  --ink-600: #141926;
-  --ink-500: #1b2233;
+  --ink-900: #0c0f18;
+  --ink-800: #11151f;
+  --ink-700: #161b28;
+  --ink-600: #1d2331;
+  --ink-500: #252d3f;
 
   /* Backwards-compatible aliases (older class rules still reference these) */
   --bg: var(--ink-800);
@@ -42,8 +42,8 @@
   --shadow-soft: 0 10px 30px -12px rgba(0, 0, 0, 0.7);
   --shadow-pop: 0 24px 60px -20px rgba(0, 0, 0, 0.8);
 
-  --overlay-bg: rgba(4, 6, 11, 0.62);
-  --terminal-bg: #04060b;
+  --overlay-bg: rgba(9, 12, 20, 0.62);
+  --terminal-bg: #0a0e16;
   --surface-hover: rgba(255, 255, 255, 0.07);
   --surface-raise: rgba(255, 255, 255, 0.03);
   --surface-inset: rgba(255, 255, 255, 0.04);
@@ -59,8 +59,8 @@
   );
 
   /* Chrome / panel surfaces */
-  --chrome-bg: linear-gradient(180deg, rgba(20, 25, 38, 0.9), rgba(10, 13, 21, 0.75));
-  --panel-bg: linear-gradient(180deg, rgba(14, 18, 29, 0.92), rgba(7, 9, 15, 0.92));
+  --chrome-bg: linear-gradient(180deg, rgba(33, 40, 56, 0.9), rgba(19, 24, 35, 0.75));
+  --panel-bg: linear-gradient(180deg, rgba(24, 30, 43, 0.92), rgba(14, 18, 27, 0.92));
   --panel-header-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0));
   --panel-header-accent: linear-gradient(90deg, transparent, rgba(91, 233, 208, 0.5), transparent);
 
@@ -102,11 +102,11 @@
   --scrollbar-track: rgba(148, 163, 196, 0.25);
 
   /* Markdown / prose rendering */
-  --md-code-bg: rgba(4, 10, 18, 0.72);
+  --md-code-bg: rgba(11, 17, 27, 0.72);
   --md-code-border: rgba(91, 233, 208, 0.3);
   --md-code-fg: #b8f5ec;
   --md-strong-fg: #f4f7ff;
-  --md-pre-bg: #05070d;
+  --md-pre-bg: #0b0f18;
   --md-pre-fg: #d8f7f0;
   --md-blockquote-bg: rgba(91, 233, 208, 0.06);
   --md-blockquote-border: var(--signal-strong);
@@ -130,11 +130,11 @@
 
 /* Dawn Paper — warm parchment light with crisp signal accents. */
 [data-theme='dawn'] {
-  --ink-900: #f4f2ed;
-  --ink-800: #ebe8e1;
-  --ink-700: #e2ded6;
+  --ink-900: #f4f5f8;
+  --ink-800: #eaecf1;
+  --ink-700: #dfe3ea;
   --ink-600: #ffffff;
-  --ink-500: #d4d0c8;
+  --ink-500: #d2d6df;
 
   --line: rgba(52, 58, 72, 0.12);
   --line-strong: rgba(52, 58, 72, 0.22);
@@ -156,8 +156,8 @@
   --shadow-soft: 0 10px 28px -12px rgba(52, 58, 72, 0.14);
   --shadow-pop: 0 22px 50px -18px rgba(52, 58, 72, 0.18);
 
-  --overlay-bg: rgba(244, 242, 237, 0.78);
-  --terminal-bg: #faf9f6;
+  --overlay-bg: rgba(244, 245, 248, 0.78);
+  --terminal-bg: #fcfdfe;
   --surface-hover: rgba(26, 31, 46, 0.06);
   --surface-raise: rgba(255, 255, 255, 0.88);
   --surface-inset: rgba(26, 31, 46, 0.04);
@@ -172,8 +172,8 @@
     rgba(59, 111, 217, 0.1)
   );
 
-  --chrome-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(235, 232, 225, 0.94));
-  --panel-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 242, 237, 0.96));
+  --chrome-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(234, 236, 241, 0.94));
+  --panel-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 245, 248, 0.96));
   --panel-header-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0));
   --panel-header-accent: linear-gradient(90deg, transparent, rgba(10, 157, 135, 0.38), transparent);
 
@@ -193,7 +193,7 @@
   --tab-hover-bg: rgba(26, 31, 46, 0.05);
   --row-hover-bg: rgba(26, 31, 46, 0.05);
   --empty-surface-bg: rgba(26, 31, 46, 0.03);
-  --control-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(244, 242, 237, 0.82));
+  --control-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(244, 245, 248, 0.82));
   --control-inset: rgba(26, 31, 46, 0.05);
   --control-inset-hover: rgba(26, 31, 46, 0.07);
 
@@ -1350,7 +1350,7 @@ select:focus {
   background: linear-gradient(
     180deg,
     rgba(255, 255, 255, 0.96),
-    rgba(244, 242, 237, 0.88)
+    rgba(244, 245, 248, 0.88)
   );
   border-color: var(--line-strong);
   box-shadow: inset 0 1px 2px rgba(26, 31, 46, 0.04);
@@ -1472,7 +1472,7 @@ select:focus {
   background: linear-gradient(
     180deg,
     rgba(255, 255, 255, 0.96),
-    rgba(244, 242, 237, 0.88)
+    rgba(244, 245, 248, 0.88)
   );
   border-color: var(--line-strong);
   box-shadow: inset 0 1px 2px rgba(26, 31, 46, 0.04);
@@ -2706,12 +2706,12 @@ select:focus {
 }
 
 .theme-preview-aurora {
-  background: linear-gradient(160deg, #0a0d15 0%, #141926 55%, #0e121d 100%);
+  background: linear-gradient(160deg, #11151f 0%, #1d2331 55%, #161b28 100%);
   box-shadow: inset 0 0 40px rgba(91, 233, 208, 0.08);
 }
 
 .theme-preview-dawn {
-  background: linear-gradient(160deg, #faf9f6 0%, #f0ece4 55%, #ebe8e1 100%);
+  background: linear-gradient(160deg, #fcfdfe 0%, #eef1f5 55%, #e6e9ef 100%);
   border-color: rgba(26, 31, 46, 0.08);
   box-shadow: inset 0 0 30px rgba(10, 157, 135, 0.06);
 }

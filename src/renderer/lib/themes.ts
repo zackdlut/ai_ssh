@@ -21,19 +21,19 @@ export const THEME_OPTIONS: ThemeMeta[] = [
   {
     id: 'dawn',
     label: 'Dawn Paper',
-    description: '暖色纸感浅底，清晰对比与柔和阴影',
+    description: '中性纸感浅底，清晰对比与柔和阴影',
     tag: 'Light'
   }
 ]
 
 export const XTERM_THEMES: Record<AppTheme, ITheme> = {
   aurora: {
-    background: '#04060b',
+    background: '#0a0e16',
     foreground: '#e7ebf6',
     cursor: '#5be9d0',
-    cursorAccent: '#04060b',
+    cursorAccent: '#0a0e16',
     selectionBackground: 'rgba(91, 233, 208, 0.28)',
-    black: '#0a0d15',
+    black: '#11151f',
     red: '#ff7a93',
     green: '#82e8b6',
     yellow: '#ffce6a',
@@ -51,10 +51,10 @@ export const XTERM_THEMES: Record<AppTheme, ITheme> = {
     brightWhite: '#f4f7ff'
   },
   dawn: {
-    background: '#faf9f6',
+    background: '#fcfdfe',
     foreground: '#1a1f2e',
     cursor: '#0a9d87',
-    cursorAccent: '#faf9f6',
+    cursorAccent: '#fcfdfe',
     selectionBackground: 'rgba(10, 157, 135, 0.22)',
     black: '#2a3142',
     red: '#c93d58',
