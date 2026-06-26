@@ -36,6 +36,7 @@ export default function SidePanel(): JSX.Element {
   })
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; text: string } | null>(null)
 
   useEffect(() => {
     void window.api.config.getAISettings().then((s) => {
@@ -61,6 +62,47 @@ export default function SidePanel(): JSX.Element {
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight })
   }, [messages])
+
+  useEffect(() => {
+    if (!menu) return
+    const close = (): void => setMenu(null)
+    window.addEventListener('click', close)
+    window.addEventListener('wheel', close)
+    window.addEventListener('resize', close)
+    window.addEventListener('blur', close)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('wheel', close)
+      window.removeEventListener('resize', close)
+      window.removeEventListener('blur', close)
+    }
+  }, [menu])
+
+  const showCopyMenu = (e: React.MouseEvent, text: string): void => {
+    const selection = text.trim()
+    if (!selection) {
+      setMenu(null)
+      return
+    }
+    e.preventDefault()
+    setMenu({ x: e.clientX, y: e.clientY, text: selection })
+  }
+
+  const onChatContextMenu = (e: React.MouseEvent): void => {
+    showCopyMenu(e, window.getSelection()?.toString() ?? '')
+  }
+
+  const onComposerContextMenu = (e: React.MouseEvent<HTMLTextAreaElement>): void => {
+    const el = e.currentTarget
+    const start = el.selectionStart ?? 0
+    const end = el.selectionEnd ?? 0
+    showCopyMenu(e, el.value.slice(start, end))
+  }
+
+  const copySelection = (): void => {
+    if (menu) void navigator.clipboard.writeText(menu.text)
+    setMenu(null)
+  }
 
   const send = (): void => {
     const text = input.trim()
@@ -183,7 +225,7 @@ export default function SidePanel(): JSX.Element {
         </div>
       </div>
 
-      <div className="chat-list" ref={listRef}>
+      <div className="chat-list" ref={listRef} onContextMenu={onChatContextMenu}>
         {messages.length === 0 ? (
           <div className="chat-empty">
             用自然语言描述你的意图，例如：
@@ -223,6 +265,7 @@ export default function SidePanel(): JSX.Element {
           value={input}
           onChange={onInputChange}
           onKeyDown={onKeyDown}
+          onContextMenu={onComposerContextMenu}
           placeholder="Describe what you want to do…（输入 @terminal 绑定终端）"
         />
         <div className="composer-actions">
@@ -255,6 +298,12 @@ export default function SidePanel(): JSX.Element {
           )}
         </div>
       </div>
+
+      {menu && (
+        <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
+          <button onClick={copySelection}>复制</button>
+        </div>
+      )}
     </div>
   )
 }
