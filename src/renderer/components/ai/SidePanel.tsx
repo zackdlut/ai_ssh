@@ -194,6 +194,9 @@ export default function SidePanel(): JSX.Element {
     else if (e.key === 'ArrowRight') setPanelWidth(panelWidth - 24)
   }
 
+  const terminalLabel = activeTab ? `${activeTab.username}@${activeTab.host}` : t('copilot.noTerminal')
+  const terminalState = activeTab ? 'live' : 'idle'
+
   return (
     <div className="side-panel copilot-panel" style={{ width: panelWidth }}>
       <div
@@ -213,7 +216,13 @@ export default function SidePanel(): JSX.Element {
       <div className="side-panel-header">
         <span className="panel-title">
           <span className="spark" />
-          {t('copilot.title')}
+          <span className="panel-title-text">{t('copilot.title')}</span>
+          <span
+            className={`context-hint context-hint--header ${terminalState}`}
+            title={terminalLabel}
+          >
+            {terminalLabel}
+          </span>
         </span>
         <div className="panel-toolbar">
           <button className="toolbar-btn" onClick={clear} title={t('copilot.clearTitle')}>
@@ -229,7 +238,7 @@ export default function SidePanel(): JSX.Element {
         {messages.length === 0 ? (
           <div className="chat-empty">
             {t('copilot.emptyLead')}
-            <div style={{ marginTop: 10 }}>
+            <div className="hint-chip-group">
               {EXAMPLE_KEYS.map((key) => (
                 <button
                   key={key}
@@ -275,8 +284,8 @@ export default function SidePanel(): JSX.Element {
               disabled={busy}
               onChange={onProfileChange}
             />
-            <span className={`context-hint ${activeTab ? 'live' : 'idle'}`} title={activeTab ? `${activeTab.username}@${activeTab.host}` : t('copilot.noTerminal')}>
-              {activeTab ? `${activeTab.username}@${activeTab.host}` : t('copilot.noTerminal')}
+            <span className={`context-hint context-hint--composer ${terminalState}`} title={terminalLabel}>
+              {terminalLabel}
             </span>
           </div>
           {busy ? (
