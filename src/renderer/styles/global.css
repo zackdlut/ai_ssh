@@ -2320,9 +2320,14 @@ select:focus {
   font-size: 13px;
 }
 
-.context-menu button:hover {
+.context-menu button:hover:not(:disabled) {
   background: linear-gradient(135deg, rgba(91, 233, 208, 0.18), rgba(116, 168, 255, 0.12));
   color: var(--signal);
+}
+
+.context-menu button:disabled {
+  opacity: 0.38;
+  cursor: default;
 }
 
 /* ---------- SFTP panel ---------- */

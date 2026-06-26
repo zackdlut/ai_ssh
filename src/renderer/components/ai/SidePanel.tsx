@@ -21,6 +21,10 @@ const EXAMPLE_KEYS = [
   'copilot.example4'
 ] as const satisfies readonly TranslationKey[]
 
+type ContextMenu =
+  | { source: 'chat'; x: number; y: number; text: string }
+  | { source: 'composer'; x: number; y: number; selectionStart: number; selectionEnd: number }
+
 export default function SidePanel(): JSX.Element {
   const { messages, busy, activeRequestId, panelWidth, setPanelWidth, setBusy, setPanelOpen, clear } =
     useAIStore()
@@ -39,7 +43,7 @@ export default function SidePanel(): JSX.Element {
   })
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  const [menu, setMenu] = useState<{ x: number; y: number; text: string } | null>(null)
+  const [menu, setMenu] = useState<ContextMenu | null>(null)
   const locale = useLocaleStore((s) => s.locale)
   const t = useT()
 
@@ -78,29 +82,77 @@ export default function SidePanel(): JSX.Element {
     }
   }, [menu])
 
-  const showCopyMenu = (e: React.MouseEvent, text: string): void => {
+  const showChatCopyMenu = (e: React.MouseEvent, text: string): void => {
     const selection = text.trim()
     if (!selection) {
       setMenu(null)
       return
     }
     e.preventDefault()
-    setMenu({ x: e.clientX, y: e.clientY, text: selection })
+    setMenu({ source: 'chat', x: e.clientX, y: e.clientY, text: selection })
   }
 
   const onChatContextMenu = (e: React.MouseEvent): void => {
-    showCopyMenu(e, window.getSelection()?.toString() ?? '')
+    showChatCopyMenu(e, window.getSelection()?.toString() ?? '')
   }
 
   const onComposerContextMenu = (e: React.MouseEvent<HTMLTextAreaElement>): void => {
+    e.preventDefault()
     const el = e.currentTarget
-    const start = el.selectionStart ?? 0
-    const end = el.selectionEnd ?? 0
-    showCopyMenu(e, el.value.slice(start, end))
+    setMenu({
+      source: 'composer',
+      x: e.clientX,
+      y: e.clientY,
+      selectionStart: el.selectionStart ?? 0,
+      selectionEnd: el.selectionEnd ?? 0
+    })
   }
 
   const copySelection = (): void => {
-    if (menu) void navigator.clipboard.writeText(menu.text)
+    if (!menu) return
+    if (menu.source === 'chat') {
+      void navigator.clipboard.writeText(menu.text)
+    } else {
+      const text = input.slice(menu.selectionStart, menu.selectionEnd)
+      if (text) void navigator.clipboard.writeText(text)
+    }
+    setMenu(null)
+  }
+
+  const cutSelection = (): void => {
+    if (!menu || menu.source !== 'composer') return
+    const { selectionStart: start, selectionEnd: end } = menu
+    if (start === end) return
+    const text = input.slice(start, end)
+    void navigator.clipboard.writeText(text)
+    const next = input.slice(0, start) + input.slice(end)
+    setInput(next)
+    requestAnimationFrame(() => {
+      const el = inputRef.current
+      el?.focus()
+      el?.setSelectionRange(start, start)
+      refreshMention(next, start)
+    })
+    setMenu(null)
+  }
+
+  const pasteToComposer = (): void => {
+    if (!menu || menu.source !== 'composer') return
+    const { selectionStart: start, selectionEnd: end } = menu
+    void navigator.clipboard.readText().then((clip) => {
+      if (!clip) return
+      const before = input.slice(0, start)
+      const after = input.slice(end)
+      const next = before + clip + after
+      const pos = start + clip.length
+      setInput(next)
+      requestAnimationFrame(() => {
+        const el = inputRef.current
+        el?.focus()
+        el?.setSelectionRange(pos, pos)
+        refreshMention(next, pos)
+      })
+    })
     setMenu(null)
   }
 
@@ -302,7 +354,25 @@ export default function SidePanel(): JSX.Element {
 
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
-          <button onClick={copySelection}>{t('common.copy')}</button>
+          {menu.source === 'composer' ? (
+            <>
+              <button
+                onClick={copySelection}
+                disabled={menu.selectionStart === menu.selectionEnd}
+              >
+                {t('common.copy')}
+              </button>
+              <button
+                onClick={cutSelection}
+                disabled={menu.selectionStart === menu.selectionEnd}
+              >
+                {t('common.cut')}
+              </button>
+              <button onClick={pasteToComposer}>{t('common.paste')}</button>
+            </>
+          ) : (
+            <button onClick={copySelection}>{t('common.copy')}</button>
+          )}
         </div>
       )}
     </div>
