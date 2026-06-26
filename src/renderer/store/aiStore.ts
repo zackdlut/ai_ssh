@@ -5,6 +5,10 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   streaming?: boolean
+  /** SSH session bound via @terminal, so charts can subscribe to its live stream. */
+  boundSessionId?: string
+  /** Tab id bound via @terminal, used for reading the current buffer snapshot. */
+  boundTabId?: string
 }
 
 export const PANEL_MIN_WIDTH = 300

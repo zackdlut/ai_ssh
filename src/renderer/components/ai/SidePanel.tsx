@@ -16,7 +16,9 @@ export default function SidePanel(): JSX.Element {
 
   const [input, setInput] = useState('')
   const [resizing, setResizing] = useState(false)
+  const [mentionOpen, setMentionOpen] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight })
@@ -27,6 +29,35 @@ export default function SidePanel(): JSX.Element {
     if (!text || busy) return
     sendPrompt(text)
     setInput('')
+    setMentionOpen(false)
+  }
+
+  // Show the @terminal suggestion while the token being typed before the caret
+  // is a prefix of "terminal".
+  const refreshMention = (value: string, caret: number): void => {
+    const before = value.slice(0, caret)
+    const m = /@(\w*)$/.exec(before)
+    setMentionOpen(!!m && 'terminal'.startsWith(m[1].toLowerCase()))
+  }
+
+  const onInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>): void => {
+    setInput(e.target.value)
+    refreshMention(e.target.value, e.target.selectionStart ?? e.target.value.length)
+  }
+
+  const insertTerminalMention = (): void => {
+    const el = inputRef.current
+    const caret = el?.selectionStart ?? input.length
+    const before = input.slice(0, caret).replace(/@(\w*)$/, '@terminal ')
+    const after = input.slice(caret)
+    const next = before + after
+    setInput(next)
+    setMentionOpen(false)
+    requestAnimationFrame(() => {
+      el?.focus()
+      const pos = before.length
+      el?.setSelectionRange(pos, pos)
+    })
   }
 
   const stop = (): void => {
@@ -39,6 +70,15 @@ export default function SidePanel(): JSX.Element {
     // candidate word — it must not submit the message. keyCode 229 is the
     // legacy signal browsers emit for keystrokes consumed by the IME.
     if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    if (mentionOpen && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey))) {
+      e.preventDefault()
+      insertTerminalMention()
+      return
+    }
+    if (e.key === 'Escape' && mentionOpen) {
+      setMentionOpen(false)
+      return
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       send()
@@ -113,9 +153,10 @@ export default function SidePanel(): JSX.Element {
               <span className="hint-chip">查看占用 8080 端口的进程</span>
               <span className="hint-chip">show disk usage by directory</span>
               <span className="hint-chip">统计日志里的错误数</span>
+              <span className="hint-chip">@terminal 把 CPU 使用率画成实时折线图</span>
             </div>
             <div style={{ marginTop: 16, color: 'var(--text-faint)' }}>
-              建议的命令会渲染成卡片，可一键在当前终端运行。
+              建议的命令会渲染成卡片，可一键在当前终端运行。输入 @terminal 可把当前终端的实时输出绘成动态图表。
             </div>
           </div>
         ) : (
@@ -124,11 +165,20 @@ export default function SidePanel(): JSX.Element {
       </div>
 
       <div className="composer">
+        {mentionOpen && (
+          <div className="mention-menu" role="listbox">
+            <button className="mention-item" onMouseDown={(e) => e.preventDefault()} onClick={insertTerminalMention}>
+              <span className="mention-name">@terminal</span>
+              <span className="mention-desc">绑定当前终端的实时输出</span>
+            </button>
+          </div>
+        )}
         <textarea
+          ref={inputRef}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={onInputChange}
           onKeyDown={onKeyDown}
-          placeholder="Describe what you want to do…"
+          placeholder="Describe what you want to do…（输入 @terminal 绑定终端）"
         />
         <div className="composer-actions">
           <span className="context-hint">

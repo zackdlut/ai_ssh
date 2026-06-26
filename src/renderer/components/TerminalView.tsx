@@ -7,6 +7,7 @@ import { useTabsStore } from '../store/tabsStore'
 import { registerNlToggle, registerTerminal, unregisterTerminal } from '../lib/terminalRegistry'
 import { askAboutSelection } from '../lib/aiService'
 import { extractCommands, isDangerous } from '../lib/commands'
+import { stripAnsi } from '../lib/streamParse'
 import { XTERM_THEMES } from '../lib/themes'
 import { useThemeStore } from '../store/themeStore'
 import type { CommandRun } from '../../shared/types'
@@ -64,15 +65,6 @@ const DIRECT_ANSWER_MAX = 200
 const CAPTURE_TIMEOUT = 20000
 // Treat command output as complete after this idle period (ms).
 const CAPTURE_IDLE_MS = 500
-
-/** Strip ANSI escape / control sequences from captured terminal output. */
-function stripAnsi(s: string): string {
-  return s
-    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
-    .replace(/\x1b[@-Z\\-_]/g, '')
-    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
-}
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

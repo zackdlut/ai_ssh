@@ -37,9 +37,17 @@ export function initAIService(): void {
   })
 }
 
+/** Matches the @terminal mention used to bind the active terminal's live output. */
+const TERMINAL_MENTION = /@terminal\b/i
+
 /**
  * Send a user prompt to the AI, attaching the active terminal's recent output
  * and host info as context. Ignored while another request is in flight.
+ *
+ * When the prompt mentions @terminal, a larger output sample is attached (so the
+ * model can design line-parsing regexes) and the active session/tab ids are
+ * recorded on the assistant message so a resulting chart can subscribe to the
+ * terminal's live data stream.
  */
 export function sendPrompt(text: string): void {
   const prompt = text.trim()
@@ -56,17 +64,26 @@ export function sendPrompt(text: string): void {
   const assistantId = crypto.randomUUID()
   const requestId = crypto.randomUUID()
 
-  ai.addMessage({ id: userId, role: 'user', content: prompt })
-  ai.addMessage({ id: assistantId, role: 'assistant', content: '', streaming: true })
-  pending.set(requestId, assistantId)
-  ai.setBusy(true, requestId)
-
   const activeTab = useTabsStore.getState().tabs.find(
     (t) => t.id === useTabsStore.getState().activeTabId
   )
+  const mentionsTerminal = TERMINAL_MENTION.test(prompt)
+
+  ai.addMessage({ id: userId, role: 'user', content: prompt })
+  ai.addMessage({
+    id: assistantId,
+    role: 'assistant',
+    content: '',
+    streaming: true,
+    boundSessionId: mentionsTerminal ? activeTab?.sessionId : undefined,
+    boundTabId: mentionsTerminal ? activeTab?.id : undefined
+  })
+  pending.set(requestId, assistantId)
+  ai.setBusy(true, requestId)
+
   const context: TerminalContext | undefined = activeTab
     ? {
-        recentOutput: readTerminalOutput(activeTab.id, 40),
+        recentOutput: readTerminalOutput(activeTab.id, mentionsTerminal ? 80 : 40),
         host: activeTab.host,
         username: activeTab.username
       }
