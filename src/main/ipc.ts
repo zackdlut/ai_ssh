@@ -22,6 +22,7 @@ import type {
   BookmarkFolder,
   ConnectionConfig,
   ConnectOptions,
+  CopilotChatState,
   SftpListResult,
   SftpOpResult,
   SftpRealpathResult,
@@ -239,6 +240,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
   ipcMain.handle('config:saveFolder', (_e, folder: BookmarkFolder) => config.saveFolder(folder))
   ipcMain.handle('config:setFolders', (_e, list: BookmarkFolder[]) => config.setFolders(list))
   ipcMain.handle('config:deleteFolder', (_e, id: string) => config.deleteFolder(id))
+  ipcMain.handle('config:getCopilotChats', () => config.getCopilotChats())
+  ipcMain.handle('config:setCopilotChats', (_e, state: CopilotChatState | null) =>
+    config.setCopilotChats(state)
+  )
 
   return ssh
 }

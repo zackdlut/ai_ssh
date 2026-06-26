@@ -17,6 +17,7 @@ import type {
   BookmarkFolder,
   ConnectionConfig,
   ConnectOptions,
+  CopilotChatState,
   ConnectResult,
   SftpListResult,
   SftpOpResult,
@@ -106,7 +107,11 @@ const api = {
     deleteFolder: (
       id: string
     ): Promise<{ folders: BookmarkFolder[]; connections: ConnectionConfig[] }> =>
-      ipcRenderer.invoke('config:deleteFolder', id)
+      ipcRenderer.invoke('config:deleteFolder', id),
+    getCopilotChats: (): Promise<CopilotChatState | null> =>
+      ipcRenderer.invoke('config:getCopilotChats'),
+    setCopilotChats: (state: CopilotChatState | null): Promise<CopilotChatState | null> =>
+      ipcRenderer.invoke('config:setCopilotChats', state)
   }
 }
 

@@ -14,6 +14,7 @@ import { SHORTCUT_COPY, SHORTCUT_CUT, SHORTCUT_PASTE } from '../../lib/shortcuts
 import ContextMenuItem from '../ContextMenuItem'
 import { useLocaleStore } from '../../store/localeStore'
 import ChatMessage from './ChatMessage'
+import ChatTabBar from './ChatTabBar'
 import ModelSelect from './ModelSelect'
 
 const EXAMPLE_KEYS = [
@@ -28,11 +29,24 @@ type ContextMenu =
   | { source: 'composer'; x: number; y: number; selectionStart: number; selectionEnd: number }
 
 export default function SidePanel(): JSX.Element {
-  const { messages, busy, activeRequestId, panelWidth, setPanelWidth, setBusy, setPanelOpen, clear } =
-    useAIStore()
+  const {
+    busy,
+    activeRequestId,
+    activeChatTabId,
+    panelWidth,
+    setPanelWidth,
+    setBusy,
+    setPanelOpen,
+    clearActiveTab,
+    updateDraft,
+    activeChatTab
+  } = useAIStore()
+  const activeChat = activeChatTab()
+  const messages = activeChat?.messages ?? []
+  const input = activeChat?.draft ?? ''
+
   const activeTab = useTabsStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
 
-  const [input, setInput] = useState('')
   const [resizing, setResizing] = useState(false)
   const [mentionOpen, setMentionOpen] = useState(false)
   const [copilotProfile, setCopilotProfile] = useState<ModelProfile>('default')
@@ -67,7 +81,7 @@ export default function SidePanel(): JSX.Element {
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight })
-  }, [messages])
+  }, [messages, activeChatTabId])
 
   useEffect(() => {
     if (!menu) return
@@ -83,6 +97,10 @@ export default function SidePanel(): JSX.Element {
       window.removeEventListener('blur', close)
     }
   }, [menu])
+
+  const setInput = (value: string): void => {
+    if (activeChatTabId) updateDraft(activeChatTabId, value)
+  }
 
   const showChatCopyMenu = (e: React.MouseEvent, text: string): void => {
     const selection = text.trim()
@@ -162,12 +180,9 @@ export default function SidePanel(): JSX.Element {
     const text = input.trim()
     if (!text || busy) return
     sendPrompt(text)
-    setInput('')
     setMentionOpen(false)
   }
 
-  // Show the @terminal suggestion while the token being typed before the caret
-  // is a prefix of "terminal".
   const refreshMention = (value: string, caret: number): void => {
     const before = value.slice(0, caret)
     const m = /@(\w*)$/.exec(before)
@@ -200,9 +215,6 @@ export default function SidePanel(): JSX.Element {
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
-    // While an IME (e.g. Chinese pinyin) is composing, Enter confirms the
-    // candidate word — it must not submit the message. keyCode 229 is the
-    // legacy signal browsers emit for keystrokes consumed by the IME.
     if (e.nativeEvent.isComposing || e.keyCode === 229) return
     if (mentionOpen && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey))) {
       e.preventDefault()
@@ -219,7 +231,6 @@ export default function SidePanel(): JSX.Element {
     }
   }
 
-  // Drag the left edge to resize. Dragging left widens the panel.
   const startResize = (e: React.MouseEvent): void => {
     e.preventDefault()
     const startX = e.clientX
@@ -242,7 +253,6 @@ export default function SidePanel(): JSX.Element {
     document.body.style.userSelect = 'none'
   }
 
-  // Keyboard a11y: arrow keys nudge the width when the handle is focused.
   const onHandleKey = (e: React.KeyboardEvent): void => {
     if (e.key === 'ArrowLeft') setPanelWidth(panelWidth + 24)
     else if (e.key === 'ArrowRight') setPanelWidth(panelWidth - 24)
@@ -279,7 +289,7 @@ export default function SidePanel(): JSX.Element {
           </span>
         </span>
         <div className="panel-toolbar">
-          <button className="toolbar-btn" onClick={clear} title={t('copilot.clearTitle')}>
+          <button className="toolbar-btn" onClick={clearActiveTab} title={t('copilot.clearTitle')}>
             {t('copilot.clear')}
           </button>
           <button className="toolbar-btn panel-close" onClick={() => setPanelOpen(false)} title={t('copilot.hide')}>
@@ -287,6 +297,8 @@ export default function SidePanel(): JSX.Element {
           </button>
         </div>
       </div>
+
+      <ChatTabBar />
 
       <div className="chat-list" ref={listRef} onContextMenu={onChatContextMenu}>
         {messages.length === 0 ? (

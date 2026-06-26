@@ -39,6 +39,7 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     initAIService()
+    void useAIStore.getState().loadChatState()
     void loadBookmarks()
     void loadTheme()
     void loadLocale()

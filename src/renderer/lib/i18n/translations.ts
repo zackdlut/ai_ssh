@@ -1,4 +1,6 @@
-import type { AppLocale } from '../../shared/types'
+import type { AppLocale } from '../../../shared/types'
+
+export type { AppLocale }
 
 const zh = {
   'common.cancel': '取消',
@@ -134,6 +136,12 @@ const zh = {
   'copilot.example2': '按目录显示磁盘占用',
   'copilot.example3': '统计日志里的错误数',
   'copilot.example4': '@terminal 把 CPU 使用率画成实时折线图',
+  'copilot.newChat': '新对话',
+  'copilot.newTab': '新建聊天',
+  'copilot.closeTab': '关闭聊天',
+  'copilot.scrollTabsLeft': '向左滚动话题',
+  'copilot.scrollTabsRight': '向右滚动话题',
+  'copilot.maxTabsTitle': '最多同时打开 {max} 个聊天',
 
   'cmd.run': '运行',
   'cmd.edit': '编辑',
@@ -360,6 +368,12 @@ const en: Record<keyof typeof zh, string> = {
   'copilot.example2': 'Show disk usage by directory',
   'copilot.example3': 'Count errors in the log file',
   'copilot.example4': '@terminal chart CPU usage as a live line graph',
+  'copilot.newChat': 'New chat',
+  'copilot.newTab': 'New chat tab',
+  'copilot.closeTab': 'Close chat',
+  'copilot.scrollTabsLeft': 'Scroll topics left',
+  'copilot.scrollTabsRight': 'Scroll topics right',
+  'copilot.maxTabsTitle': 'Up to {max} chats at a time',
 
   'cmd.run': 'Run',
   'cmd.edit': 'Edit',

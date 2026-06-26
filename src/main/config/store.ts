@@ -5,7 +5,8 @@ import type {
   AppLocale,
   AppTheme,
   BookmarkFolder,
-  ConnectionConfig
+  ConnectionConfig,
+  CopilotChatState
 } from '../../shared/types'
 
 interface StoreSchema {
@@ -14,6 +15,7 @@ interface StoreSchema {
   locale: AppLocale
   connections: ConnectionConfig[]
   folders: BookmarkFolder[]
+  copilotChats: CopilotChatState | null
 }
 
 let _store: Store<StoreSchema> | null = null
@@ -37,7 +39,8 @@ function store(): Store<StoreSchema> {
         theme: 'aurora',
         locale: 'zh',
         connections: [],
-        folders: []
+        folders: [],
+        copilotChats: null
       }
     })
   }
@@ -130,6 +133,15 @@ export function setFolders(list: BookmarkFolder[]): BookmarkFolder[] {
  * directly or indirectly inside the removed folders are detached to the root
  * (parentId = null) instead of being destroyed.
  */
+export function getCopilotChats(): CopilotChatState | null {
+  return store().get('copilotChats')
+}
+
+export function setCopilotChats(state: CopilotChatState | null): CopilotChatState | null {
+  store().set('copilotChats', state)
+  return getCopilotChats()
+}
+
 export function deleteFolder(id: string): {
   folders: BookmarkFolder[]
   connections: ConnectionConfig[]

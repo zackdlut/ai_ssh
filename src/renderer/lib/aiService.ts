@@ -1,10 +1,15 @@
-import { useAIStore } from '../store/aiStore'
+import { useAIStore, DEFAULT_CHAT_TAB_TITLE } from '../store/aiStore'
 import { useTabsStore } from '../store/tabsStore'
 import { readTerminalOutput } from './terminalRegistry'
 import type { ChatMessageDTO, TerminalContext } from '../../shared/types'
 
+interface PendingRequest {
+  tabId: string
+  messageId: string
+}
+
 /** Maps an in-flight requestId to the assistant message being streamed. */
-const pending = new Map<string, string>()
+const pending = new Map<string, PendingRequest>()
 let initialized = false
 
 /**
@@ -16,25 +21,25 @@ export function initAIService(): void {
   initialized = true
 
   window.api.ai.onChunk(({ requestId, delta }) => {
-    const msgId = pending.get(requestId)
-    if (msgId) useAIStore.getState().appendToMessage(msgId, delta)
+    const entry = pending.get(requestId)
+    if (entry) useAIStore.getState().appendToMessage(entry.tabId, entry.messageId, delta)
   })
   window.api.ai.onReasoning(({ requestId, delta }) => {
-    const msgId = pending.get(requestId)
-    if (msgId) useAIStore.getState().appendReasoning(msgId, delta)
+    const entry = pending.get(requestId)
+    if (entry) useAIStore.getState().appendReasoning(entry.tabId, entry.messageId, delta)
   })
   window.api.ai.onDone(({ requestId }) => {
-    const msgId = pending.get(requestId)
-    if (msgId) useAIStore.getState().finishMessage(msgId)
+    const entry = pending.get(requestId)
+    if (entry) useAIStore.getState().finishMessage(entry.tabId, entry.messageId)
     pending.delete(requestId)
     useAIStore.getState().setBusy(false)
   })
   window.api.ai.onError(({ requestId, error }) => {
-    const msgId = pending.get(requestId)
-    if (msgId) {
+    const entry = pending.get(requestId)
+    if (entry) {
       const ai = useAIStore.getState()
-      ai.appendToMessage(msgId, `\n\n[Error] ${error}`)
-      ai.finishMessage(msgId)
+      ai.appendToMessage(entry.tabId, entry.messageId, `\n\n[Error] ${error}`)
+      ai.finishMessage(entry.tabId, entry.messageId)
     }
     pending.delete(requestId)
     useAIStore.getState().setBusy(false)
@@ -44,21 +49,30 @@ export function initAIService(): void {
 /** Matches the @terminal mention used to bind the active terminal's live output. */
 const TERMINAL_MENTION = /@terminal\b/i
 
+const TAB_TITLE_MAX = 24
+
+function autoTitleFromPrompt(prompt: string): string {
+  const oneLine = prompt.replace(/\s+/g, ' ').trim()
+  if (oneLine.length <= TAB_TITLE_MAX) return oneLine
+  return oneLine.slice(0, TAB_TITLE_MAX) + '…'
+}
+
 /**
  * Send a user prompt to the AI, attaching the active terminal's recent output
  * and host info as context. Ignored while another request is in flight.
- *
- * When the prompt mentions @terminal, a larger output sample is attached (so the
- * model can design line-parsing regexes) and the active session/tab ids are
- * recorded on the assistant message so a resulting chart can subscribe to the
- * terminal's live data stream.
  */
 export function sendPrompt(text: string): void {
   const prompt = text.trim()
   const ai = useAIStore.getState()
   if (!prompt || ai.busy) return
 
-  const history: ChatMessageDTO[] = ai.messages.map((m) => ({
+  const tabId = ai.activeChatTabId
+  if (!tabId) return
+
+  const tab = ai.chatTabs.find((t) => t.id === tabId)
+  if (!tab) return
+
+  const history: ChatMessageDTO[] = tab.messages.map((m) => ({
     role: m.role,
     content: m.content
   }))
@@ -68,28 +82,33 @@ export function sendPrompt(text: string): void {
   const assistantId = crypto.randomUUID()
   const requestId = crypto.randomUUID()
 
-  const activeTab = useTabsStore.getState().tabs.find(
+  const activeTerminalTab = useTabsStore.getState().tabs.find(
     (t) => t.id === useTabsStore.getState().activeTabId
   )
   const mentionsTerminal = TERMINAL_MENTION.test(prompt)
 
-  ai.addMessage({ id: userId, role: 'user', content: prompt })
-  ai.addMessage({
+  if (tab.title === DEFAULT_CHAT_TAB_TITLE) {
+    ai.renameTab(tabId, autoTitleFromPrompt(prompt))
+  }
+
+  ai.updateDraft(tabId, '')
+  ai.addMessage(tabId, { id: userId, role: 'user', content: prompt })
+  ai.addMessage(tabId, {
     id: assistantId,
     role: 'assistant',
     content: '',
     streaming: true,
-    boundSessionId: mentionsTerminal ? activeTab?.sessionId : undefined,
-    boundTabId: mentionsTerminal ? activeTab?.id : undefined
+    boundSessionId: mentionsTerminal ? activeTerminalTab?.sessionId : undefined,
+    boundTabId: mentionsTerminal ? activeTerminalTab?.id : undefined
   })
-  pending.set(requestId, assistantId)
-  ai.setBusy(true, requestId)
+  pending.set(requestId, { tabId, messageId: assistantId })
+  ai.setBusy(true, requestId, tabId)
 
-  const context: TerminalContext | undefined = activeTab
+  const context: TerminalContext | undefined = activeTerminalTab
     ? {
-        recentOutput: readTerminalOutput(activeTab.id, mentionsTerminal ? 80 : 40),
-        host: activeTab.host,
-        username: activeTab.username
+        recentOutput: readTerminalOutput(activeTerminalTab.id, mentionsTerminal ? 80 : 40),
+        host: activeTerminalTab.host,
+        username: activeTerminalTab.username
       }
     : undefined
 

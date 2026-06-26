@@ -78,6 +78,32 @@ export interface ChatMessageDTO {
   content: string
 }
 
+/** A single message in a Copilot chat tab (persisted). */
+export interface CopilotChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  reasoning?: string
+  thinkingMs?: number
+  boundSessionId?: string
+  boundTabId?: string
+}
+
+/** One conversation topic in the Copilot side panel. */
+export interface CopilotChatTab {
+  id: string
+  title: string
+  messages: CopilotChatMessage[]
+  draft: string
+  updatedAt: number
+}
+
+/** Persisted Copilot multi-tab chat state. */
+export interface CopilotChatState {
+  activeTabId: string
+  tabs: CopilotChatTab[]
+}
+
 export interface TerminalContext {
   /** Recent terminal output (trimmed to the last N lines). */
   recentOutput: string

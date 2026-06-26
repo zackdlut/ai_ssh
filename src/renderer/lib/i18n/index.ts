@@ -4,6 +4,7 @@ import type { ModelProfile } from '../../../shared/types'
 import type { AppTheme } from '../../../shared/types'
 import {
   translate,
+  translations,
   type AppLocale,
   type TranslationKey
 } from './translations'
