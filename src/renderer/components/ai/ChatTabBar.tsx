@@ -107,7 +107,7 @@ export default function ChatTabBar({ onOpenHistory }: Props): JSX.Element {
             aria-label={t('copilot.scrollTabsLeft')}
             title={t('copilot.scrollTabsLeft')}
           >
-            ‹
+            <span className="copilot-tabbar-nav-glyph" aria-hidden />
           </button>
         )}
         <div
@@ -153,7 +153,7 @@ export default function ChatTabBar({ onOpenHistory }: Props): JSX.Element {
             aria-label={t('copilot.scrollTabsRight')}
             title={t('copilot.scrollTabsRight')}
           >
-            ›
+            <span className="copilot-tabbar-nav-glyph" aria-hidden />
           </button>
         )}
       </div>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   useAIStore,
   DEFAULT_CHAT_TAB_TITLE,
@@ -75,22 +75,44 @@ export default function ChatHistoryPanel({ onClose }: Props): JSX.Element {
     setConfirmDeleteId(null)
   }
 
+  useEffect(() => {
+    if (!confirmDeleteId) return
+    const reset = (e: MouseEvent): void => {
+      const target = e.target
+      if (!(target instanceof Element)) return
+      if (target.closest('.copilot-history-delete')) return
+      setConfirmDeleteId(null)
+    }
+    window.addEventListener('click', reset)
+    return () => window.removeEventListener('click', reset)
+  }, [confirmDeleteId])
+
+  const totalCount = chatTabs.length
+
   return (
     <div className="copilot-history-overlay" onClick={onClose}>
       <div className="copilot-history-panel" onClick={(e) => e.stopPropagation()}>
         <div className="copilot-history-header">
-          <span className="copilot-history-title">{t('copilot.history.title')}</span>
+          <div className="copilot-history-heading">
+            <span className="copilot-history-title">{t('copilot.history.title')}</span>
+            {totalCount > 0 && (
+              <span className="copilot-history-count">
+                {t('copilot.history.sessionCount', { count: totalCount })}
+              </span>
+            )}
+          </div>
           <button
             type="button"
             className="copilot-history-close"
             onClick={onClose}
             aria-label={t('common.close')}
           >
-            ✕
+            <span className="copilot-history-close-glyph" aria-hidden />
           </button>
         </div>
 
         <div className="copilot-history-search-wrap">
+          <span className="copilot-history-search-icon" aria-hidden />
           <input
             type="search"
             className="copilot-history-search"
@@ -103,7 +125,10 @@ export default function ChatHistoryPanel({ onClose }: Props): JSX.Element {
 
         <div className="copilot-history-list" role="list">
           {sortedTabs.length === 0 ? (
-            <div className="copilot-history-empty">{t('copilot.history.empty')}</div>
+            <div className="copilot-history-empty">
+              <span className="copilot-history-empty-icon" aria-hidden />
+              <span>{t('copilot.history.empty')}</span>
+            </div>
           ) : (
             sortedTabs.map((tab) => {
               const isActive = tab.id === activeChatTabId && !tab.archived
@@ -148,10 +173,11 @@ export default function ChatHistoryPanel({ onClose }: Props): JSX.Element {
                     }
                     onClick={(e) => handleDelete(e, tab)}
                   >
-                    {confirming ? (
-                      <span className="copilot-history-delete-label">{t('copilot.history.confirmDelete')}</span>
-                    ) : (
-                      <span className="copilot-history-delete-glyph" aria-hidden />
+                    <span className="copilot-history-delete-glyph" aria-hidden />
+                    {confirming && (
+                      <span className="copilot-history-delete-label">
+                        {t('copilot.history.confirmDelete')}
+                      </span>
                     )}
                   </button>
                 </div>
