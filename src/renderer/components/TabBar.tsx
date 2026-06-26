@@ -1,12 +1,26 @@
 import { useEffect, useState } from 'react'
-import { useTabsStore } from '../store/tabsStore'
+import { useTabsStore, type TerminalTab } from '../store/tabsStore'
 import { useAIStore } from '../store/aiStore'
 import { useSftpStore } from '../store/sftpStore'
 import { useBookmarksStore } from '../store/bookmarksStore'
 import { cloneTab, connectFromConfig, reconnectTab } from '../lib/connect'
+import { readFullTerminalOutput } from '../lib/terminalRegistry'
 import { useT } from '../lib/i18n'
 
 export type SettingsMenuItem = 'ai' | 'themes' | 'language' | 'about'
+
+interface TabContextMenu {
+  x: number
+  y: number
+  tab: TerminalTab
+}
+
+function defaultLogName(tab: TerminalTab): string {
+  const now = new Date()
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  return `${tab.username}@${tab.host}-${stamp}.log`
+}
 
 interface Props {
   sidebarOpen: boolean
@@ -43,6 +57,7 @@ export default function TabBar({
   const t = useT()
   const [recentOpen, setRecentOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [menu, setMenu] = useState<TabContextMenu | null>(null)
 
   const recent = recentOpen ? getRecentConnections(5) : []
 
@@ -67,6 +82,32 @@ export default function TabBar({
       window.removeEventListener('scroll', close, true)
     }
   }, [settingsOpen])
+
+  useEffect(() => {
+    if (!menu) return
+    const close = (): void => setMenu(null)
+    window.addEventListener('click', close)
+    window.addEventListener('wheel', close)
+    window.addEventListener('resize', close)
+    window.addEventListener('blur', close)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('wheel', close)
+      window.removeEventListener('resize', close)
+      window.removeEventListener('blur', close)
+    }
+  }, [menu])
+
+  const saveTabOutput = async (tab: TerminalTab): Promise<void> => {
+    setMenu(null)
+    const content = readFullTerminalOutput(tab.id).trim()
+    if (!content) {
+      window.alert(t('tabbar.saveOutputEmpty'))
+      return
+    }
+    const res = await window.api.terminal.saveLog(content, defaultLogName(tab))
+    if (res.error) window.alert(t('tabbar.saveOutputFailed', { error: res.error }))
+  }
 
   const handleClose = (e: React.MouseEvent, id: string, sessionId: string): void => {
     e.stopPropagation()
@@ -94,6 +135,11 @@ export default function TabBar({
           key={tab.id}
           className={`tab ${tab.id === activeTabId ? 'active' : ''}`}
           onClick={() => setActive(tab.id)}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            setMenu({ x: e.clientX, y: e.clientY, tab })
+          }}
           onDoubleClick={() => {
             setActive(tab.id)
             if (tab.status === 'closed' || tab.status === 'error') {
@@ -232,6 +278,11 @@ export default function TabBar({
       >
         {t('tabbar.sftp')}
       </button>
+      {menu && (
+        <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
+          <button onClick={() => void saveTabOutput(menu.tab)}>{t('tabbar.saveOutput')}</button>
+        </div>
+      )}
     </div>
   )
 }

@@ -545,7 +545,9 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       term.write(e.data)
     })
 
-    registerTerminal(tab.id, (maxLines = 40) => serializeBuffer(term, maxLines))
+    registerTerminal(tab.id, (maxLines = 40) =>
+      maxLines < 0 ? serializeFullBuffer(term) : serializeBuffer(term, maxLines)
+    )
     registerNlToggle(tab.id, toggleNl)
 
     const resizeObserver = new ResizeObserver(() => {
@@ -674,4 +676,14 @@ function serializeBuffer(term: Terminal, maxLines: number): string {
     if (line) lines.push(line.translateToString(true))
   }
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()
+}
+
+function serializeFullBuffer(term: Terminal): string {
+  const buffer = term.buffer.active
+  const lines: string[] = []
+  for (let i = 0; i < buffer.length; i++) {
+    const line = buffer.getLine(i)
+    if (line) lines.push(line.translateToString(true))
+  }
+  return lines.join('\n').trimEnd()
 }

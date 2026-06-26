@@ -31,3 +31,7 @@ export function readTerminalOutput(tabId: string | null | undefined, maxLines = 
   const reader = readers.get(tabId)
   return reader ? reader(maxLines) : ''
 }
+
+export function readFullTerminalOutput(tabId: string): string {
+  return readTerminalOutput(tabId, -1)
+}

@@ -1,4 +1,5 @@
 import { app, ipcMain, dialog, type BrowserWindow } from 'electron'
+import { writeFile } from 'fs/promises'
 import { basename } from 'path'
 import { SshManager } from './ssh/manager'
 import { AIProvider } from './ai/provider'
@@ -24,7 +25,8 @@ import type {
   SftpListResult,
   SftpOpResult,
   SftpRealpathResult,
-  SftpTransferResult
+  SftpTransferResult,
+  SaveFileResult
 } from '../shared/types'
 
 function errMessage(e: unknown): string {
@@ -175,6 +177,28 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
           await ssh.sftpUpload(sessionId, local, remoteDir)
         }
         return { count: result.filePaths.length }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
+
+  // --- Terminal ---
+  ipcMain.handle(
+    'terminal:saveLog',
+    async (_e, content: string, defaultPath: string): Promise<SaveFileResult> => {
+      const win = getWindow()
+      const opts = {
+        defaultPath,
+        filters: [{ name: 'Log', extensions: ['log', 'txt'] }]
+      }
+      const result = win
+        ? await dialog.showSaveDialog(win, opts)
+        : await dialog.showSaveDialog(opts)
+      if (result.canceled || !result.filePath) return { cancelled: true }
+      try {
+        await writeFile(result.filePath, content, 'utf8')
+        return { path: result.filePath }
       } catch (err) {
         return { error: errMessage(err) }
       }

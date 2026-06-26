@@ -22,6 +22,7 @@ import type {
   SftpOpResult,
   SftpRealpathResult,
   SftpTransferResult,
+  SaveFileResult,
   SshDataEvent,
   SshStatusEvent
 } from '../shared/types'
@@ -64,6 +65,10 @@ const api = {
       ipcRenderer.invoke('sftp:download', sessionId, remotePath),
     upload: (sessionId: string, remoteDir: string): Promise<SftpTransferResult> =>
       ipcRenderer.invoke('sftp:upload', sessionId, remoteDir)
+  },
+  terminal: {
+    saveLog: (content: string, defaultPath: string): Promise<SaveFileResult> =>
+      ipcRenderer.invoke('terminal:saveLog', content, defaultPath)
   },
   ai: {
     chat: (req: AIChatRequest): void => ipcRenderer.send('ai:chat', req),

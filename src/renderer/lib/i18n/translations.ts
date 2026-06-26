@@ -36,6 +36,9 @@ const zh = {
   'tabbar.toggleAi': '切换 AI 面板',
   'tabbar.sftp': 'SFTP',
   'tabbar.toggleSftp': '切换 SFTP 面板',
+  'tabbar.saveOutput': '保存输出到日志…',
+  'tabbar.saveOutputEmpty': '当前终端没有可保存的输出',
+  'tabbar.saveOutputFailed': '保存失败: {error}',
 
   'app.emptyTitle': '还没有活动会话',
   'app.emptySub': '连接到一台主机即可开始。AI Copilot 会感知当前终端的输出，帮你生成可执行命令。',
@@ -257,6 +260,9 @@ const en: Record<keyof typeof zh, string> = {
   'tabbar.toggleAi': 'Toggle AI panel',
   'tabbar.sftp': 'SFTP',
   'tabbar.toggleSftp': 'Toggle SFTP panel',
+  'tabbar.saveOutput': 'Save output to log…',
+  'tabbar.saveOutputEmpty': 'No terminal output to save',
+  'tabbar.saveOutputFailed': 'Failed to save: {error}',
 
   'app.emptyTitle': 'No active sessions',
   'app.emptySub':

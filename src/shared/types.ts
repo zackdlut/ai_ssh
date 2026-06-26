@@ -181,6 +181,14 @@ export interface SftpTransferResult {
   error?: string
 }
 
+export interface SaveFileResult {
+  /** Path written when save succeeded. */
+  path?: string
+  /** True when the user cancelled the file dialog. */
+  cancelled?: boolean
+  error?: string
+}
+
 export interface AIChunkEvent {
   requestId: string
   delta: string
