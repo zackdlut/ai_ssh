@@ -40,6 +40,8 @@ interface Capture {
 interface NlState {
   mode: 'normal' | 'nl'
   buffer: string
+  /** Cursor offset within `buffer` (0 = before first char). */
+  cursor: number
   busy: boolean
   confirmResolver?: (ok: boolean) => void
   capture?: Capture
@@ -185,7 +187,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
-  const nlRef = useRef<NlState>({ mode: 'normal', buffer: '', busy: false })
+  const nlRef = useRef<NlState>({ mode: 'normal', buffer: '', cursor: 0, busy: false })
   const [menu, setMenu] = useState<MenuState | null>(null)
   const appTheme = useThemeStore((s) => s.theme)
 
@@ -226,12 +228,14 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       if (nl.mode === 'normal') {
         nl.mode = 'nl'
         nl.buffer = ''
+        nl.cursor = 0
         useTabsStore.getState().setNlMode(tab.id, true)
         term.write(`\r\n${ORANGE}自然语言模式已开启（输入 exit、F12 或双击标签退出）${RESET}\r\n`)
         writeNlPrompt()
       } else {
         nl.mode = 'normal'
         nl.buffer = ''
+        nl.cursor = 0
         nl.confirmResolver = undefined
         useTabsStore.getState().setNlMode(tab.id, false)
         term.write(`\r\n${DIM}已退出自然语言模式${RESET}\r\n`)
@@ -365,10 +369,81 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
 
     const handleNlInput = (data: string): void => {
       const nl = nlRef.current
-      for (const ch of data) {
+
+      const redrawTail = (from: number): void => {
+        const tail = nl.buffer.slice(from)
+        term.write(tail + ' \b'.repeat(tail.length + 1))
+      }
+
+      const moveCursorLeft = (): void => {
+        if (nl.cursor <= 0) return
+        nl.cursor--
+        term.write('\b')
+      }
+
+      const moveCursorRight = (): void => {
+        if (nl.cursor >= nl.buffer.length) return
+        term.write(nl.buffer[nl.cursor])
+        nl.cursor++
+      }
+
+      const moveCursorHome = (): void => {
+        if (nl.cursor <= 0) return
+        term.write('\b'.repeat(nl.cursor))
+        nl.cursor = 0
+      }
+
+      const moveCursorEnd = (): void => {
+        while (nl.cursor < nl.buffer.length) moveCursorRight()
+      }
+
+      const deleteBeforeCursor = (): void => {
+        if (nl.cursor <= 0) return
+        nl.buffer = nl.buffer.slice(0, nl.cursor - 1) + nl.buffer.slice(nl.cursor)
+        nl.cursor--
+        redrawTail(nl.cursor)
+      }
+
+      const insertChar = (ch: string): void => {
+        const rest = nl.buffer.slice(nl.cursor)
+        nl.buffer = nl.buffer.slice(0, nl.cursor) + ch + rest
+        nl.cursor++
+        term.write(ch + rest)
+        if (rest.length > 0) term.write(' \b'.repeat(rest.length + 1))
+      }
+
+      const consumeEscape = (start: number): number => {
+        if (data[start + 1] === '[') {
+          const rest = data.slice(start + 2)
+          const m = rest.match(/^(\d*)(;(\d+)*)?([A-Za-z~])/)
+          if (m) {
+            const code = m[4]
+            const param = m[1] || '1'
+            if (code === 'D' || (code === '~' && param === '1')) moveCursorLeft()
+            else if (code === 'C' || (code === '~' && param === '4')) moveCursorRight()
+            else if (code === 'H' || (code === '~' && param === '1')) moveCursorHome()
+            else if (code === 'F' || (code === '~' && param === '4')) moveCursorEnd()
+            return start + 2 + m[0].length
+          }
+        }
+        if (data[start + 1] === 'O') {
+          const code = data[start + 2]
+          if (code === 'D') moveCursorLeft()
+          else if (code === 'C') moveCursorRight()
+          else if (code === 'H') moveCursorHome()
+          else if (code === 'F') moveCursorEnd()
+          return start + 3
+        }
+        return start + 1
+      }
+
+      let i = 0
+      while (i < data.length) {
+        const ch = data[i]
         if (ch === '\r' || ch === '\n') {
           const text = nl.buffer.trim()
           nl.buffer = ''
+          nl.cursor = 0
           if (!text) return
           if (text.toLowerCase() === 'exit') {
             toggleNl()
@@ -378,17 +453,20 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
           return
         }
         if (ch === '\x7f' || ch === '\b') {
-          if (nl.buffer.length > 0) {
-            nl.buffer = nl.buffer.slice(0, -1)
-            term.write('\b \b')
-          }
+          deleteBeforeCursor()
+          i++
           continue
         }
-        // Ignore escape sequences (arrows, etc.) and other control chars.
-        if (ch === '\x1b') break
-        if (ch.charCodeAt(0) < 0x20) continue
-        nl.buffer += ch
-        term.write(ch)
+        if (ch === '\x1b') {
+          i = consumeEscape(i)
+          continue
+        }
+        if (ch.charCodeAt(0) < 0x20) {
+          i++
+          continue
+        }
+        insertChar(ch)
+        i++
       }
     }
 

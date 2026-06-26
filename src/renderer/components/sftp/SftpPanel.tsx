@@ -40,6 +40,7 @@ export default function SftpPanel(): JSX.Element {
   const sessionId = activeTab && activeTab.status === 'connected' ? activeTab.sessionId : null
 
   const [cwd, setCwd] = useState('')
+  const [pathInput, setPathInput] = useState('')
   const [entries, setEntries] = useState<SftpEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -47,26 +48,35 @@ export default function SftpPanel(): JSX.Element {
   const [resizing, setResizing] = useState(false)
 
   const load = useCallback(
-    async (path: string): Promise<void> => {
-      if (!sessionId) return
+    async (path: string): Promise<boolean> => {
+      if (!sessionId) return false
       setLoading(true)
       setError(null)
       const res = await window.api.sftp.list(sessionId, path)
       if (res.error) {
         setError(res.error)
-      } else {
-        setCwd(res.cwd ?? path)
-        setEntries(res.entries ?? [])
+        setLoading(false)
+        return false
       }
+      const resolved = res.cwd ?? path
+      setCwd(resolved)
+      setPathInput(resolved)
+      setEntries(res.entries ?? [])
       setLoading(false)
+      return true
     },
     [sessionId]
   )
+
+  useEffect(() => {
+    setPathInput(cwd)
+  }, [cwd])
 
   // Open the home directory whenever the bound session changes.
   useEffect(() => {
     if (!sessionId) {
       setCwd('')
+      setPathInput('')
       setEntries([])
       setError(null)
       return
@@ -84,6 +94,23 @@ export default function SftpPanel(): JSX.Element {
 
   const goUp = (): void => {
     if (cwd) void load(parentDir(cwd))
+  }
+
+  const submitPath = (): void => {
+    const path = pathInput.trim()
+    if (!path) return
+    void load(path)
+  }
+
+  const onPathKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      submitPath()
+    } else if (e.key === 'Escape') {
+      setPathInput(cwd)
+      e.currentTarget.blur()
+    }
   }
 
   const download = async (entry: SftpEntry): Promise<void> => {
@@ -185,12 +212,19 @@ export default function SftpPanel(): JSX.Element {
           SFTP
         </span>
         <div style={{ display: 'flex', gap: 6 }}>
-          <button className="toolbar-btn" onClick={refresh} disabled={!sessionId} title="刷新">
-            ⟳
-          </button>
-          <button className="toolbar-btn" onClick={() => setPanelOpen(false)} title="Hide panel">
-            ✕
-          </button>
+          <button
+            className="sftp-btn-icon sftp-btn-icon-refresh"
+            onClick={refresh}
+            disabled={!sessionId}
+            title="刷新"
+            aria-label="刷新"
+          />
+          <button
+            className="sftp-btn-icon sftp-btn-icon-close"
+            onClick={() => setPanelOpen(false)}
+            title="隐藏侧栏"
+            aria-label="隐藏侧栏"
+          />
         </div>
       </div>
 
@@ -204,23 +238,48 @@ export default function SftpPanel(): JSX.Element {
       ) : (
         <>
           <div className="sftp-toolbar">
-            <button className="sftp-path-up" onClick={goUp} title="上级目录">
-              ↑
-            </button>
-            <div className="sftp-path" title={cwd}>
-              {cwd || '…'}
+            <button
+              className="sftp-btn-icon sftp-btn-icon-up"
+              onClick={goUp}
+              title="上级目录"
+              aria-label="上级目录"
+            />
+            <div className="sftp-path">
+              <input
+                className="sftp-path-input"
+                type="text"
+                value={pathInput}
+                onChange={(e) => setPathInput(e.target.value)}
+                onKeyDown={onPathKeyDown}
+                onBlur={() => setPathInput(cwd)}
+                spellCheck={false}
+                autoComplete="off"
+                aria-label="当前路径"
+                placeholder="/"
+              />
             </div>
-            <button className="toolbar-btn" onClick={newFolder} disabled={busy} title="新建文件夹">
-              新建
-            </button>
-            <button className="toolbar-btn" onClick={upload} disabled={busy} title="上传文件">
-              上传
-            </button>
+            <div className="sftp-toolbar-actions">
+              <button className="sftp-btn-text" onClick={newFolder} disabled={busy} title="新建文件夹">
+                新建
+              </button>
+              <button className="sftp-btn-text" onClick={upload} disabled={busy} title="上传文件">
+                上传
+              </button>
+            </div>
           </div>
 
           {error && <div className="sftp-error">{error}</div>}
 
           <div className="sftp-list">
+            {!loading && entries.length > 0 && (
+              <div className="sftp-list-head" aria-hidden>
+                <span className="sftp-col-icon" />
+                <span className="sftp-col-name">名称</span>
+                <span className="sftp-col-size">大小</span>
+                <span className="sftp-col-time">修改时间</span>
+                <span className="sftp-col-actions" />
+              </div>
+            )}
             {loading ? (
               <div className="sftp-empty">加载中…</div>
             ) : entries.length === 0 ? (
