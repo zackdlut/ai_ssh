@@ -34,12 +34,6 @@ function formatTime(ms: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-function iconFor(type: SftpEntry['type']): string {
-  if (type === 'dir') return '📁'
-  if (type === 'link') return '🔗'
-  return '📄'
-}
-
 export default function SftpPanel(): JSX.Element {
   const { panelWidth, setPanelWidth, setPanelOpen } = useSftpStore()
   const activeTab = useTabsStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
@@ -238,7 +232,7 @@ export default function SftpPanel(): JSX.Element {
                   className={`sftp-row ${entry.type}`}
                   onDoubleClick={() => enter(entry)}
                 >
-                  <span className="sftp-icon">{iconFor(entry.type)}</span>
+                  <span className={`sftp-entry-icon ${entry.type}`} aria-hidden />
                   <span className="sftp-name" title={entry.name}>
                     {entry.name}
                   </span>
@@ -246,16 +240,28 @@ export default function SftpPanel(): JSX.Element {
                   <span className="sftp-time">{formatTime(entry.mtime)}</span>
                   <span className="sftp-actions">
                     {entry.type !== 'dir' && (
-                      <button onClick={() => download(entry)} disabled={busy} title="下载">
-                        ⤓
-                      </button>
+                      <button
+                        className="sftp-act sftp-act-download"
+                        onClick={() => download(entry)}
+                        disabled={busy}
+                        title="下载"
+                        aria-label="下载"
+                      />
                     )}
-                    <button onClick={() => rename(entry)} disabled={busy} title="重命名">
-                      ✎
-                    </button>
-                    <button onClick={() => remove(entry)} disabled={busy} title="删除">
-                      🗑
-                    </button>
+                    <button
+                      className="sftp-act sftp-act-rename"
+                      onClick={() => rename(entry)}
+                      disabled={busy}
+                      title="重命名"
+                      aria-label="重命名"
+                    />
+                    <button
+                      className="sftp-act sftp-act-delete"
+                      onClick={() => remove(entry)}
+                      disabled={busy}
+                      title="删除"
+                      aria-label="删除"
+                    />
                   </span>
                 </div>
               ))

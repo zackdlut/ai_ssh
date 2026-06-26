@@ -1846,10 +1846,70 @@ select:focus {
   cursor: pointer;
 }
 
-.sftp-icon {
+/* Entry glyphs drawn in CSS (emoji tofu on Linux/WSL without color emoji fonts). */
+.sftp-entry-icon {
   flex: none;
-  width: 18px;
-  text-align: center;
+  width: 14px;
+  height: 12px;
+  position: relative;
+}
+
+.sftp-entry-icon.dir {
+  border: 1px solid var(--folder-border);
+  border-radius: 0 3px 3px 3px;
+  background: linear-gradient(180deg, var(--folder-fill-top), var(--folder-fill-bottom));
+  margin-top: 2px;
+}
+.sftp-entry-icon.dir::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -1px;
+  width: 6px;
+  height: 3px;
+  border-radius: 2px 2px 0 0;
+  background: var(--folder-tab);
+}
+
+.sftp-entry-icon.file {
+  border: 1px solid var(--text-faint);
+  border-radius: 0 3px 3px 3px;
+  background: rgba(255, 255, 255, 0.05);
+}
+.sftp-entry-icon.file::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 5px;
+  height: 5px;
+  background: var(--panel-bg);
+  border-left: 1px solid var(--text-faint);
+  border-bottom: 1px solid var(--text-faint);
+  border-radius: 0 0 0 2px;
+}
+
+.sftp-entry-icon.link {
+  border: none;
+  background: transparent;
+}
+.sftp-entry-icon.link::before,
+.sftp-entry-icon.link::after {
+  content: '';
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--signal);
+  border-radius: 2px;
+  top: 50%;
+  transform: translateY(-50%) rotate(45deg);
+}
+.sftp-entry-icon.link::before {
+  left: 0;
+}
+.sftp-entry-icon.link::after {
+  right: 0;
+  opacity: 0.65;
 }
 
 .sftp-name {
@@ -1890,22 +1950,88 @@ select:focus {
   opacity: 1;
 }
 
-.sftp-actions button {
+.sftp-act {
+  width: 22px;
+  height: 22px;
+  padding: 0;
   border: none;
+  border-radius: 5px;
   background: transparent;
   color: var(--text-dim);
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  font-size: 13px;
-  line-height: 1;
+  cursor: pointer;
+  position: relative;
+  flex: none;
 }
-.sftp-actions button:hover {
+.sftp-act::before,
+.sftp-act::after {
+  content: '';
+  position: absolute;
+  box-sizing: border-box;
+}
+.sftp-act:hover {
   background: rgba(255, 255, 255, 0.08);
-  color: var(--signal);
+  color: var(--text);
 }
-.sftp-actions button:disabled {
-  opacity: 0.4;
+.sftp-act:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.sftp-act-download::before {
+  left: 50%;
+  top: 5px;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+.sftp-act-download::after {
+  left: 50%;
+  top: 4px;
+  width: 1.5px;
+  height: 9px;
+  margin-left: -0.75px;
+  background: currentColor;
+}
+
+.sftp-act-rename::before {
+  left: 5px;
+  top: 4px;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid currentColor;
+  border-radius: 1px;
+  transform: rotate(-12deg);
+}
+.sftp-act-rename::after {
+  left: 11px;
+  top: 11px;
+  width: 6px;
+  height: 1.5px;
+  background: currentColor;
+  transform: rotate(-45deg);
+  border-radius: 1px;
+}
+
+.sftp-act-delete::before {
+  left: 6px;
+  top: 7px;
+  width: 10px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-top: none;
+  border-radius: 0 0 2px 2px;
+}
+.sftp-act-delete::after {
+  left: 5px;
+  top: 5px;
+  width: 12px;
+  height: 1.5px;
+  background: currentColor;
+  border-radius: 1px;
+  box-shadow: -2px -3px 0 0 currentColor, 2px -3px 0 0 currentColor;
 }
 
 /* ---------- Theme picker ---------- */
