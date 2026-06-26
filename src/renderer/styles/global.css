@@ -1022,6 +1022,24 @@ select:focus {
   border: 1px solid var(--line);
   color: var(--text);
   font-size: 12px;
+  font-family: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.chat-empty .hint-chip:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--line-strong);
+}
+
+.chat-empty .hint-chip:active:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.chat-empty .hint-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .composer {

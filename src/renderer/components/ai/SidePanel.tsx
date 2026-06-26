@@ -9,6 +9,13 @@ import { useTabsStore } from '../../store/tabsStore'
 import { sendPrompt } from '../../lib/aiService'
 import ChatMessage from './ChatMessage'
 
+const EXAMPLE_PROMPTS = [
+  '查看占用 8080 端口的进程',
+  'show disk usage by directory',
+  '统计日志里的错误数',
+  '@terminal 把 CPU 使用率画成实时折线图'
+] as const
+
 export default function SidePanel(): JSX.Element {
   const { messages, busy, activeRequestId, panelWidth, setPanelWidth, setBusy, setPanelOpen, clear } =
     useAIStore()
@@ -150,10 +157,17 @@ export default function SidePanel(): JSX.Element {
           <div className="chat-empty">
             用自然语言描述你的意图，例如：
             <div style={{ marginTop: 10 }}>
-              <span className="hint-chip">查看占用 8080 端口的进程</span>
-              <span className="hint-chip">show disk usage by directory</span>
-              <span className="hint-chip">统计日志里的错误数</span>
-              <span className="hint-chip">@terminal 把 CPU 使用率画成实时折线图</span>
+              {EXAMPLE_PROMPTS.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  className="hint-chip"
+                  disabled={busy}
+                  onClick={() => sendPrompt(prompt)}
+                >
+                  {prompt}
+                </button>
+              ))}
             </div>
             <div style={{ marginTop: 16, color: 'var(--text-faint)' }}>
               建议的命令会渲染成卡片，可一键在当前终端运行。输入 @terminal 可把当前终端的实时输出绘成动态图表。
