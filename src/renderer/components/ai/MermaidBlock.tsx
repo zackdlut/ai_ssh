@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import mermaid from 'mermaid'
 import { mermaidThemeFor } from '../../lib/themes'
 import { useThemeStore } from '../../store/themeStore'
+import { useT } from '../../lib/i18n'
 
 let lastMermaidTheme: 'dark' | 'default' | null = null
 function ensureInit(theme: 'dark' | 'default'): void {
@@ -56,6 +57,7 @@ export default function MermaidBlock({ code }: Props): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const appTheme = useThemeStore((s) => s.theme)
+  const t = useT()
 
   useEffect(() => {
     ensureInit(mermaidThemeFor(appTheme))
@@ -99,15 +101,17 @@ export default function MermaidBlock({ code }: Props): JSX.Element {
       <div className="preview-toolbar">
         <span className="preview-label">Mermaid</span>
         <button className="preview-btn" onClick={copy}>
-          {copied ? 'Copied' : 'Copy'}
+          {copied ? t('cmd.copied') : t('cmd.copy')}
         </button>
       </div>
       {error ? (
         <div className="preview-error">
           <div className="preview-error-msg">
-            无法渲染该 mermaid 图（常见原因：节点标签中含未加引号的特殊字符，如
-            <code>{' A[a (b)] '}</code>
-            应写成 <code>{' A["a (b)"] '}</code>）：{error}
+            {t('mermaid.renderError', {
+              bad: t('mermaid.badExample'),
+              good: t('mermaid.goodExample'),
+              error
+            })}
           </div>
           <pre>{code}</pre>
         </div>

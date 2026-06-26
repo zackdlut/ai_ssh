@@ -7,12 +7,15 @@ import ConnectModal from './components/connection/ConnectModal'
 import ConnectionSidebar from './components/connection/ConnectionSidebar'
 import SettingsModal from './components/ai/SettingsModal'
 import ThemesModal from './components/settings/ThemesModal'
+import LanguageModal from './components/settings/LanguageModal'
 import { useTabsStore } from './store/tabsStore'
 import { useAIStore } from './store/aiStore'
 import { useSftpStore } from './store/sftpStore'
 import { useBookmarksStore } from './store/bookmarksStore'
 import { useThemeStore } from './store/themeStore'
+import { useLocaleStore } from './store/localeStore'
 import { initAIService } from './lib/aiService'
+import { useT } from './lib/i18n'
 import type { ConnectionConfig } from '../shared/types'
 
 interface ConnectModalState {
@@ -26,6 +29,8 @@ export default function App(): JSX.Element {
   const sftpOpen = useSftpStore((s) => s.panelOpen)
   const loadBookmarks = useBookmarksStore((s) => s.load)
   const loadTheme = useThemeStore((s) => s.load)
+  const loadLocale = useLocaleStore((s) => s.load)
+  const t = useT()
 
   const [connectModal, setConnectModal] = useState<ConnectModalState | null>(null)
   const [settingsPanel, setSettingsPanel] = useState<SettingsMenuItem | null>(null)
@@ -35,6 +40,7 @@ export default function App(): JSX.Element {
     initAIService()
     void loadBookmarks()
     void loadTheme()
+    void loadLocale()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -73,13 +79,11 @@ export default function App(): JSX.Element {
               <div className="empty-state">
                 <div className="empty-mark">⌁</div>
                 <div>
-                  <div className="empty-title">还没有活动会话</div>
-                  <div className="empty-sub">
-                    连接到一台主机即可开始。AI Copilot 会感知当前终端的输出，帮你生成可执行命令。
-                  </div>
+                  <div className="empty-title">{t('app.emptyTitle')}</div>
+                  <div className="empty-sub">{t('app.emptySub')}</div>
                 </div>
                 <button className="primary" onClick={() => openNewConnection(null)}>
-                  + 新建 SSH 连接
+                  {t('app.newConnection')}
                 </button>
               </div>
             ) : (
@@ -102,6 +106,7 @@ export default function App(): JSX.Element {
       )}
       {settingsPanel === 'ai' && <SettingsModal onClose={() => setSettingsPanel(null)} />}
       {settingsPanel === 'themes' && <ThemesModal onClose={() => setSettingsPanel(null)} />}
+      {settingsPanel === 'language' && <LanguageModal onClose={() => setSettingsPanel(null)} />}
     </div>
   )
 }

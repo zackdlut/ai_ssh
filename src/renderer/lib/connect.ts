@@ -1,6 +1,12 @@
 import { useTabsStore, type TerminalTab } from '../store/tabsStore'
 import { useBookmarksStore } from '../store/bookmarksStore'
+import { t } from './i18n'
+import { useLocaleStore } from '../store/localeStore'
 import type { ConnectionConfig, ConnectOptions } from '../../shared/types'
+
+function loc() {
+  return useLocaleStore.getState().locale
+}
 
 export interface ConnectArgs {
   opts: ConnectOptions
@@ -36,7 +42,7 @@ function resolveConnectOpts(tab: TerminalTab): ConnectOptions | undefined {
 export async function connect({ opts, title }: ConnectArgs): Promise<string | undefined> {
   const result = await window.api.ssh.connect(opts)
   if (result.error || !result.sessionId) {
-    return result.error ?? 'Failed to connect.'
+    return result.error ?? t(loc(), 'connect.failed')
   }
   const port = opts.port || 22
   useTabsStore.getState().addTab({
@@ -79,12 +85,12 @@ export async function connectFromConfig(c: ConnectionConfig): Promise<string | u
 export async function reconnectTab(tabId: string): Promise<string | undefined> {
   const store = useTabsStore.getState()
   const tab = store.tabs.find((t) => t.id === tabId)
-  if (!tab) return 'Tab not found.'
+  if (!tab) return t(loc(), 'connect.tabNotFound')
   if (tab.status === 'connecting') return undefined
 
   const opts = resolveConnectOpts(tab)
   if (!opts) {
-    return '无法重连：缺少连接凭据，请从侧栏重新连接。'
+    return t(loc(), 'connect.noCredentialsReconnect')
   }
 
   window.api.ssh.close(tab.sessionId)
@@ -92,7 +98,7 @@ export async function reconnectTab(tabId: string): Promise<string | undefined> {
 
   const result = await window.api.ssh.connect(opts)
   if (result.error || !result.sessionId) {
-    const message = result.error ?? 'Failed to reconnect.'
+    const message = result.error ?? t(loc(), 'connect.reconnectFailed')
     store.setStatusById(tabId, 'error', message)
     return message
   }
@@ -113,7 +119,7 @@ export async function cloneTab(tabId: string): Promise<string | undefined> {
 
   const opts = resolveConnectOpts(tab)
   if (!opts) {
-    return '无法克隆：缺少连接凭据，请从侧栏重新连接。'
+    return t(loc(), 'connect.noCredentialsClone')
   }
 
   return connect({ opts, title: tab.title })

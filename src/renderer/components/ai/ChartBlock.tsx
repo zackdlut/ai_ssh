@@ -4,6 +4,7 @@ import { parseChartSpec, type ChartSpec } from '../../lib/chartSpec'
 import { createLineSplitter, extractValue, stripAnsi } from '../../lib/streamParse'
 import { readTerminalOutput } from '../../lib/terminalRegistry'
 import { useThemeStore } from '../../store/themeStore'
+import { useT } from '../../lib/i18n'
 
 interface Props {
   /** Raw JSON body of the ```chart fence. */
@@ -95,6 +96,7 @@ export default function ChartBlock({ spec, boundSessionId, boundTabId }: Props):
   const appTheme = useThemeStore((s) => s.theme)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const t = useT()
 
   const parsed = useMemo<{ spec?: ChartSpec; series?: CompiledSeries[]; err?: string }>(() => {
     try {
@@ -226,27 +228,28 @@ export default function ChartBlock({ spec, boundSessionId, boundTabId }: Props):
     <div className={`preview-block ${error ? 'has-error' : ''}`}>
       <div className="preview-toolbar">
         <span className="preview-label">
-          Chart{parsed.spec ? ` · ${parsed.spec.mode === 'live' ? '实时' : '快照'}` : ''}
+          {t('chart.label')}
+          {parsed.spec
+            ? ` · ${parsed.spec.mode === 'live' ? t('chart.live') : t('chart.snapshot')}`
+            : ''}
         </span>
         <button className="preview-btn" onClick={copy}>
-          {copied ? 'Copied' : 'Copy'}
+          {copied ? t('cmd.copied') : t('cmd.copy')}
         </button>
       </div>
       {error ? (
         <div className="preview-error">
-          <div className="preview-error-msg">无法渲染该图表配置：{error}</div>
+          <div className="preview-error-msg">{t('chart.renderError', { error })}</div>
           <pre>{spec}</pre>
         </div>
       ) : (
         <>
           {waitingForBinding && (
-            <div className="chart-hint">
-              未绑定终端。请在输入中使用 @terminal 引用当前终端，再让图表订阅其实时输出。
-            </div>
+            <div className="chart-hint">{t('chart.noBinding')}</div>
           )}
           <div className="chart-canvas" ref={containerRef} />
           {isLive && boundSessionId && (
-            <div className="chart-hint">实时图表：在绑定的终端中运行采集命令即可持续刷新。</div>
+            <div className="chart-hint">{t('chart.liveHint')}</div>
           )}
         </>
       )}

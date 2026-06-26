@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { clampPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from '../../store/aiStore'
 import { useSftpStore } from '../../store/sftpStore'
 import { useTabsStore } from '../../store/tabsStore'
+import { useT } from '../../lib/i18n'
 import type { SftpEntry } from '../../../shared/types'
 
 function parentDir(path: string): string {
@@ -38,6 +39,7 @@ export default function SftpPanel(): JSX.Element {
   const { panelWidth, setPanelWidth, setPanelOpen } = useSftpStore()
   const activeTab = useTabsStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
   const sessionId = activeTab && activeTab.status === 'connected' ? activeTab.sessionId : null
+  const t = useT()
 
   const [cwd, setCwd] = useState('')
   const [pathInput, setPathInput] = useState('')
@@ -132,7 +134,7 @@ export default function SftpPanel(): JSX.Element {
 
   const newFolder = async (): Promise<void> => {
     if (!sessionId || !cwd) return
-    const name = window.prompt('新建文件夹名称：')
+    const name = window.prompt(t('sftp.promptNewFolder'))
     if (!name) return
     setBusy(true)
     const res = await window.api.sftp.mkdir(sessionId, joinPath(cwd, name))
@@ -143,7 +145,7 @@ export default function SftpPanel(): JSX.Element {
 
   const rename = async (entry: SftpEntry): Promise<void> => {
     if (!sessionId || !cwd) return
-    const name = window.prompt('重命名为：', entry.name)
+    const name = window.prompt(t('sftp.promptRename'), entry.name)
     if (!name || name === entry.name) return
     setBusy(true)
     const res = await window.api.sftp.rename(sessionId, entry.path, joinPath(cwd, name))
@@ -155,7 +157,12 @@ export default function SftpPanel(): JSX.Element {
   const remove = async (entry: SftpEntry): Promise<void> => {
     if (!sessionId) return
     const isDir = entry.type === 'dir'
-    if (!window.confirm(`确定删除${isDir ? '目录' : '文件'} "${entry.name}"？`)) return
+    if (
+      !window.confirm(
+        t(isDir ? 'sftp.confirmDeleteDir' : 'sftp.confirmDeleteFile', { name: entry.name })
+      )
+    )
+      return
     setBusy(true)
     const res = await window.api.sftp.delete(sessionId, entry.path, isDir)
     setBusy(false)
@@ -196,7 +203,7 @@ export default function SftpPanel(): JSX.Element {
         className={`panel-resizer ${resizing ? 'active' : ''}`}
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize SFTP panel"
+        aria-label={t('sftp.resizeLabel')}
         aria-valuemin={PANEL_MIN_WIDTH}
         aria-valuemax={PANEL_MAX_WIDTH}
         aria-valuenow={clampPanelWidth(panelWidth)}
@@ -204,36 +211,34 @@ export default function SftpPanel(): JSX.Element {
         onMouseDown={startResize}
         onKeyDown={onHandleKey}
         onDoubleClick={() => setPanelWidth(460)}
-        data-tip="拖动调整宽度（双击重置）"
+        data-tip={t('sftp.resizeTip')}
       />
       <div className="side-panel-header">
         <span className="panel-title">
           <span className="spark" />
-          SFTP
+          {t('sftp.title')}
         </span>
         <div style={{ display: 'flex', gap: 6 }}>
           <button
             className="sftp-btn-icon sftp-btn-icon-refresh"
             onClick={refresh}
             disabled={!sessionId}
-            title="刷新"
-            aria-label="刷新"
+            title={t('sftp.refresh')}
+            aria-label={t('sftp.refresh')}
           />
           <button
             className="sftp-btn-icon sftp-btn-icon-close"
             onClick={() => setPanelOpen(false)}
-            title="隐藏侧栏"
-            aria-label="隐藏侧栏"
+            title={t('sftp.hide')}
+            aria-label={t('sftp.hide')}
           />
         </div>
       </div>
 
       {!sessionId ? (
         <div className="chat-empty">
-          没有已连接的会话。
-          <div style={{ marginTop: 10, color: 'var(--text-faint)' }}>
-            先连接一台主机，SFTP 会复用当前活动终端的连接。
-          </div>
+          {t('sftp.noSession')}
+          <div style={{ marginTop: 10, color: 'var(--text-faint)' }}>{t('sftp.noSessionHint')}</div>
         </div>
       ) : (
         <>
@@ -241,8 +246,8 @@ export default function SftpPanel(): JSX.Element {
             <button
               className="sftp-btn-icon sftp-btn-icon-up"
               onClick={goUp}
-              title="上级目录"
-              aria-label="上级目录"
+              title={t('sftp.up')}
+              aria-label={t('sftp.up')}
             />
             <div className="sftp-path">
               <input
@@ -254,16 +259,16 @@ export default function SftpPanel(): JSX.Element {
                 onBlur={() => setPathInput(cwd)}
                 spellCheck={false}
                 autoComplete="off"
-                aria-label="当前路径"
+                aria-label={t('sftp.path')}
                 placeholder="/"
               />
             </div>
             <div className="sftp-toolbar-actions">
-              <button className="sftp-btn-text" onClick={newFolder} disabled={busy} title="新建文件夹">
-                新建
+              <button className="sftp-btn-text" onClick={newFolder} disabled={busy} title={t('sftp.newFolder')}>
+                {t('sftp.new')}
               </button>
-              <button className="sftp-btn-text" onClick={upload} disabled={busy} title="上传文件">
-                上传
+              <button className="sftp-btn-text" onClick={upload} disabled={busy} title={t('sftp.upload')}>
+                {t('sftp.uploadBtn')}
               </button>
             </div>
           </div>
@@ -274,16 +279,16 @@ export default function SftpPanel(): JSX.Element {
             {!loading && entries.length > 0 && (
               <div className="sftp-list-head" aria-hidden>
                 <span className="sftp-col-icon" />
-                <span className="sftp-col-name">名称</span>
-                <span className="sftp-col-size">大小</span>
-                <span className="sftp-col-time">修改时间</span>
+                <span className="sftp-col-name">{t('sftp.name')}</span>
+                <span className="sftp-col-size">{t('sftp.size')}</span>
+                <span className="sftp-col-time">{t('sftp.modified')}</span>
                 <span className="sftp-col-actions" />
               </div>
             )}
             {loading ? (
-              <div className="sftp-empty">加载中…</div>
+              <div className="sftp-empty">{t('sftp.loading')}</div>
             ) : entries.length === 0 ? (
-              <div className="sftp-empty">空目录</div>
+              <div className="sftp-empty">{t('sftp.emptyDir')}</div>
             ) : (
               entries.map((entry) => (
                 <div
@@ -303,23 +308,23 @@ export default function SftpPanel(): JSX.Element {
                         className="sftp-act sftp-act-download"
                         onClick={() => download(entry)}
                         disabled={busy}
-                        title="下载"
-                        aria-label="下载"
+                        title={t('sftp.download')}
+                        aria-label={t('sftp.download')}
                       />
                     )}
                     <button
                       className="sftp-act sftp-act-rename"
                       onClick={() => rename(entry)}
                       disabled={busy}
-                      title="重命名"
-                      aria-label="重命名"
+                      title={t('sftp.rename')}
+                      aria-label={t('sftp.rename')}
                     />
                     <button
                       className="sftp-act sftp-act-delete"
                       onClick={() => remove(entry)}
                       disabled={busy}
-                      title="删除"
-                      aria-label="删除"
+                      title={t('sftp.delete')}
+                      aria-label={t('sftp.delete')}
                     />
                   </span>
                 </div>

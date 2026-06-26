@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useBookmarksStore, type TreeNode } from '../../store/bookmarksStore'
 import { connect } from '../../lib/connect'
+import { useT } from '../../lib/i18n'
 import type { ConnectionConfig } from '../../../shared/types'
 
 interface Props {
@@ -21,6 +22,7 @@ interface FolderOption {
 export default function ConnectModal({ onClose, editConn, defaultParentId }: Props): JSX.Element {
   const getTree = useBookmarksStore((s) => s.getTree)
   const upsertConnection = useBookmarksStore((s) => s.upsertConnection)
+  const t = useT()
 
   const [name, setName] = useState(editConn?.name ?? '')
   const [host, setHost] = useState(editConn?.host ?? '')
@@ -40,7 +42,7 @@ export default function ConnectModal({ onClose, editConn, defaultParentId }: Pro
   const isEditing = Boolean(editConn)
 
   const folderOptions = useMemo<FolderOption[]>(() => {
-    const opts: FolderOption[] = [{ id: null, label: '（根目录）' }]
+    const opts: FolderOption[] = [{ id: null, label: t('common.root') }]
     const walk = (nodes: TreeNode[], depth: number): void => {
       for (const n of nodes) {
         if (n.kind === 'folder') {
@@ -51,7 +53,7 @@ export default function ConnectModal({ onClose, editConn, defaultParentId }: Pro
     }
     walk(getTree(), 0)
     return opts
-  }, [getTree])
+  }, [getTree, t])
 
   const buildConfig = (): ConnectionConfig => {
     const title = name || `${username}@${host}`
@@ -71,7 +73,7 @@ export default function ConnectModal({ onClose, editConn, defaultParentId }: Pro
 
   const validate = (): boolean => {
     if (!host || !username) {
-      setError('Host and username are required.')
+      setError(t('connect.error.hostRequired'))
       return false
     }
     return true
@@ -111,26 +113,26 @@ export default function ConnectModal({ onClose, editConn, defaultParentId }: Pro
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">{isEditing ? '编辑连接' : 'New SSH Connection'}</div>
+        <div className="modal-header">{isEditing ? t('connect.editTitle') : t('connect.newTitle')}</div>
         <div className="modal-body">
           <div className="field">
-            <label>Name (optional)</label>
+            <label>{t('connect.name')}</label>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-server" />
           </div>
 
           <div className="field-row">
             <div className="field" style={{ flex: 3 }}>
-              <label>Host</label>
+              <label>{t('connect.host')}</label>
               <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="192.168.1.10" />
             </div>
             <div className="field" style={{ flex: 1 }}>
-              <label>Port</label>
+              <label>{t('connect.port')}</label>
               <input value={port} onChange={(e) => setPort(e.target.value)} />
             </div>
           </div>
 
           <div className="field">
-            <label>Username</label>
+            <label>{t('connect.username')}</label>
             <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="root" />
           </div>
 
@@ -139,16 +141,16 @@ export default function ConnectModal({ onClose, editConn, defaultParentId }: Pro
               className={authMode === 'password' ? 'active' : ''}
               onClick={() => setAuthMode('password')}
             >
-              Password
+              {t('connect.password')}
             </button>
             <button className={authMode === 'key' ? 'active' : ''} onClick={() => setAuthMode('key')}>
-              Private Key
+              {t('connect.privateKey')}
             </button>
           </div>
 
           {authMode === 'password' ? (
             <div className="field">
-              <label>Password</label>
+              <label>{t('connect.password')}</label>
               <input
                 type="password"
                 value={password}
@@ -158,7 +160,7 @@ export default function ConnectModal({ onClose, editConn, defaultParentId }: Pro
           ) : (
             <>
               <div className="field">
-                <label>Private key (file path or contents)</label>
+                <label>{t('connect.privateKeyLabel')}</label>
                 <textarea
                   value={privateKey}
                   onChange={(e) => setPrivateKey(e.target.value)}
@@ -167,7 +169,7 @@ export default function ConnectModal({ onClose, editConn, defaultParentId }: Pro
                 />
               </div>
               <div className="field">
-                <label>Passphrase (optional)</label>
+                <label>{t('connect.passphrase')}</label>
                 <input
                   type="password"
                   value={passphrase}
@@ -185,13 +187,13 @@ export default function ConnectModal({ onClose, editConn, defaultParentId }: Pro
                 onChange={(e) => setRemember(e.target.checked)}
                 style={{ width: 'auto' }}
               />
-              Save this connection locally
+              {t('connect.saveLocally')}
             </label>
           )}
 
           {(remember || isEditing) && (
             <div className="field">
-              <label>分组</label>
+              <label>{t('connect.group')}</label>
               <select
                 value={parentId ?? ''}
                 onChange={(e) => setParentId(e.target.value || null)}
@@ -208,12 +210,16 @@ export default function ConnectModal({ onClose, editConn, defaultParentId }: Pro
           {error && <div className="error-text">{error}</div>}
         </div>
         <div className="modal-footer">
-          <button onClick={onClose}>Cancel</button>
+          <button onClick={onClose}>{t('common.cancel')}</button>
           {isEditing && (
-            <button onClick={() => void handleSaveOnly()}>保存</button>
+            <button onClick={() => void handleSaveOnly()}>{t('common.saveOnly')}</button>
           )}
           <button className="primary" onClick={() => void handleConnect()} disabled={connecting}>
-            {connecting ? 'Connecting…' : isEditing ? '保存并连接' : 'Connect'}
+            {connecting
+              ? t('common.connecting')
+              : isEditing
+                ? t('connect.saveAndConnect')
+                : t('common.connect')}
           </button>
         </div>
       </div>

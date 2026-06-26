@@ -9,14 +9,16 @@ import { useTabsStore } from '../../store/tabsStore'
 import { sendPrompt } from '../../lib/aiService'
 import { MODEL_PROFILES, normalizeAISettings, resolveModel } from '../../../shared/aiSettings'
 import type { ModelProfile } from '../../../shared/types'
+import { modelProfileLabel, useT, type TranslationKey } from '../../lib/i18n'
+import { useLocaleStore } from '../../store/localeStore'
 import ChatMessage from './ChatMessage'
 
-const EXAMPLE_PROMPTS = [
-  '查看占用 8080 端口的进程',
-  'show disk usage by directory',
-  '统计日志里的错误数',
-  '@terminal 把 CPU 使用率画成实时折线图'
-] as const
+const EXAMPLE_KEYS = [
+  'copilot.example1',
+  'copilot.example2',
+  'copilot.example3',
+  'copilot.example4'
+] as const satisfies readonly TranslationKey[]
 
 export default function SidePanel(): JSX.Element {
   const { messages, busy, activeRequestId, panelWidth, setPanelWidth, setBusy, setPanelOpen, clear } =
@@ -37,6 +39,8 @@ export default function SidePanel(): JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; text: string } | null>(null)
+  const locale = useLocaleStore((s) => s.locale)
+  const t = useT()
 
   useEffect(() => {
     void window.api.config.getAISettings().then((s) => {
@@ -200,7 +204,7 @@ export default function SidePanel(): JSX.Element {
         className={`panel-resizer ${resizing ? 'active' : ''}`}
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize Copilot panel"
+        aria-label={t('copilot.resizeLabel')}
         aria-valuemin={PANEL_MIN_WIDTH}
         aria-valuemax={PANEL_MAX_WIDTH}
         aria-valuenow={clampPanelWidth(panelWidth)}
@@ -208,18 +212,18 @@ export default function SidePanel(): JSX.Element {
         onMouseDown={startResize}
         onKeyDown={onHandleKey}
         onDoubleClick={() => setPanelWidth(392)}
-        data-tip="拖动调整宽度（双击重置）"
+        data-tip={t('copilot.resizeTip')}
       />
       <div className="side-panel-header">
         <span className="panel-title">
           <span className="spark" />
-          AI Copilot
+          {t('copilot.title')}
         </span>
         <div style={{ display: 'flex', gap: 6 }}>
-          <button className="toolbar-btn" onClick={clear} title="Clear conversation">
-            Clear
+          <button className="toolbar-btn" onClick={clear} title={t('copilot.clearTitle')}>
+            {t('copilot.clear')}
           </button>
-          <button className="toolbar-btn" onClick={() => setPanelOpen(false)} title="Hide panel">
+          <button className="toolbar-btn" onClick={() => setPanelOpen(false)} title={t('copilot.hide')}>
             ✕
           </button>
         </div>
@@ -228,23 +232,21 @@ export default function SidePanel(): JSX.Element {
       <div className="chat-list" ref={listRef} onContextMenu={onChatContextMenu}>
         {messages.length === 0 ? (
           <div className="chat-empty">
-            用自然语言描述你的意图，例如：
+            {t('copilot.emptyLead')}
             <div style={{ marginTop: 10 }}>
-              {EXAMPLE_PROMPTS.map((prompt) => (
+              {EXAMPLE_KEYS.map((key) => (
                 <button
-                  key={prompt}
+                  key={key}
                   type="button"
                   className="hint-chip"
                   disabled={busy}
-                  onClick={() => sendPrompt(prompt)}
+                  onClick={() => sendPrompt(t(key))}
                 >
-                  {prompt}
+                  {t(key)}
                 </button>
               ))}
             </div>
-            <div style={{ marginTop: 16, color: 'var(--text-faint)' }}>
-              建议的命令会渲染成卡片，可一键在当前终端运行。输入 @terminal 可把当前终端的实时输出绘成动态图表。
-            </div>
+            <div style={{ marginTop: 16, color: 'var(--text-faint)' }}>{t('copilot.emptyHint')}</div>
           </div>
         ) : (
           messages.map((m) => <ChatMessage key={m.id} message={m} />)
@@ -256,7 +258,7 @@ export default function SidePanel(): JSX.Element {
           <div className="mention-menu" role="listbox">
             <button className="mention-item" onMouseDown={(e) => e.preventDefault()} onClick={insertTerminalMention}>
               <span className="mention-name">@terminal</span>
-              <span className="mention-desc">绑定当前终端的实时输出</span>
+              <span className="mention-desc">{t('copilot.mentionDesc')}</span>
             </button>
           </div>
         )}
@@ -266,7 +268,7 @@ export default function SidePanel(): JSX.Element {
           onChange={onInputChange}
           onKeyDown={onKeyDown}
           onContextMenu={onComposerContextMenu}
-          placeholder="Describe what you want to do…（输入 @terminal 绑定终端）"
+          placeholder={t('copilot.placeholder')}
         />
         <div className="composer-actions">
           <div className="composer-meta">
@@ -279,21 +281,21 @@ export default function SidePanel(): JSX.Element {
             >
               {MODEL_PROFILES.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.label}
+                  {modelProfileLabel(locale, p.id)}
                 </option>
               ))}
             </select>
             <span className="context-hint">
-              {activeTab ? `${activeTab.username}@${activeTab.host}` : 'No active terminal'}
+              {activeTab ? `${activeTab.username}@${activeTab.host}` : t('copilot.noTerminal')}
             </span>
           </div>
           {busy ? (
             <button className="danger" onClick={stop}>
-              Stop
+              {t('copilot.stop')}
             </button>
           ) : (
             <button className="primary" onClick={send} disabled={!input.trim()}>
-              Send
+              {t('copilot.send')}
             </button>
           )}
         </div>
@@ -301,7 +303,7 @@ export default function SidePanel(): JSX.Element {
 
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
-          <button onClick={copySelection}>复制</button>
+          <button onClick={copySelection}>{t('common.copy')}</button>
         </div>
       )}
     </div>

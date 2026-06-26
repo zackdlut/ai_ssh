@@ -5,6 +5,7 @@ import type {
   AIDoneEvent,
   AIErrorEvent,
   AISettings,
+  AppLocale,
   AppTheme,
   AITranslateRequest,
   AITranslateResult,
@@ -72,6 +73,9 @@ const api = {
     setAISettings: (s: AISettings): Promise<AISettings> => ipcRenderer.invoke('config:setAI', s),
     getTheme: (): Promise<AppTheme> => ipcRenderer.invoke('config:getTheme'),
     setTheme: (theme: AppTheme): Promise<AppTheme> => ipcRenderer.invoke('config:setTheme', theme),
+    getLocale: (): Promise<AppLocale> => ipcRenderer.invoke('config:getLocale'),
+    setLocale: (locale: AppLocale): Promise<AppLocale> =>
+      ipcRenderer.invoke('config:setLocale', locale),
     getConnections: (): Promise<ConnectionConfig[]> => ipcRenderer.invoke('config:getConnections'),
     saveConnection: (c: ConnectionConfig): Promise<ConnectionConfig[]> =>
       ipcRenderer.invoke('config:saveConnection', c),

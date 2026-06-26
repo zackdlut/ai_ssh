@@ -19,8 +19,10 @@ import '@fontsource/noto-sans-sc/chinese-simplified-400.css'
 import '@fontsource/noto-sans-sc/chinese-simplified-500.css'
 import './styles/global.css'
 import { applyTheme, readCachedTheme } from './lib/themes'
+import { readCachedLocale } from './lib/i18n/locale'
 
 applyTheme(readCachedTheme())
+document.documentElement.lang = readCachedLocale() === 'zh' ? 'zh-CN' : 'en'
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

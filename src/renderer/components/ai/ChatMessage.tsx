@@ -6,6 +6,7 @@ import HtmlPreview from './HtmlPreview'
 import ChartBlock from './ChartBlock'
 import { parseJsonLoose } from '../../lib/chartSpec'
 import type { ChatMessage as ChatMessageType } from '../../store/aiStore'
+import { useT } from '../../lib/i18n'
 
 interface Props {
   message: ChatMessageType
@@ -110,6 +111,7 @@ function renderSegment(
 export default function ChatMessage({ message }: Props): JSX.Element {
   const isUser = message.role === 'user'
   const [mode, setMode] = useState<'preview' | 'source'>('preview')
+  const t = useT()
 
   if (isUser) {
     return (
@@ -133,10 +135,10 @@ export default function ChatMessage({ message }: Props): JSX.Element {
               className={mode === 'preview' ? 'active' : ''}
               onClick={() => setMode('preview')}
             >
-              预览
+              {t('chat.preview')}
             </button>
             <button className={mode === 'source' ? 'active' : ''} onClick={() => setMode('source')}>
-              源码
+              {t('chat.source')}
             </button>
           </div>
         )}

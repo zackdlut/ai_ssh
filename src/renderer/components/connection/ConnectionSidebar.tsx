@@ -8,6 +8,7 @@ import {
 } from '../../store/connSidebarStore'
 import { useTabsStore } from '../../store/tabsStore'
 import { connectFromConfig } from '../../lib/connect'
+import { useT } from '../../lib/i18n'
 import type { ConnectionConfig } from '../../../shared/types'
 
 interface Props {
@@ -44,6 +45,7 @@ export default function ConnectionSidebar({
   const connections = useBookmarksStore((s) => s.connections)
   const tabs = useTabsStore((s) => s.tabs)
   const { panelWidth, setPanelWidth } = useConnSidebarStore()
+  const t = useT()
 
   const tree = getTree()
 
@@ -110,7 +112,7 @@ export default function ConnectionSidebar({
 
   const newFolder = async (parentId: string | null): Promise<void> => {
     setMenu(null)
-    await addFolder('新建文件夹', parentId)
+    await addFolder(t('sidebar.newFolderDefault'), parentId)
     // Put the freshly created folder into rename mode.
     const created = useBookmarksStore
       .getState()
@@ -292,21 +294,21 @@ export default function ConnectionSidebar({
       <div className="side-panel-header">
         <span className="panel-title">
           <span className="spark" />
-          连接
+          {t('sidebar.title')}
           {connections.length > 0 && (
-            <span className="conn-count" title={`${connections.length} 个已保存连接`}>
+            <span className="conn-count" title={t('sidebar.savedCount', { count: connections.length })}>
               {connections.length}
             </span>
           )}
         </span>
         <div style={{ display: 'flex', gap: 6 }}>
-          <button className="toolbar-btn" title="新建连接" onClick={() => onNewConnection(null)}>
+          <button className="toolbar-btn" title={t('sidebar.newConnection')} onClick={() => onNewConnection(null)}>
             +
           </button>
-          <button className="toolbar-btn" title="新建文件夹" onClick={() => void newFolder(null)}>
+          <button className="toolbar-btn" title={t('sidebar.newFolder')} onClick={() => void newFolder(null)}>
             ⊕
           </button>
-          <button className="toolbar-btn" title="隐藏侧栏" onClick={onClose}>
+          <button className="toolbar-btn" title={t('sidebar.hide')} onClick={onClose}>
             ‹
           </button>
         </div>
@@ -324,10 +326,8 @@ export default function ConnectionSidebar({
         }}
       >
         {tree.length === 0 ? (
-          <div className="conn-empty">
-            还没有保存的连接。
-            <br />
-            点 + 新建连接，或右键新建分组。
+          <div className="conn-empty" style={{ whiteSpace: 'pre-line' }}>
+            {t('sidebar.empty')}
           </div>
         ) : (
           tree.map((node) => renderNode(node, 0))
@@ -338,7 +338,7 @@ export default function ConnectionSidebar({
         className={`panel-resizer panel-resizer-right ${resizing ? 'active' : ''}`}
         role="separator"
         aria-orientation="vertical"
-        aria-label="调整连接侧栏宽度"
+        aria-label={t('sidebar.resizeLabel')}
         aria-valuemin={CONN_SIDEBAR_MIN_WIDTH}
         aria-valuemax={CONN_SIDEBAR_MAX_WIDTH}
         aria-valuenow={clampConnSidebarWidth(panelWidth)}
@@ -346,29 +346,29 @@ export default function ConnectionSidebar({
         onMouseDown={startResize}
         onKeyDown={onHandleKey}
         onDoubleClick={() => setPanelWidth(256)}
-        data-tip="拖动调整宽度（双击重置）"
+        data-tip={t('sidebar.resizeTip')}
       />
 
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
           {menu.node === null && (
             <>
-              <button onClick={() => onNewConnection(null)}>新建连接</button>
-              <button onClick={() => void newFolder(null)}>新建文件夹</button>
+              <button onClick={() => onNewConnection(null)}>{t('sidebar.newConnection')}</button>
+              <button onClick={() => void newFolder(null)}>{t('sidebar.newFolder')}</button>
             </>
           )}
           {menu.node?.kind === 'folder' && (
             <>
-              <button onClick={() => onNewConnection(menu.node!.id)}>在此新建连接</button>
-              <button onClick={() => void newFolder(menu.node!.id)}>新建子文件夹</button>
+              <button onClick={() => onNewConnection(menu.node!.id)}>{t('sidebar.newConnectionHere')}</button>
+              <button onClick={() => void newFolder(menu.node!.id)}>{t('sidebar.newSubfolder')}</button>
               <button
                 onClick={() =>
                   beginRename(menu.node!.id, (menu.node as { folder: { name: string } }).folder.name)
                 }
               >
-                重命名
+                {t('common.rename')}
               </button>
-              <button onClick={() => void deleteFolder(menu.node!.id)}>删除文件夹</button>
+              <button onClick={() => void deleteFolder(menu.node!.id)}>{t('sidebar.deleteFolder')}</button>
             </>
           )}
           {menu.node?.kind === 'connection' && (
@@ -380,16 +380,16 @@ export default function ConnectionSidebar({
                   )
                 }
               >
-                连接
+                {t('common.connect')}
               </button>
               <button
                 onClick={() =>
                   onEditConnection((menu.node as { connection: ConnectionConfig }).connection)
                 }
               >
-                编辑
+                {t('common.edit')}
               </button>
-              <button onClick={() => void deleteConnection(menu.node!.id)}>删除</button>
+              <button onClick={() => void deleteConnection(menu.node!.id)}>{t('common.delete')}</button>
             </>
           )}
         </div>

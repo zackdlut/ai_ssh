@@ -4,8 +4,9 @@ import { useAIStore } from '../store/aiStore'
 import { useSftpStore } from '../store/sftpStore'
 import { useBookmarksStore } from '../store/bookmarksStore'
 import { cloneTab, connectFromConfig, reconnectTab } from '../lib/connect'
+import { useT } from '../lib/i18n'
 
-export type SettingsMenuItem = 'ai' | 'themes'
+export type SettingsMenuItem = 'ai' | 'themes' | 'language'
 
 interface Props {
   sidebarOpen: boolean
@@ -39,6 +40,7 @@ export default function TabBar({
   // Subscribe to connections so the recent list refreshes as usage changes.
   const connections = useBookmarksStore((s) => s.connections)
   const getRecentConnections = useBookmarksStore((s) => s.getRecentConnections)
+  const t = useT()
   const [recentOpen, setRecentOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
@@ -83,9 +85,9 @@ export default function TabBar({
       <button
         className={`toolbar-btn ${sidebarOpen ? 'active' : ''}`}
         onClick={onToggleSidebar}
-        title="切换连接侧栏"
+        title={t('tabbar.toggleSidebar')}
       >
-        连接
+        {t('tabbar.connections')}
       </button>
       {tabs.map((tab) => (
         <div
@@ -100,25 +102,29 @@ export default function TabBar({
               void cloneTab(tab.id)
             }
           }}
-          title={`${tab.username}@${tab.host}${
-            tab.nlMode ? ' · 自然语言模式' : ''
-          }（双击：${
-            tab.status === 'closed' || tab.status === 'error' ? '重连' : '克隆会话'
-          }）`}
+          title={t('tabbar.tabTitle', {
+            user: tab.username,
+            host: tab.host,
+            nlMode: tab.nlMode ? t('tabbar.nlMode') : '',
+            action:
+              tab.status === 'closed' || tab.status === 'error'
+                ? t('tabbar.doubleClickReconnect')
+                : t('tabbar.doubleClickClone')
+          })}
         >
           <span className={`status-dot ${tab.nlMode ? 'nl' : tab.status}`} />
           <span className="tab-title">{tab.title}</span>
           <button
             className="close-btn"
             onClick={(e) => handleClose(e, tab.id, tab.sessionId)}
-            title="Close"
+            title={t('tabbar.closeTab')}
           >
             ×
           </button>
         </div>
       ))}
       <div className="tab-add-wrap">
-        <button className="tab-add" onClick={onNewConnection} title="New SSH connection">
+        <button className="tab-add" onClick={onNewConnection} title={t('tabbar.newConnection')}>
           <span className="tab-add-glyph">+</span>
         </button>
         <button
@@ -127,15 +133,15 @@ export default function TabBar({
             e.stopPropagation()
             setRecentOpen((v) => !v)
           }}
-          title="最近常用连接"
+          title={t('tabbar.recentConnections')}
         >
           <span className="tab-add-caret-glyph">▾</span>
         </button>
         {recentOpen && (
           <div className="recent-menu" onClick={(e) => e.stopPropagation()}>
-            <div className="recent-menu-title">最近常用</div>
+            <div className="recent-menu-title">{t('tabbar.recentTitle')}</div>
             {connections.length === 0 || recent.length === 0 ? (
-              <div className="recent-menu-empty">暂无常用连接</div>
+              <div className="recent-menu-empty">{t('tabbar.recentEmpty')}</div>
             ) : (
               recent.map((c) => (
                 <button
@@ -165,9 +171,9 @@ export default function TabBar({
             e.stopPropagation()
             setSettingsOpen((v) => !v)
           }}
-          title="Settings"
+          title={t('tabbar.settings')}
         >
-          Settings
+          {t('tabbar.settings')}
           <span className={`toolbar-menu-caret ${settingsOpen ? 'open' : ''}`}>▾</span>
         </button>
         {settingsOpen && (
@@ -179,7 +185,16 @@ export default function TabBar({
                 onSettingsSelect('themes')
               }}
             >
-              Themes
+              {t('tabbar.themes')}
+            </button>
+            <button
+              className="toolbar-dropdown-item"
+              onClick={() => {
+                setSettingsOpen(false)
+                onSettingsSelect('language')
+              }}
+            >
+              {t('tabbar.language')}
             </button>
             <button
               className="toolbar-dropdown-item"
@@ -188,7 +203,7 @@ export default function TabBar({
                 onSettingsSelect('ai')
               }}
             >
-              AI Settings
+              {t('tabbar.aiSettings')}
             </button>
           </div>
         )}
@@ -196,16 +211,16 @@ export default function TabBar({
       <button
         className={`toolbar-btn ${panelOpen ? 'active' : ''}`}
         onClick={handleToggleAI}
-        title="Toggle AI panel"
+        title={t('tabbar.toggleAi')}
       >
-        AI Copilot
+        {t('tabbar.aiCopilot')}
       </button>
       <button
         className={`toolbar-btn ${sftpOpen ? 'active' : ''}`}
         onClick={handleToggleSftp}
-        title="Toggle SFTP panel"
+        title={t('tabbar.toggleSftp')}
       >
-        SFTP
+        {t('tabbar.sftp')}
       </button>
     </div>
   )

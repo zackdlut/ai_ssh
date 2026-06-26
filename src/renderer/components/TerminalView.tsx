@@ -10,6 +10,9 @@ import { extractCommands, isDangerous } from '../lib/commands'
 import { stripAnsi } from '../lib/streamParse'
 import { XTERM_THEMES } from '../lib/themes'
 import { useThemeStore } from '../store/themeStore'
+import { useLocaleStore } from '../store/localeStore'
+import { t, useT } from '../lib/i18n'
+import type { AppLocale } from '../../shared/types'
 import type { CommandRun } from '../../shared/types'
 
 interface Props {
@@ -57,7 +60,9 @@ const RED = '\x1b[31m'
 const CYAN = '\x1b[36m'
 
 // In-terminal natural-language prompt shown instead of the remote shell prompt.
-const NL_PROMPT = `${ORANGE}(AI Mode)$${RESET} `
+function nlPrompt(locale: AppLocale): string {
+  return `${ORANGE}(${t(locale, 'terminal.nl.prompt')})$${RESET} `
+}
 
 // Max captured output (chars) fed to the summarizer.
 const MAX_CAPTURE = 2000
@@ -118,7 +123,8 @@ function formatRunsFallback(runs: CommandRun[]): string | null {
 /** Stream summarize tokens into the terminal as they arrive from the model. */
 function streamSummarize(
   term: Terminal,
-  req: { request: string; runs: CommandRun[]; context?: { host: string; username: string } }
+  req: { request: string; runs: CommandRun[]; context?: { host: string; username: string } },
+  locale: AppLocale
 ): Promise<void> {
   const requestId = crypto.randomUUID()
   let wrotePrefix = false
@@ -133,7 +139,7 @@ function streamSummarize(
 
     const timer = setTimeout(() => {
       cleanup()
-      term.write(`${YELLOW}整理回答超时${RESET}\r\n`)
+      term.write(`${YELLOW}${t(locale, 'terminal.nl.summarizeTimeout')}${RESET}\r\n`)
       const fallback = formatRunsFallback(req.runs)
       if (fallback) writeAnswer(term, fallback)
       resolve()
@@ -144,7 +150,7 @@ function streamSummarize(
       const answer = text?.trim() || formatRunsFallback(req.runs)
       if (!wrotePrefix) {
         if (answer) writeAnswer(term, answer)
-        else term.write(`${YELLOW}未能生成回答，请查看上方命令输出${RESET}\r\n`)
+        else term.write(`${YELLOW}${t(locale, 'terminal.nl.noSummary')}${RESET}\r\n`)
       } else {
         term.write('\r\n')
       }
@@ -190,6 +196,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
   const nlRef = useRef<NlState>({ mode: 'normal', buffer: '', cursor: 0, busy: false })
   const [menu, setMenu] = useState<MenuState | null>(null)
   const appTheme = useThemeStore((s) => s.theme)
+  const tr = useT()
 
   useEffect(() => {
     const term = new Terminal({
@@ -210,10 +217,11 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
     fit.fit()
     termRef.current = term
     fitRef.current = fit
+    const loc = (): AppLocale => useLocaleStore.getState().locale
 
     // --- In-terminal natural-language mode ---
     const writeNlPrompt = (): void => {
-      term.write(`\r\n${NL_PROMPT}`)
+      term.write(`\r\n${nlPrompt(loc())}`)
     }
 
     const finishNl = (): void => {
@@ -230,7 +238,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
         nl.buffer = ''
         nl.cursor = 0
         useTabsStore.getState().setNlMode(tab.id, true)
-        term.write(`\r\n${ORANGE}自然语言模式已开启（输入 exit 或 F12 退出）${RESET}\r\n`)
+        term.write(`\r\n${ORANGE}${t(loc(), 'terminal.nl.entered')}${RESET}\r\n`)
         writeNlPrompt()
       } else {
         nl.mode = 'normal'
@@ -238,7 +246,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
         nl.cursor = 0
         nl.confirmResolver = undefined
         useTabsStore.getState().setNlMode(tab.id, false)
-        term.write(`\r\n${DIM}已退出自然语言模式${RESET}\r\n`)
+        term.write(`\r\n${DIM}${t(loc(), 'terminal.nl.exited')}${RESET}\r\n`)
         // Redraw the real shell prompt for normal mode.
         window.api.ssh.write(tab.sessionId, '\n')
       }
@@ -292,7 +300,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
     const runNL = async (text: string): Promise<void> => {
       const nl = nlRef.current
       nl.busy = true
-      term.write(`\r\n${DIM}正在解析…${RESET}\r\n`)
+      term.write(`\r\n${DIM}${t(loc(), 'terminal.nl.parsing')}${RESET}\r\n`)
 
       const context = {
         recentOutput: serializeBuffer(term, 40),
@@ -304,13 +312,19 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       try {
         result = await window.api.ai.translate({ prompt: text, context })
       } catch (e) {
-        term.write(`${RED}解析失败: ${e instanceof Error ? e.message : String(e)}${RESET}\r\n`)
+        term.write(
+          `${RED}${t(loc(), 'terminal.nl.parseFailed', {
+            error: e instanceof Error ? e.message : String(e)
+          })}${RESET}\r\n`
+        )
         finishNl()
         return
       }
 
       if (result.error) {
-        term.write(`${RED}解析失败: ${result.error}${RESET}\r\n`)
+        term.write(
+          `${RED}${t(loc(), 'terminal.nl.parseFailed', { error: result.error })}${RESET}\r\n`
+        )
         finishNl()
         return
       }
@@ -323,7 +337,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
         if (reply) {
           term.write(`${CYAN}↳${RESET} ${reply.replace(/\n/g, '\r\n  ')}\r\n`)
         } else {
-          term.write(`${YELLOW}未解析出可执行命令，请换种说法${RESET}\r\n`)
+          term.write(`${YELLOW}${t(loc(), 'terminal.nl.noCommand')}${RESET}\r\n`)
         }
         finishNl()
         return
@@ -333,10 +347,12 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       for (const cmd of commands) {
         if (nl.mode !== 'nl') break // user exited mid-way
         if (isDangerous(cmd)) {
-          term.write(`${YELLOW}⚠ 危险命令:${RESET} ${cmd}\r\n${YELLOW}执行? [y/N] ${RESET}`)
+          term.write(
+            `${YELLOW}${t(loc(), 'terminal.nl.dangerous', { cmd })}${RESET}\r\n${YELLOW}${t(loc(), 'terminal.nl.confirmRun')}${RESET}`
+          )
           const ok = await waitConfirm()
           if (!ok) {
-            term.write(`\r\n${DIM}已跳过${RESET}\r\n`)
+            term.write(`\r\n${DIM}${t(loc(), 'terminal.nl.skipped')}${RESET}\r\n`)
             continue
           }
           term.write('\r\n')
@@ -352,13 +368,17 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
         if (direct) {
           writeAnswer(term, direct)
         } else {
-          term.write(`${DIM}正在整理回答…${RESET}\r\n`)
+          term.write(`${DIM}${t(loc(), 'terminal.nl.summarizing')}${RESET}\r\n`)
           try {
-            await streamSummarize(term, {
-              request: text,
-              runs,
-              context: { host: tab.host, username: tab.username }
-            })
+            await streamSummarize(
+              term,
+              {
+                request: text,
+                runs,
+                context: { host: tab.host, username: tab.username }
+              },
+              loc()
+            )
           } catch (e) {
             term.write(`${RED}${e instanceof Error ? e.message : String(e)}${RESET}\r\n`)
           }
@@ -627,8 +647,8 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       />
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
-          <button onClick={ask}>Ask Copilot</button>
-          <button onClick={copy}>Copy</button>
+          <button onClick={ask}>{tr('terminal.askCopilot')}</button>
+          <button onClick={copy}>{tr('common.copy')}</button>
         </div>
       )}
     </>

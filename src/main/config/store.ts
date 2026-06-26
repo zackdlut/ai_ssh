@@ -1,10 +1,17 @@
 import Store from 'electron-store'
 import { DEFAULT_MODELS, cloneModels, normalizeAISettings } from '../../shared/aiSettings'
-import type { AISettings, AppTheme, BookmarkFolder, ConnectionConfig } from '../../shared/types'
+import type {
+  AISettings,
+  AppLocale,
+  AppTheme,
+  BookmarkFolder,
+  ConnectionConfig
+} from '../../shared/types'
 
 interface StoreSchema {
   ai: AISettings
   theme: AppTheme
+  locale: AppLocale
   connections: ConnectionConfig[]
   folders: BookmarkFolder[]
 }
@@ -28,6 +35,7 @@ function store(): Store<StoreSchema> {
           models: { ...DEFAULT_MODELS }
         },
         theme: 'aurora',
+        locale: 'zh',
         connections: [],
         folders: []
       }
@@ -57,6 +65,16 @@ export function getTheme(): AppTheme {
 export function setTheme(theme: AppTheme): AppTheme {
   store().set('theme', theme === 'dawn' ? 'dawn' : 'aurora')
   return getTheme()
+}
+
+export function getLocale(): AppLocale {
+  const locale = store().get('locale')
+  return locale === 'en' ? 'en' : 'zh'
+}
+
+export function setLocale(locale: AppLocale): AppLocale {
+  store().set('locale', locale === 'en' ? 'en' : 'zh')
+  return getLocale()
 }
 
 export function getConnections(): ConnectionConfig[] {

@@ -1,18 +1,22 @@
 import { useEffect, useState } from 'react'
 import { DEFAULT_MODELS, MODEL_PROFILES, normalizeAISettings } from '../../../shared/aiSettings'
 import type { AISettings, ModelProfile } from '../../../shared/types'
+import { modelProfileLabel, useT } from '../../lib/i18n'
+import { useLocaleStore } from '../../store/localeStore'
 
 interface Props {
   onClose: () => void
 }
 
 export default function SettingsModal({ onClose }: Props): JSX.Element {
+  const t = useT()
   const [baseURL, setBaseURL] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [editingProfile, setEditingProfile] = useState<ModelProfile>('default')
   const [nlModelProfile, setNlModelProfile] = useState<ModelProfile>('fast')
   const [models, setModels] = useState<Record<ModelProfile, string>>({ ...DEFAULT_MODELS })
   const [loaded, setLoaded] = useState(false)
+  const locale = useLocaleStore((s) => s.locale)
 
   useEffect(() => {
     void window.api.config.getAISettings().then((s: AISettings) => {
@@ -25,8 +29,7 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
     })
   }, [])
 
-  const editingProfileLabel =
-    MODEL_PROFILES.find((p) => p.id === editingProfile)?.label ?? editingProfile
+  const editingProfileLabel = modelProfileLabel(locale, editingProfile)
 
   const updateModel = (profile: ModelProfile, value: string): void => {
     setModels((prev) => ({ ...prev, [profile]: value }))
@@ -47,10 +50,10 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">AI Settings</div>
+        <div className="modal-header">{t('settings.ai.title')}</div>
         <div className="modal-body">
           <div className="field">
-            <label>Edit Profile</label>
+            <label>{t('settings.ai.editProfile')}</label>
             <div className="seg seg-profile">
               {MODEL_PROFILES.map((profile) => (
                 <button
@@ -59,13 +62,13 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
                   className={editingProfile === profile.id ? 'active' : ''}
                   onClick={() => setEditingProfile(profile.id)}
                 >
-                  {profile.label}
+                  {modelProfileLabel(locale, profile.id)}
                 </button>
               ))}
             </div>
           </div>
           <div className="field">
-            <label>Model ({editingProfileLabel})</label>
+            <label>{t('settings.ai.model', { profile: editingProfileLabel })}</label>
             <input
               key={editingProfile}
               value={models[editingProfile]}
@@ -74,7 +77,7 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
             />
           </div>
           <div className="field">
-            <label>Base URL (OpenAI-compatible)</label>
+            <label>{t('settings.ai.baseUrl')}</label>
             <input
               value={baseURL}
               onChange={(e) => setBaseURL(e.target.value)}
@@ -82,7 +85,7 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
             />
           </div>
           <div className="field">
-            <label>API Key</label>
+            <label>{t('settings.ai.apiKey')}</label>
             <input
               type="password"
               value={apiKey}
@@ -91,7 +94,7 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
             />
           </div>
           <div className="field">
-            <label>Terminal AI Mode Model</label>
+            <label>{t('settings.ai.nlModel')}</label>
             <div className="seg seg-profile">
               {MODEL_PROFILES.map((profile) => (
                 <button
@@ -100,22 +103,17 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
                   className={nlModelProfile === profile.id ? 'active' : ''}
                   onClick={() => setNlModelProfile(profile.id)}
                 >
-                  {profile.label}
+                  {modelProfileLabel(locale, profile.id)}
                 </button>
               ))}
             </div>
           </div>
-          <div className="context-hint">
-            Works with OpenAI, DeepSeek, local vLLM/Ollama and other OpenAI-compatible endpoints. The
-            key is stored locally and only used by the main process. Each profile can use a different
-            model. Switch the Copilot model tier from the sidebar dropdown; configure the terminal
-            AI mode model tier here (default: Fast).
-          </div>
+          <div className="context-hint">{t('settings.ai.hint')}</div>
         </div>
         <div className="modal-footer">
-          <button onClick={onClose}>Cancel</button>
+          <button onClick={onClose}>{t('common.cancel')}</button>
           <button className="primary" onClick={handleSave} disabled={!loaded}>
-            Save
+            {t('common.save')}
           </button>
         </div>
       </div>
