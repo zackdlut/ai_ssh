@@ -238,7 +238,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
         nl.buffer = ''
         nl.cursor = 0
         useTabsStore.getState().setNlMode(tab.id, true)
-        term.write(`\r\n${ORANGE}${t(loc(), 'terminal.nl.entered')}${RESET}\r\n`)
+        term.write(`\r\n${ORANGE}${t(loc(), 'terminal.nl.entered')}${RESET}`)
         writeNlPrompt()
       } else {
         nl.mode = 'normal'
@@ -246,7 +246,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
         nl.cursor = 0
         nl.confirmResolver = undefined
         useTabsStore.getState().setNlMode(tab.id, false)
-        term.write(`\r\n${DIM}${t(loc(), 'terminal.nl.exited')}${RESET}\r\n`)
+        term.write(`\r\n${DIM}${t(loc(), 'terminal.nl.exited')}${RESET}`)
         // Redraw the real shell prompt for normal mode.
         window.api.ssh.write(tab.sessionId, '\n')
       }
