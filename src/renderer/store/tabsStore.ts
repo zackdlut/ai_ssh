@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { SshStatus } from '../../shared/types'
+import type { ConnectOptions, SshStatus } from '../../shared/types'
 
 export interface TerminalTab {
   id: string
@@ -7,8 +7,11 @@ export interface TerminalTab {
   sessionId: string
   status: SshStatus
   host: string
+  port: number
   username: string
   message?: string
+  /** Credentials used to open (or reopen) this tab's SSH session. */
+  connectOpts?: ConnectOptions
   /** Whether the in-terminal natural-language mode is active for this tab. */
   nlMode?: boolean
 }
@@ -20,6 +23,8 @@ interface TabsState {
   removeTab: (id: string) => void
   setActive: (id: string) => void
   setStatusBySession: (sessionId: string, status: SshStatus, message?: string) => void
+  setStatusById: (id: string, status: SshStatus, message?: string) => void
+  updateSession: (id: string, sessionId: string, status: SshStatus) => void
   setNlMode: (id: string, on: boolean) => void
   toggleNlMode: (id: string) => void
   activeTab: () => TerminalTab | undefined
@@ -44,6 +49,16 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     set((s) => ({
       tabs: s.tabs.map((t) =>
         t.sessionId === sessionId ? { ...t, status, message } : t
+      )
+    })),
+  setStatusById: (id, status, message) =>
+    set((s) => ({
+      tabs: s.tabs.map((t) => (t.id === id ? { ...t, status, message } : t))
+    })),
+  updateSession: (id, sessionId, status) =>
+    set((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.id === id ? { ...t, sessionId, status, message: undefined } : t
       )
     })),
   setNlMode: (id, on) =>

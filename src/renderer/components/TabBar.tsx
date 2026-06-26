@@ -3,8 +3,7 @@ import { useTabsStore } from '../store/tabsStore'
 import { useAIStore } from '../store/aiStore'
 import { useSftpStore } from '../store/sftpStore'
 import { useBookmarksStore } from '../store/bookmarksStore'
-import { connectFromConfig } from '../lib/connect'
-import { toggleNlForTab } from '../lib/terminalRegistry'
+import { cloneTab, connectFromConfig, reconnectTab } from '../lib/connect'
 
 export type SettingsMenuItem = 'ai' | 'themes'
 
@@ -95,9 +94,17 @@ export default function TabBar({
           onClick={() => setActive(tab.id)}
           onDoubleClick={() => {
             setActive(tab.id)
-            toggleNlForTab(tab.id)
+            if (tab.status === 'closed' || tab.status === 'error') {
+              void reconnectTab(tab.id)
+            } else if (tab.status === 'connected') {
+              void cloneTab(tab.id)
+            }
           }}
-          title={`${tab.username}@${tab.host}${tab.nlMode ? ' · 自然语言模式' : ''}（双击切换自然语言模式）`}
+          title={`${tab.username}@${tab.host}${
+            tab.nlMode ? ' · 自然语言模式' : ''
+          }（双击：${
+            tab.status === 'closed' || tab.status === 'error' ? '重连' : '克隆会话'
+          }）`}
         >
           <span className={`status-dot ${tab.nlMode ? 'nl' : tab.status}`} />
           <span className="tab-title">{tab.title}</span>
