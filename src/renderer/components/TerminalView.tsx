@@ -419,6 +419,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
 
       const deleteBeforeCursor = (): void => {
         if (nl.cursor <= 0) return
+        term.write('\b')
         nl.buffer = nl.buffer.slice(0, nl.cursor - 1) + nl.buffer.slice(nl.cursor)
         nl.cursor--
         redrawTail(nl.cursor)

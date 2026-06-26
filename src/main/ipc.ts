@@ -5,6 +5,8 @@ import { AIProvider } from './ai/provider'
 import * as config from './config/store'
 import type {
   AIChatRequest,
+  AIChartSpecRequest,
+  AIChartSpecResult,
   AIChunkEvent,
   AIDoneEvent,
   AIErrorEvent,
@@ -51,6 +53,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
     })
   })
   ipcMain.on('ai:cancel', (_e, requestId: string) => ai.cancel(requestId))
+
+  // Phase-2 chart spec generation (structured JSON output, non-streaming).
+  ipcMain.handle(
+    'ai:chartSpec',
+    async (_e, req: AIChartSpecRequest): Promise<AIChartSpecResult> => {
+      try {
+        return { spec: await ai.chartSpec(req) }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
 
   // One-shot NL -> command translation for the in-terminal NL mode.
   ipcMain.handle(

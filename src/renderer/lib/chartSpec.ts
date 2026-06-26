@@ -23,6 +23,25 @@ export interface ChartSeriesSpec {
    * index is resolved from the header line, or a 0-based field index.
    */
   column?: string | number
+  /**
+   * Breakdown mode: turn EACH matching line into its own category (a pie slice
+   * or a bar). This regex capture group yields the category label per line
+   * (e.g. the directory path from `du`). Combine with `group`/`column` for the
+   * value. Mutually informative with `labelColumn`.
+   */
+  labelGroup?: number
+  /**
+   * Breakdown mode via columns: the header label or 0-based field index that
+   * yields the category label per line (e.g. the mount point from `df`).
+   */
+  labelColumn?: string | number
+  /**
+   * Optional arithmetic transform applied to the extracted numeric value `x`,
+   * e.g. "100 - x" to turn vmstat's CPU idle ("id" column) into CPU usage.
+   * Only digits, x, the operators + - * / %, parentheses and spaces are
+   * allowed; anything else is ignored.
+   */
+  transform?: string
 }
 
 export interface ChartSpec {
@@ -113,14 +132,46 @@ export function parseChartSpec(jsonText: string): ChartSpec {
       }
     }
 
-    const group = Number.isFinite(Number(so.group)) ? Math.max(0, Math.round(Number(so.group))) : 1
+    // Structured-output specs set unused fields to null; treat null/undefined
+    // as "unset" so e.g. a null labelGroup is NOT mistaken for breakdown mode.
+    const group =
+      so.group != null && Number.isFinite(Number(so.group))
+        ? Math.max(0, Math.round(Number(so.group)))
+        : 1
     const column = hasColumn
       ? typeof so.column === 'number'
         ? Math.max(0, Math.round(so.column))
         : (so.column as string).trim()
       : undefined
 
-    return { name, regex: hasRegex ? (so.regex as string) : undefined, group, column }
+    const labelGroup =
+      so.labelGroup != null && Number.isFinite(Number(so.labelGroup)) && Number(so.labelGroup) >= 0
+        ? Math.round(Number(so.labelGroup))
+        : undefined
+    const hasLabelColumn =
+      (typeof so.labelColumn === 'string' && so.labelColumn.trim().length > 0) ||
+      (typeof so.labelColumn === 'number' && Number.isFinite(so.labelColumn) && so.labelColumn >= 0)
+    const labelColumn = hasLabelColumn
+      ? typeof so.labelColumn === 'number'
+        ? Math.max(0, Math.round(so.labelColumn))
+        : (so.labelColumn as string).trim()
+      : undefined
+
+    // Keep a transform only if it is a safe arithmetic expression of x.
+    const transform =
+      typeof so.transform === 'string' && /^[-+*/(). 0-9xX%]+$/.test(so.transform.trim())
+        ? so.transform.trim()
+        : undefined
+
+    return {
+      name,
+      regex: hasRegex ? (so.regex as string) : undefined,
+      group,
+      column,
+      labelGroup,
+      labelColumn,
+      transform
+    }
   })
 
   return {

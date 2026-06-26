@@ -92,6 +92,24 @@ export interface AIChatRequest {
   context?: TerminalContext
 }
 
+/**
+ * Two-phase chart generation: the streaming copilot only emits a short
+ * natural-language description of the desired chart; this one-shot request
+ * turns that description into a STRICT ChartSpec JSON via the provider's
+ * structured-output mode (json_schema, falling back to json_object).
+ */
+export interface AIChartSpecRequest {
+  /** Free-text chart description emitted by the copilot (what/how to plot). */
+  description: string
+  context?: TerminalContext
+}
+
+export interface AIChartSpecResult {
+  /** Raw JSON text of the generated chart spec (validated by the renderer). */
+  spec?: string
+  error?: string
+}
+
 /** One-shot natural-language -> shell command translation (non-streaming). */
 export interface AITranslateRequest {
   prompt: string

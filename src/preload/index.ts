@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   AIChatRequest,
+  AIChartSpecRequest,
+  AIChartSpecResult,
   AIChunkEvent,
   AIDoneEvent,
   AIErrorEvent,
@@ -60,6 +62,8 @@ const api = {
   },
   ai: {
     chat: (req: AIChatRequest): void => ipcRenderer.send('ai:chat', req),
+    chartSpec: (req: AIChartSpecRequest): Promise<AIChartSpecResult> =>
+      ipcRenderer.invoke('ai:chartSpec', req),
     translate: (req: AITranslateRequest): Promise<AITranslateResult> =>
       ipcRenderer.invoke('ai:translate', req),
     summarize: (req: AISummarizeRequest): void => ipcRenderer.send('ai:summarize', req),

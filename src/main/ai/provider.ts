@@ -3,20 +3,116 @@ import { resolveActiveModel, resolveModel } from '../../shared/aiSettings'
 import type {
   AISettings,
   AIChatRequest,
+  AIChartSpecRequest,
   AITranslateRequest,
   AISummarizeRequest
 } from '../../shared/types'
 import {
   SYSTEM_PROMPT,
+  CHART_SPEC_SYSTEM_PROMPT,
   TRANSLATE_SYSTEM_PROMPT,
   SUMMARIZE_SYSTEM_PROMPT,
   buildContextMessage
 } from './prompt'
 
+/**
+ * JSON Schema for the ChartSpec, used with the provider's strict structured
+ * output. Optional fields are nullable (strict mode requires every property to
+ * be listed in `required`); the renderer treats null as "unset".
+ */
+const CHART_SPEC_JSON_SCHEMA = {
+  name: 'chart_spec',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['title', 'type', 'mode', 'x', 'maxPoints', 'series'],
+    properties: {
+      title: { type: ['string', 'null'] },
+      type: { type: 'string', enum: ['line', 'bar', 'pie', 'scatter'] },
+      mode: { type: 'string', enum: ['live', 'static'] },
+      x: { type: 'string' },
+      maxPoints: { type: 'integer' },
+      series: {
+        type: 'array',
+        // Each series MUST carry an extractor: anyOf forces either a non-null
+        // "column" (column branch) or a non-null "regex" (regex branch), so the
+        // model cannot leave both null and produce an unrenderable series.
+        items: {
+          anyOf: [
+            {
+              type: 'object',
+              additionalProperties: false,
+              required: ['name', 'column', 'regex', 'group', 'labelColumn', 'labelGroup', 'transform'],
+              properties: {
+                name: { type: 'string' },
+                column: { type: ['string', 'integer'] },
+                regex: { type: 'null' },
+                group: { type: ['integer', 'null'] },
+                labelColumn: { type: ['string', 'integer', 'null'] },
+                labelGroup: { type: ['integer', 'null'] },
+                transform: { type: ['string', 'null'] }
+              }
+            },
+            {
+              type: 'object',
+              additionalProperties: false,
+              required: ['name', 'column', 'regex', 'group', 'labelColumn', 'labelGroup', 'transform'],
+              properties: {
+                name: { type: 'string' },
+                column: { type: 'null' },
+                regex: { type: 'string' },
+                group: { type: ['integer', 'null'] },
+                labelColumn: { type: ['string', 'integer', 'null'] },
+                labelGroup: { type: ['integer', 'null'] },
+                transform: { type: ['string', 'null'] }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+} as const
+
 export interface StreamCallbacks {
   onChunk: (delta: string) => void
   onDone: (content: string) => void
   onError: (error: string) => void
+}
+
+/** True when the text looks like it is meant to be a JSON object/array. */
+function looksLikeJson(text: string): boolean {
+  const t = text.trim()
+  return t.startsWith('{') || t.startsWith('[')
+}
+
+/**
+ * Lightweight semantic check (mirrors the renderer's parseChartSpec rules):
+ * valid JSON, a non-empty series array, and every series carrying an extractor
+ * (a non-null "column" or a non-empty "regex"). Used to decide whether the
+ * generated spec needs a corrective retry — NOT to repair the JSON.
+ */
+function isCompleteChartSpec(text: string): boolean {
+  let obj: unknown
+  try {
+    obj = JSON.parse(text)
+  } catch {
+    return false
+  }
+  if (!obj || typeof obj !== 'object') return false
+  const series = (obj as { series?: unknown }).series
+  if (!Array.isArray(series) || series.length === 0) return false
+  return series.every((s) => {
+    if (!s || typeof s !== 'object') return false
+    const col = (s as { column?: unknown }).column
+    const rgx = (s as { regex?: unknown }).regex
+    const hasColumn =
+      (typeof col === 'string' && col.trim().length > 0) ||
+      (typeof col === 'number' && Number.isFinite(col) && col >= 0)
+    const hasRegex = typeof rgx === 'string' && rgx.trim().length > 0
+    return hasColumn || hasRegex
+  })
 }
 
 function ollamaDirectAnswerBody(
@@ -132,6 +228,119 @@ export class AIProvider {
   cancel(requestId: string): void {
     this.controllers.get(requestId)?.abort()
     this.controllers.delete(requestId)
+  }
+
+  /**
+   * Phase-2 of chart rendering: turn the copilot's free-text chart description
+   * into a STRICT ChartSpec JSON string. Uses structured output to guarantee
+   * valid JSON: json_schema (strongest — also enforces the schema) first, then
+   * json_object (broad compatibility), then a plain request as a last resort.
+   * Returns the raw JSON text for the renderer to validate.
+   */
+  async chartSpec(req: AIChartSpecRequest): Promise<string> {
+    const settings = this.getSettings()
+    if (!settings.apiKey) {
+      throw new Error('AI is not configured. Set the API key in Settings.')
+    }
+
+    const client = new OpenAI({
+      apiKey: settings.apiKey,
+      baseURL: normalizeBaseURL(settings.baseURL)
+    })
+
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      { role: 'system', content: CHART_SPEC_SYSTEM_PROMPT }
+    ]
+    const contextMessage = buildContextMessage(req.context)
+    if (contextMessage) {
+      messages.push({ role: 'system', content: contextMessage })
+    }
+    messages.push({
+      role: 'user',
+      content: `Produce the ChartSpec JSON for this chart description:\n${req.description}`
+    })
+
+    const model = resolveActiveModel(settings)
+    // `reasoning_effort: 'none'` suppresses the chain-of-thought preamble that
+    // reasoning models (Qwen3, etc. via Ollama) otherwise prepend to `content`
+    // — without it the response is "Thinking …" prose, not the JSON object.
+    const base = {
+      model,
+      messages,
+      stream: false as const,
+      ...({ reasoning_effort: 'none' } as Record<string, unknown>)
+    } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming
+
+    // Try the strongest constraint first, downgrading on any provider error
+    // (e.g. the endpoint rejecting an unsupported response_format).
+    const attempts: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming[] = [
+      {
+        ...base,
+        response_format: {
+          type: 'json_schema',
+          json_schema: CHART_SPEC_JSON_SCHEMA
+        }
+      } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
+      { ...base, response_format: { type: 'json_object' } },
+      base
+    ]
+
+    const run = async (
+      body: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming
+    ): Promise<string> => {
+      const completion = await client.chat.completions.create(body)
+      return extractMessageText(completion.choices[0]?.message).trim()
+    }
+
+    let lastError: unknown
+    for (const body of attempts) {
+      try {
+        const text = await run(body)
+        if (!text) continue
+        // Complete spec → done. JSON-valid but missing an extractor → ask the
+        // model to fix it once (the json_object fallback does not enforce the
+        // schema, and weak models routinely drop "column"). This keeps the spec
+        // model-generated rather than patched client-side.
+        if (isCompleteChartSpec(text)) return text
+        if (looksLikeJson(text)) {
+          const fixed = await this.correctChartSpec(client, base, messages, text).catch(() => null)
+          return fixed ?? text
+        }
+        return text
+      } catch (e) {
+        lastError = e
+      }
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error('Failed to generate chart spec')
+  }
+
+  /**
+   * Single corrective pass: feed the invalid spec back to the model with the
+   * concrete validation error and ask for a corrected ChartSpec JSON.
+   */
+  private async correctChartSpec(
+    client: OpenAI,
+    base: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
+    messages: OpenAI.Chat.ChatCompletionMessageParam[],
+    bad: string
+  ): Promise<string> {
+    const fixMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      ...messages,
+      { role: 'assistant', content: bad },
+      {
+        role: 'user',
+        content:
+          'That ChartSpec is invalid: at least one series has neither "column" nor "regex", so it cannot extract any data. Every series MUST include a non-null "column" (a header label like "id", or a 0-based field index) OR a non-null "regex". For vmstat CPU idle use {"name":"idle","column":"id"}. Return ONLY the corrected ChartSpec JSON object.'
+      }
+    ]
+    const completion = await client.chat.completions.create({
+      ...base,
+      messages: fixMessages,
+      response_format: { type: 'json_object' }
+    })
+    return extractMessageText(completion.choices[0]?.message).trim()
   }
 
   /**

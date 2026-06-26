@@ -15,6 +15,10 @@ interface Props {
 interface Segment {
   type: 'text' | 'command' | 'mermaid' | 'html' | 'chart'
   content: string
+  /** For chart segments: the paired collection command (adjacent bash block). */
+  command?: string
+  /** For command segments: true when consumed by an adjacent chart (not rendered as a card). */
+  consumed?: boolean
 }
 
 // These fenced blocks get special treatment. `json` is included so that a chart
@@ -78,18 +82,49 @@ function splitSegments(content: string): Segment[] {
   if (lastIndex < content.length) {
     segments.push({ type: 'text', content: content.slice(lastIndex) })
   }
+  pairChartCommands(segments)
   return segments
+}
+
+/**
+ * Pair each chart segment with its adjacent command segment (per prompt, the
+ * collection bash block follows the chart block). The paired command is attached
+ * to the chart so ChartBlock can auto-run it, and the command segment is marked
+ * consumed so it is not also rendered as a standalone command card. Prefers the
+ * nearest following command, falling back to the nearest preceding one.
+ */
+function pairChartCommands(segments: Segment[]): void {
+  const findCommand = (from: number, step: 1 | -1): number => {
+    for (let i = from; i >= 0 && i < segments.length; i += step) {
+      const seg = segments[i]
+      if (seg.type === 'command' && !seg.consumed) return i
+      if (seg.type === 'chart') break // don't cross another chart
+    }
+    return -1
+  }
+  segments.forEach((seg, i) => {
+    if (seg.type !== 'chart') return
+    let cmdIdx = findCommand(i + 1, 1)
+    if (cmdIdx === -1) cmdIdx = findCommand(i - 1, -1)
+    if (cmdIdx !== -1) {
+      seg.command = segments[cmdIdx].content
+      segments[cmdIdx].consumed = true
+    }
+  })
 }
 
 function renderSegment(
   seg: Segment,
   i: number,
   boundSessionId?: string,
-  boundTabId?: string
+  boundTabId?: string,
+  streaming?: boolean
 ): JSX.Element | null {
   switch (seg.type) {
     case 'command':
-      return <CommandCard key={i} command={seg.content} />
+      // Consumed by an adjacent chart (it auto-runs the command) — don't show a
+      // duplicate command card.
+      return seg.consumed ? null : <CommandCard key={i} command={seg.content} />
     case 'mermaid':
       return <MermaidBlock key={i} code={seg.content} />
     case 'html':
@@ -99,8 +134,10 @@ function renderSegment(
         <ChartBlock
           key={i}
           spec={seg.content}
+          command={seg.command}
           boundSessionId={boundSessionId}
           boundTabId={boundTabId}
+          streaming={streaming}
         />
       )
     default:
@@ -169,7 +206,7 @@ export default function ChatMessage({ message }: Props): JSX.Element {
           <pre className="msg-source">{message.content}</pre>
         ) : (
           segments.map((seg, i) =>
-            renderSegment(seg, i, message.boundSessionId, message.boundTabId)
+            renderSegment(seg, i, message.boundSessionId, message.boundTabId, message.streaming)
           )
         )}
       </div>
