@@ -7,11 +7,12 @@ import {
 } from '../../store/aiStore'
 import { useTabsStore } from '../../store/tabsStore'
 import { sendPrompt } from '../../lib/aiService'
-import { MODEL_PROFILES, normalizeAISettings, resolveModel } from '../../../shared/aiSettings'
+import { normalizeAISettings } from '../../../shared/aiSettings'
 import type { ModelProfile } from '../../../shared/types'
-import { modelProfileLabel, useT, type TranslationKey } from '../../lib/i18n'
+import { useT, type TranslationKey } from '../../lib/i18n'
 import { useLocaleStore } from '../../store/localeStore'
 import ChatMessage from './ChatMessage'
+import ModelSelect from './ModelSelect'
 
 const EXAMPLE_KEYS = [
   'copilot.example1',
@@ -49,11 +50,6 @@ export default function SidePanel(): JSX.Element {
       setModelNames({ ...normalized.models })
     })
   }, [])
-
-  const activeModelName = resolveModel(
-    { baseURL: '', apiKey: '', copilotModelProfile: copilotProfile, nlModelProfile: 'fast', models: modelNames },
-    copilotProfile
-  )
 
   const onProfileChange = (profile: ModelProfile): void => {
     setCopilotProfile(profile)
@@ -272,19 +268,13 @@ export default function SidePanel(): JSX.Element {
         />
         <div className="composer-actions">
           <div className="composer-meta">
-            <select
-              className="model-select"
+            <ModelSelect
               value={copilotProfile}
+              modelNames={modelNames}
+              locale={locale}
               disabled={busy}
-              title={activeModelName}
-              onChange={(e) => onProfileChange(e.target.value as ModelProfile)}
-            >
-              {MODEL_PROFILES.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {modelProfileLabel(locale, p.id)}
-                </option>
-              ))}
-            </select>
+              onChange={onProfileChange}
+            />
             <span className={`context-hint ${activeTab ? 'live' : 'idle'}`} title={activeTab ? `${activeTab.username}@${activeTab.host}` : t('copilot.noTerminal')}>
               {activeTab ? `${activeTab.username}@${activeTab.host}` : t('copilot.noTerminal')}
             </span>
