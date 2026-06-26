@@ -614,14 +614,22 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
     }
   }, [menu])
 
+  // Right-click: when text is selected, show the Ask/Copy menu; otherwise paste
+  // the clipboard straight into the terminal (PuTTY-style). Routing through
+  // term.paste keeps normal/NL input handling consistent with typed input.
   const onContextMenu = (e: React.MouseEvent): void => {
-    const selection = termRef.current?.getSelection().trim() ?? ''
-    if (!selection) {
-      setMenu(null)
+    e.preventDefault()
+    const term = termRef.current
+    if (!term) return
+    const selection = term.getSelection().trim()
+    if (selection) {
+      setMenu({ x: e.clientX, y: e.clientY, text: selection })
       return
     }
-    e.preventDefault()
-    setMenu({ x: e.clientX, y: e.clientY, text: selection })
+    setMenu(null)
+    void navigator.clipboard.readText().then((text) => {
+      if (text) term.paste(text)
+    })
   }
 
   const ask = (): void => {
