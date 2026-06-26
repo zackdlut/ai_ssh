@@ -6,6 +6,7 @@ import { readTerminalOutput } from '../../lib/terminalRegistry'
 import { isDangerous } from '../../lib/commands'
 import { useThemeStore } from '../../store/themeStore'
 import { useT } from '../../lib/i18n'
+import type { ChartSnapshot } from '../../../shared/types'
 
 interface Props {
   /**
@@ -27,6 +28,10 @@ interface Props {
   boundTabId?: string
   /** True while the assistant message is still streaming (description incomplete). */
   streaming?: boolean
+  /** Persisted chart replay data (for archived / restored chats). */
+  snapshot?: ChartSnapshot
+  /** Called once chart data is captured so it can be replayed later. */
+  onSnapshot?: (snapshot: ChartSnapshot) => void
 }
 
 /** One series' rolling points as [x, y]. */
@@ -88,6 +93,23 @@ const INTERRUPT = '\x03'
 /** Cap on how long phase-2 chart-spec generation may run before erroring.
  *  Generous because it may include a corrective retry against a slow local model. */
 const CHART_GEN_TIMEOUT_MS = 90000
+
+function resolveFromSpecJson(specJson: string): { spec: ChartSpec; series: CompiledSeries[] } | null {
+  try {
+    const spec = parseChartSpec(specJson)
+    return { spec, series: compileSeries(spec) }
+  } catch {
+    return null
+  }
+}
+
+function optionHasData(option: echarts.EChartsCoreOption): boolean {
+  const series = Array.isArray(option.series) ? option.series : option.series ? [option.series] : []
+  return series.some((s) => {
+    const item = s as { data?: unknown }
+    return Array.isArray(item.data) && item.data.length > 0
+  })
+}
 
 function compileSeries(spec: ChartSpec): CompiledSeries[] {
   return spec.series.map((s) => {
@@ -239,10 +261,13 @@ export default function ChartBlock({
   command,
   boundSessionId,
   boundTabId,
-  streaming
+  streaming,
+  snapshot,
+  onSnapshot
 }: Props): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<echarts.ECharts | null>(null)
+  const snapshotSavedRef = useRef(!!snapshot?.option)
   /** Imperative (re)start of capture for the current chart instance. */
   const startRef = useRef<(() => void) | null>(null)
   /** Imperative stop of capture (live: also Ctrl-C the bound session). */
@@ -263,14 +288,28 @@ export default function ChartBlock({
     }
   }, [spec])
 
-  // The resolved spec actually rendered. Seeded from the fast path so a valid
-  // inline-JSON spec renders without a "generating" flash on first paint.
-  const [resolved, setResolved] = useState<{ spec?: ChartSpec; series?: CompiledSeries[] }>(() =>
-    direct ? { spec: direct, series: compileSeries(direct) } : {}
-  )
+  // The resolved spec actually rendered. Seeded from snapshot / fast path so valid
+  // specs render without a "generating" flash on first paint.
+  const [resolved, setResolved] = useState<{ spec?: ChartSpec; series?: CompiledSeries[] }>(() => {
+    if (snapshot?.spec) {
+      const fromSnapshot = resolveFromSpecJson(snapshot.spec)
+      if (fromSnapshot) return fromSnapshot
+    }
+    if (direct) return { spec: direct, series: compileSeries(direct) }
+    return {}
+  })
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    // Persisted snapshot already has a resolved spec — skip network generation.
+    if (snapshot?.spec) {
+      const fromSnapshot = resolveFromSpecJson(snapshot.spec)
+      if (fromSnapshot) {
+        setResolved(fromSnapshot)
+        setError(null)
+      }
+      return
+    }
     // Direct JSON → render immediately.
     if (direct) {
       setResolved({ spec: direct, series: compileSeries(direct) })
@@ -310,6 +349,7 @@ export default function ChartBlock({
           try {
             const s = parseChartSpec(res.spec)
             setResolved({ spec: s, series: compileSeries(s) })
+            onSnapshot?.({ spec: res.spec })
           } catch (e) {
             fail(e)
           }
@@ -327,9 +367,45 @@ export default function ChartBlock({
       clearTimeout(timeout)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [direct, streaming, spec, boundTabId])
+  }, [direct, streaming, spec, boundTabId, snapshot?.spec])
+
+  // Replay a persisted ECharts option (historical chats without terminal binding).
+  useEffect(() => {
+    if (!snapshot?.option || !containerRef.current) return
+    const fromSnapshot = snapshot.spec ? resolveFromSpecJson(snapshot.spec) : null
+    if (fromSnapshot) setResolved(fromSnapshot)
+
+    const chart = echarts.init(containerRef.current, appTheme === 'dawn' ? undefined : 'dark', {
+      renderer: 'canvas'
+    })
+    chartRef.current = chart
+    try {
+      chart.setOption(JSON.parse(snapshot.option) as echarts.EChartsOption, { notMerge: true })
+    } catch {
+      setError(t('chart.renderError', { error: 'invalid snapshot' }))
+    }
+
+    const resize = (): void => {
+      if (containerRef.current && containerRef.current.clientWidth > 0) chart.resize()
+    }
+    requestAnimationFrame(resize)
+    const resizeObserver = new ResizeObserver(resize)
+    resizeObserver.observe(containerRef.current)
+    const visibilityObserver = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting) resize()
+    })
+    visibilityObserver.observe(containerRef.current)
+
+    return () => {
+      visibilityObserver.disconnect()
+      resizeObserver.disconnect()
+      chart.dispose()
+      chartRef.current = null
+    }
+  }, [snapshot?.option, snapshot?.spec, appTheme, t])
 
   useEffect(() => {
+    if (snapshot?.option) return
     if (!resolved.spec || !resolved.series || !containerRef.current) return
     const chartSpec = resolved.spec
     const series = resolved.series
@@ -365,6 +441,22 @@ export default function ChartBlock({
       chart.setOption(buildOption(chartSpec, series, points, cats), { notMerge: true })
     }
 
+    const maybeSaveSnapshot = (): void => {
+      if (!onSnapshot || snapshotSavedRef.current) return
+      const option = chart.getOption() as echarts.EChartsCoreOption
+      if (!optionHasData(option)) return
+      snapshotSavedRef.current = true
+      onSnapshot({
+        spec: JSON.stringify(chartSpec),
+        option: JSON.stringify(option)
+      })
+    }
+
+    const renderAndMaybeSave = (): void => {
+      render()
+      maybeSaveSnapshot()
+    }
+
     const resetData = (): void => {
       for (const arr of points) arr.length = 0
       for (const m of cats) m.clear()
@@ -379,7 +471,7 @@ export default function ChartBlock({
         flushTimer = null
         if (dirty) {
           dirty = false
-          render()
+          renderAndMaybeSave()
         }
       }, LIVE_FLUSH_MS)
     }
@@ -560,7 +652,7 @@ export default function ChartBlock({
       resetData()
       for (const line of stripAnsi(captureBuf).split('\n')) ingestLine(line)
       dirty = false
-      render()
+      renderAndMaybeSave()
     }
     const startStaticCapture = (): void => {
       clearSubs()
@@ -585,7 +677,7 @@ export default function ChartBlock({
       const snapshot = readTerminalOutput(boundTabId, 2000)
       for (const line of snapshot.split('\n')) ingestLine(line)
       dirty = false
-      render()
+      renderAndMaybeSave()
       if (boundSessionId) {
         unsub = window.api.ssh.onData((e) => {
           if (e.sessionId !== boundSessionId) return
@@ -595,7 +687,7 @@ export default function ChartBlock({
             const snap = readTerminalOutput(boundTabId, 2000)
             for (const line of snap.split('\n')) ingestLine(line)
             dirty = false
-            render()
+            renderAndMaybeSave()
           }, 500)
         })
       }
@@ -623,8 +715,16 @@ export default function ChartBlock({
       setRunning(true)
     }
 
-    const resizeObserver = new ResizeObserver(() => chart.resize())
+    const resize = (): void => {
+      if (containerRef.current && containerRef.current.clientWidth > 0) chart.resize()
+    }
+    requestAnimationFrame(resize)
+    const resizeObserver = new ResizeObserver(resize)
     resizeObserver.observe(containerRef.current)
+    const visibilityObserver = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting) resize()
+    })
+    visibilityObserver.observe(containerRef.current)
 
     return () => {
       // Stop a runaway live command and tear everything down.
@@ -632,11 +732,12 @@ export default function ChartBlock({
       clearSubs()
       startRef.current = null
       stopRef.current = null
+      visibilityObserver.disconnect()
       resizeObserver.disconnect()
       chart.dispose()
       chartRef.current = null
     }
-  }, [resolved.spec, resolved.series, appTheme, boundSessionId, boundTabId, command, streaming])
+  }, [resolved.spec, resolved.series, appTheme, boundSessionId, boundTabId, command, streaming, snapshot?.option, onSnapshot])
 
   const copy = async (): Promise<void> => {
     await navigator.clipboard.writeText(spec)
@@ -649,7 +750,7 @@ export default function ChartBlock({
   const waitingForBinding = isLive && !boundSessionId
   // Spec not ready yet: either still generating, or waiting for the streamed
   // description to finish before generation can start.
-  const pending = !error && !resolved.spec
+  const pending = !error && !resolved.spec && !snapshot?.option
   const cmd = command?.trim()
   const autoRunOk = !!cmd && !!boundSessionId && !isDangerous(cmd)
   // A bound live chart whose command is destructive needs an explicit Start.
@@ -711,7 +812,7 @@ export default function ChartBlock({
         <>
           {pending && <div className="chart-hint">{t('chart.generating')}</div>}
           {waitingForBinding && <div className="chart-hint">{t('chart.noBinding')}</div>}
-          <div className="chart-canvas" ref={containerRef} />
+          {!pending && <div className="chart-canvas" ref={containerRef} />}
           {isLive && liveHint && <div className="chart-hint">{liveHint}</div>}
           {isStatic && (
             <div className="chart-hint">

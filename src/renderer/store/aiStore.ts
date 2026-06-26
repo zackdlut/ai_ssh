@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { CopilotChatMessage, CopilotChatState, CopilotChatTab } from '../../shared/types'
+import type { ChartSnapshot, CopilotChatMessage, CopilotChatState, CopilotChatTab } from '../../shared/types'
 
 export interface ChatMessage extends CopilotChatMessage {
   streaming?: boolean
@@ -14,8 +14,10 @@ export const PANEL_MIN_WIDTH = 300
 export const PANEL_MAX_WIDTH = 760
 const PANEL_DEFAULT_WIDTH = 392
 const PANEL_WIDTH_KEY = 'ai.panelWidth'
+const PANEL_OPEN_KEY = 'ai.panelOpen'
 const MAX_MESSAGES_PER_TAB = 200
 const PERSIST_DEBOUNCE_MS = 500
+const STREAM_PERSIST_DEBOUNCE_MS = 2000
 export const MAX_CHAT_TABS = 5
 
 export const DEFAULT_CHAT_TAB_TITLE = '__copilot_new_chat__'
@@ -28,13 +30,31 @@ function loadPanelWidth(): number {
   return Number.isFinite(raw) && raw > 0 ? clampPanelWidth(raw) : PANEL_DEFAULT_WIDTH
 }
 
+function loadPanelOpen(): boolean {
+  const raw = localStorage.getItem(PANEL_OPEN_KEY)
+  return raw === null ? true : raw === 'true'
+}
+
+function savePanelOpen(open: boolean): void {
+  localStorage.setItem(PANEL_OPEN_KEY, String(open))
+}
+
+export function isOpenTab(tab: ChatTab): boolean {
+  return !tab.archived
+}
+
+export function openChatTabs(tabs: ChatTab[]): ChatTab[] {
+  return tabs.filter(isOpenTab)
+}
+
 export function createEmptyChatTab(title = DEFAULT_CHAT_TAB_TITLE): ChatTab {
   return {
     id: crypto.randomUUID(),
     title,
     messages: [],
     draft: '',
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
+    archived: false
   }
 }
 
@@ -58,6 +78,7 @@ function toPersistedState(
       title: tab.title,
       draft: tab.draft,
       updatedAt: tab.updatedAt,
+      archived: tab.archived ?? false,
       messages: tab.messages.slice(-MAX_MESSAGES_PER_TAB).map((m) => ({
         id: m.id,
         role: m.role,
@@ -65,45 +86,55 @@ function toPersistedState(
         reasoning: m.reasoning,
         thinkingMs: m.thinkingMs,
         boundSessionId: m.boundSessionId,
-        boundTabId: m.boundTabId
+        boundTabId: m.boundTabId,
+        chartSnapshots: m.chartSnapshots
       }))
     }))
   }
 }
 
+function migratePersistedTabs(chatTabs: ChatTab[]): ChatTab[] {
+  const migrated = chatTabs.map((tab) => ({
+    ...tab,
+    archived: tab.archived ?? false
+  }))
+  const open = openChatTabs(migrated)
+  if (open.length <= MAX_CHAT_TABS) return migrated
+
+  const keepOpen = new Set<string>()
+  const byRecency = [...open].sort((a, b) => b.updatedAt - a.updatedAt)
+  for (let i = 0; i < MAX_CHAT_TABS && i < byRecency.length; i++) {
+    keepOpen.add(byRecency[i].id)
+  }
+  return migrated.map((tab) =>
+    isOpenTab(tab) && !keepOpen.has(tab.id) ? { ...tab, archived: true } : tab
+  )
+}
+
 function fromPersistedState(state: CopilotChatState): { chatTabs: ChatTab[]; activeChatTabId: string } {
   const chatTabs: ChatTab[] = state.tabs.map((tab) => ({
     ...tab,
+    archived: tab.archived ?? false,
     messages: tab.messages.map((m) => ({ ...m }))
   }))
+  const migrated = migratePersistedTabs(chatTabs)
   let activeChatTabId = state.activeTabId
-  if (!chatTabs.some((t) => t.id === activeChatTabId) && chatTabs.length > 0) {
-    activeChatTabId = chatTabs[0].id
+  if (!migrated.some((t) => t.id === activeChatTabId) && migrated.length > 0) {
+    activeChatTabId = migrated[0].id
   }
-  return trimChatTabs(chatTabs, activeChatTabId)
-}
-
-function trimChatTabs(
-  chatTabs: ChatTab[],
-  activeChatTabId: string
-): { chatTabs: ChatTab[]; activeChatTabId: string } {
-  if (chatTabs.length <= MAX_CHAT_TABS) {
-    return { chatTabs, activeChatTabId }
+  const open = openChatTabs(migrated)
+  if (open.length === 0) {
+    const newTab = createEmptyChatTab()
+    return { chatTabs: [...migrated, newTab], activeChatTabId: newTab.id }
   }
-  const keep = new Set<string>()
-  const active = chatTabs.find((t) => t.id === activeChatTabId)
-  if (active) keep.add(active.id)
-  const byRecency = [...chatTabs].sort((a, b) => b.updatedAt - a.updatedAt)
-  for (const tab of byRecency) {
-    if (keep.size >= MAX_CHAT_TABS) break
-    keep.add(tab.id)
+  if (!open.some((t) => t.id === activeChatTabId)) {
+    activeChatTabId = open[open.length - 1].id
   }
-  const trimmed = chatTabs.filter((t) => keep.has(t.id))
-  const nextActive = keep.has(activeChatTabId) ? activeChatTabId : (trimmed[0]?.id ?? activeChatTabId)
-  return { chatTabs: trimmed, activeChatTabId: nextActive }
+  return { chatTabs: migrated, activeChatTabId }
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null
+let streamPersistTimer: ReturnType<typeof setTimeout> | null = null
 
 function schedulePersist(getState: () => AIState): void {
   if (persistTimer) clearTimeout(persistTimer)
@@ -112,6 +143,14 @@ function schedulePersist(getState: () => AIState): void {
     const { activeChatTabId, chatTabs } = getState()
     void window.api.config.setCopilotChats(toPersistedState(activeChatTabId, chatTabs))
   }, PERSIST_DEBOUNCE_MS)
+}
+
+function scheduleStreamPersist(getState: () => AIState): void {
+  if (streamPersistTimer) clearTimeout(streamPersistTimer)
+  streamPersistTimer = setTimeout(() => {
+    streamPersistTimer = null
+    schedulePersist(getState)
+  }, STREAM_PERSIST_DEBOUNCE_MS)
 }
 
 interface AIState {
@@ -123,13 +162,17 @@ interface AIState {
   activeRequestId: string | null
   /** Tab id that owns the in-flight request (for cancel on close). */
   busyTabId: string | null
+  notice: string | null
   togglePanel: () => void
   setPanelOpen: (open: boolean) => void
   setPanelWidth: (width: number) => void
+  setNotice: (notice: string | null) => void
   loadChatState: () => Promise<void>
   persistChatState: () => void
   addChatTab: (title?: string) => string | null
-  removeChatTab: (id: string) => void
+  archiveChatTab: (id: string) => void
+  restoreChatTab: (id: string) => boolean
+  deleteChatTab: (id: string) => void
   setActiveChatTab: (id: string) => void
   updateDraft: (tabId: string, draft: string) => void
   clearActiveTab: () => void
@@ -138,6 +181,7 @@ interface AIState {
   appendToMessage: (tabId: string, id: string, delta: string) => void
   appendReasoning: (tabId: string, id: string, delta: string) => void
   finishMessage: (tabId: string, id: string) => void
+  setChartSnapshot: (tabId: string, messageId: string, key: string, snapshot: ChartSnapshot) => void
   setBusy: (busy: boolean, requestId?: string | null, tabId?: string | null) => void
   activeChatTab: () => ChatTab | undefined
 }
@@ -145,31 +189,46 @@ interface AIState {
 const initialTab = createEmptyChatTab()
 
 export const useAIStore = create<AIState>((set, get) => ({
-  panelOpen: true,
+  panelOpen: loadPanelOpen(),
   panelWidth: loadPanelWidth(),
   chatTabs: [initialTab],
   activeChatTabId: initialTab.id,
   busy: false,
   activeRequestId: null,
   busyTabId: null,
-  togglePanel: () => set((s) => ({ panelOpen: !s.panelOpen })),
-  setPanelOpen: (open) => set({ panelOpen: open }),
+  notice: null,
+  togglePanel: () =>
+    set((s) => {
+      const panelOpen = !s.panelOpen
+      savePanelOpen(panelOpen)
+      return { panelOpen }
+    }),
+  setPanelOpen: (open) => {
+    savePanelOpen(open)
+    set({ panelOpen: open })
+  },
   setPanelWidth: (width) => {
     const clamped = clampPanelWidth(width)
     localStorage.setItem(PANEL_WIDTH_KEY, String(clamped))
     set({ panelWidth: clamped })
   },
+  setNotice: (notice) => set({ notice }),
   loadChatState: async () => {
     const saved = await window.api.config.getCopilotChats()
     if (!saved || saved.tabs.length === 0) return
     const { chatTabs, activeChatTabId } = fromPersistedState(saved)
     set({ chatTabs, activeChatTabId })
-    if (saved.tabs.length > MAX_CHAT_TABS) schedulePersist(get)
+    const needsPersist =
+      saved.tabs.some((t) => t.archived === undefined) ||
+      openChatTabs(
+        saved.tabs.map((t) => ({ ...t, archived: t.archived ?? false, messages: t.messages }))
+      ).length > MAX_CHAT_TABS
+    if (needsPersist) schedulePersist(get)
   },
   persistChatState: () => schedulePersist(get),
   addChatTab: (title) => {
     const { chatTabs } = get()
-    if (chatTabs.length >= MAX_CHAT_TABS) return null
+    if (openChatTabs(chatTabs).length >= MAX_CHAT_TABS) return null
     const tab = createEmptyChatTab(title)
     set({
       chatTabs: [...chatTabs, tab],
@@ -178,16 +237,60 @@ export const useAIStore = create<AIState>((set, get) => ({
     schedulePersist(get)
     return tab.id
   },
-  removeChatTab: (id) => {
+  archiveChatTab: (id) => {
     set((s) => {
-      if (s.chatTabs.length <= 1) {
-        const reset = createEmptyChatTab()
-        return { chatTabs: [reset], activeChatTabId: reset.id }
+      const tab = s.chatTabs.find((t) => t.id === id)
+      if (!tab || tab.archived) return s
+
+      let chatTabs = updateTab(s.chatTabs, id, { archived: true })
+      let activeChatTabId = s.activeChatTabId
+      const stillOpen = openChatTabs(chatTabs)
+
+      if (stillOpen.length === 0) {
+        const newTab = createEmptyChatTab()
+        chatTabs = [...chatTabs, newTab]
+        activeChatTabId = newTab.id
+      } else if (activeChatTabId === id) {
+        activeChatTabId = stillOpen[stillOpen.length - 1].id
       }
+
+      return { chatTabs, activeChatTabId }
+    })
+    schedulePersist(get)
+  },
+  restoreChatTab: (id) => {
+    const { chatTabs } = get()
+    const tab = chatTabs.find((t) => t.id === id)
+    if (!tab) return false
+    if (!tab.archived) {
+      set({ activeChatTabId: id })
+      schedulePersist(get)
+      return true
+    }
+    if (openChatTabs(chatTabs).length >= MAX_CHAT_TABS) return false
+
+    set({
+      chatTabs: updateTab(chatTabs, id, { archived: false }),
+      activeChatTabId: id
+    })
+    schedulePersist(get)
+    return true
+  },
+  deleteChatTab: (id) => {
+    set((s) => {
+      const tab = s.chatTabs.find((t) => t.id === id)
+      if (!tab) return s
+
       const chatTabs = s.chatTabs.filter((t) => t.id !== id)
+      if (chatTabs.length === 0) {
+        const newTab = createEmptyChatTab()
+        return { chatTabs: [newTab], activeChatTabId: newTab.id }
+      }
+
       let activeChatTabId = s.activeChatTabId
       if (activeChatTabId === id) {
-        activeChatTabId = chatTabs[chatTabs.length - 1]?.id ?? null
+        const open = openChatTabs(chatTabs)
+        activeChatTabId = open[open.length - 1]?.id ?? chatTabs[0].id
       }
       return { chatTabs, activeChatTabId }
     })
@@ -225,7 +328,7 @@ export const useAIStore = create<AIState>((set, get) => ({
     })
     schedulePersist(get)
   },
-  appendToMessage: (tabId, id, delta) =>
+  appendToMessage: (tabId, id, delta) => {
     set((s) => ({
       chatTabs: s.chatTabs.map((tab) => {
         if (tab.id !== tabId) return tab
@@ -242,8 +345,10 @@ export const useAIStore = create<AIState>((set, get) => ({
           })
         }
       })
-    })),
-  appendReasoning: (tabId, id, delta) =>
+    }))
+    scheduleStreamPersist(get)
+  },
+  appendReasoning: (tabId, id, delta) => {
     set((s) => ({
       chatTabs: s.chatTabs.map((tab) => {
         if (tab.id !== tabId) return tab
@@ -261,7 +366,9 @@ export const useAIStore = create<AIState>((set, get) => ({
           )
         }
       })
-    })),
+    }))
+    scheduleStreamPersist(get)
+  },
   finishMessage: (tabId, id) => {
     set((s) => ({
       chatTabs: s.chatTabs.map((tab) => {
@@ -276,6 +383,31 @@ export const useAIStore = create<AIState>((set, get) => ({
                 ? Date.now() - m.thinkingStartedAt
                 : m.thinkingMs
             return { ...m, streaming: false, thinkingMs }
+          })
+        }
+      })
+    }))
+    schedulePersist(get)
+  },
+  setChartSnapshot: (tabId, messageId, key, snapshot) => {
+    set((s) => ({
+      chatTabs: s.chatTabs.map((tab) => {
+        if (tab.id !== tabId) return tab
+        return {
+          ...tab,
+          updatedAt: Date.now(),
+          messages: tab.messages.map((m) => {
+            if (m.id !== messageId) return m
+            const prev = m.chartSnapshots?.[key]
+            const merged: ChartSnapshot = {
+              spec: snapshot.spec,
+              option: snapshot.option ?? prev?.option
+            }
+            if (prev?.spec === merged.spec && prev?.option === merged.option) return m
+            return {
+              ...m,
+              chartSnapshots: { ...m.chartSnapshots, [key]: merged }
+            }
           })
         }
       })

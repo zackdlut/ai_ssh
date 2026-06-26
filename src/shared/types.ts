@@ -78,6 +78,14 @@ export interface ChatMessageDTO {
   content: string
 }
 
+/** Persisted ECharts replay data for a chart block inside an assistant message. */
+export interface ChartSnapshot {
+  /** Resolved ChartSpec JSON. */
+  spec: string
+  /** Serialized ECharts option; present when chart data was captured. */
+  option?: string
+}
+
 /** A single message in a Copilot chat tab (persisted). */
 export interface CopilotChatMessage {
   id: string
@@ -87,6 +95,8 @@ export interface CopilotChatMessage {
   thinkingMs?: number
   boundSessionId?: string
   boundTabId?: string
+  /** Replay snapshots keyed by chart segment index within the message. */
+  chartSnapshots?: Record<string, ChartSnapshot>
 }
 
 /** One conversation topic in the Copilot side panel. */
@@ -96,6 +106,8 @@ export interface CopilotChatTab {
   messages: CopilotChatMessage[]
   draft: string
   updatedAt: number
+  /** When true, tab is hidden from the tab bar and listed in chat history. */
+  archived?: boolean
 }
 
 /** Persisted Copilot multi-tab chat state. */

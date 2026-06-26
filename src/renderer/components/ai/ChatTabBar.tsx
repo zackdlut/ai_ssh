@@ -1,30 +1,45 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useAIStore, DEFAULT_CHAT_TAB_TITLE, MAX_CHAT_TABS, type ChatTab } from '../../store/aiStore'
+import {
+  useAIStore,
+  DEFAULT_CHAT_TAB_TITLE,
+  MAX_CHAT_TABS,
+  openChatTabs,
+  type ChatTab
+} from '../../store/aiStore'
 import { useT } from '../../lib/i18n'
 
 function tabLabel(tab: ChatTab, newChatLabel: string): string {
   return tab.title === DEFAULT_CHAT_TAB_TITLE ? newChatLabel : tab.title
 }
 
-export default function ChatTabBar(): JSX.Element {
+interface Props {
+  onOpenHistory: () => void
+}
+
+export default function ChatTabBar({ onOpenHistory }: Props): JSX.Element {
   const {
     chatTabs,
     activeChatTabId,
     busy,
     busyTabId,
     addChatTab,
-    removeChatTab,
+    archiveChatTab,
     setActiveChatTab,
+    clearActiveTab,
     activeRequestId,
     setBusy
   } = useAIStore()
   const t = useT()
 
+  const openTabs = openChatTabs(chatTabs)
+
   const scrollRef = useRef<HTMLDivElement>(null)
   const [scrollEdges, setScrollEdges] = useState({ left: false, right: false })
 
   const newChatLabel = t('copilot.newChat')
-  const atTabLimit = chatTabs.length >= MAX_CHAT_TABS
+  const atTabLimit = openTabs.length >= MAX_CHAT_TABS
+  const activeTab = chatTabs.find((t) => t.id === activeChatTabId)
+  const canClear = (activeTab?.messages.length ?? 0) > 0
 
   const updateScrollEdges = useCallback((): void => {
     const el = scrollRef.current
@@ -42,14 +57,14 @@ export default function ChatTabBar(): JSX.Element {
     const observer = new ResizeObserver(updateScrollEdges)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [chatTabs.length, updateScrollEdges])
+  }, [openTabs.length, updateScrollEdges])
 
   useEffect(() => {
     if (!activeChatTabId) return
     const el = scrollRef.current?.querySelector<HTMLElement>(`[data-tab-id="${activeChatTabId}"]`)
     el?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
     requestAnimationFrame(updateScrollEdges)
-  }, [activeChatTabId, chatTabs.length, updateScrollEdges])
+  }, [activeChatTabId, openTabs.length, updateScrollEdges])
 
   const scrollTabs = (direction: -1 | 1): void => {
     scrollRef.current?.scrollBy({ left: direction * 140, behavior: 'smooth' })
@@ -70,7 +85,7 @@ export default function ChatTabBar(): JSX.Element {
       window.api.ai.cancel(activeRequestId)
       setBusy(false)
     }
-    removeChatTab(tab.id)
+    archiveChatTab(tab.id)
   }
 
   const trackClass = [
@@ -101,7 +116,7 @@ export default function ChatTabBar(): JSX.Element {
           onScroll={updateScrollEdges}
           onWheel={onWheel}
         >
-          {chatTabs.map((tab) => {
+          {openTabs.map((tab) => {
             const isActive = tab.id === activeChatTabId
             const isStreaming = busy && busyTabId === tab.id
             return (
@@ -145,7 +160,7 @@ export default function ChatTabBar(): JSX.Element {
       <div className="copilot-tabbar-actions">
         <button
           type="button"
-          className="copilot-tab-add"
+          className="copilot-tab-action copilot-tab-add"
           onClick={() => addChatTab()}
           disabled={atTabLimit}
           title={atTabLimit ? t('copilot.maxTabsTitle', { max: MAX_CHAT_TABS }) : t('copilot.newTab')}
@@ -154,6 +169,25 @@ export default function ChatTabBar(): JSX.Element {
           <span className="copilot-tab-add-glyph" aria-hidden>
             +
           </span>
+        </button>
+        <button
+          type="button"
+          className="copilot-tab-action copilot-tab-history"
+          onClick={onOpenHistory}
+          title={t('copilot.history.openHistory')}
+          aria-label={t('copilot.history.openHistory')}
+        >
+          <span className="copilot-tab-history-glyph" aria-hidden />
+        </button>
+        <button
+          type="button"
+          className="copilot-tab-action copilot-tab-clear"
+          onClick={clearActiveTab}
+          disabled={!canClear || busy}
+          title={t('copilot.clearTitle')}
+          aria-label={t('copilot.clearTitle')}
+        >
+          <span className="copilot-tab-clear-glyph" aria-hidden />
         </button>
       </div>
     </div>

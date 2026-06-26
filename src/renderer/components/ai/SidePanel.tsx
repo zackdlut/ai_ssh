@@ -15,6 +15,7 @@ import ContextMenuItem from '../ContextMenuItem'
 import { useLocaleStore } from '../../store/localeStore'
 import ChatMessage from './ChatMessage'
 import ChatTabBar from './ChatTabBar'
+import ChatHistoryPanel from './ChatHistoryPanel'
 import ModelSelect from './ModelSelect'
 
 const EXAMPLE_KEYS = [
@@ -37,9 +38,10 @@ export default function SidePanel(): JSX.Element {
     setPanelWidth,
     setBusy,
     setPanelOpen,
-    clearActiveTab,
     updateDraft,
-    activeChatTab
+    activeChatTab,
+    notice,
+    setNotice
   } = useAIStore()
   const activeChat = activeChatTab()
   const messages = activeChat?.messages ?? []
@@ -60,8 +62,15 @@ export default function SidePanel(): JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const [menu, setMenu] = useState<ContextMenu | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const locale = useLocaleStore((s) => s.locale)
   const t = useT()
+
+  useEffect(() => {
+    if (!notice) return
+    const timer = setTimeout(() => setNotice(null), 4000)
+    return () => clearTimeout(timer)
+  }, [notice, setNotice])
 
   useEffect(() => {
     void window.api.config.getAISettings().then((s) => {
@@ -289,16 +298,13 @@ export default function SidePanel(): JSX.Element {
           </span>
         </span>
         <div className="panel-toolbar">
-          <button className="toolbar-btn" onClick={clearActiveTab} title={t('copilot.clearTitle')}>
-            {t('copilot.clear')}
-          </button>
           <button className="toolbar-btn panel-close" onClick={() => setPanelOpen(false)} title={t('copilot.hide')}>
             ✕
           </button>
         </div>
       </div>
 
-      <ChatTabBar />
+      <ChatTabBar onOpenHistory={() => setHistoryOpen(true)} />
 
       <div className="chat-list" ref={listRef} onContextMenu={onChatContextMenu}>
         {messages.length === 0 ? (
@@ -387,6 +393,10 @@ export default function SidePanel(): JSX.Element {
           </div>
         </div>
       </div>
+
+      {historyOpen && <ChatHistoryPanel onClose={() => setHistoryOpen(false)} />}
+
+      {notice && <div className="copilot-notice">{notice}</div>}
 
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>

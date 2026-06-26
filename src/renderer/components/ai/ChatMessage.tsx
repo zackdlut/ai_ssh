@@ -6,7 +6,8 @@ import HtmlPreview from './HtmlPreview'
 import ChartBlock from './ChartBlock'
 import ThinkingBlock from './ThinkingBlock'
 import { parseJsonLoose } from '../../lib/chartSpec'
-import type { ChatMessage as ChatMessageType } from '../../store/aiStore'
+import { useAIStore, type ChatMessage as ChatMessageType } from '../../store/aiStore'
+import type { ChartSnapshot } from '../../../shared/types'
 import { useT } from '../../lib/i18n'
 
 interface Props {
@@ -145,9 +146,12 @@ function pairChartCommands(segments: Segment[]): void {
 function renderSegment(
   seg: Segment,
   i: number,
+  messageId: string,
   boundSessionId?: string,
   boundTabId?: string,
-  streaming?: boolean
+  streaming?: boolean,
+  snapshot?: ChartSnapshot,
+  onSnapshot?: (snapshot: ChartSnapshot) => void
 ): JSX.Element | null {
   switch (seg.type) {
     case 'command':
@@ -167,6 +171,8 @@ function renderSegment(
           boundSessionId={boundSessionId}
           boundTabId={boundTabId}
           streaming={streaming}
+          snapshot={snapshot}
+          onSnapshot={onSnapshot}
         />
       )
     default:
@@ -178,6 +184,8 @@ export default function ChatMessage({ message }: Props): JSX.Element {
   const isUser = message.role === 'user'
   const [mode, setMode] = useState<'preview' | 'source'>('preview')
   const [copied, setCopied] = useState(false)
+  const activeChatTabId = useAIStore((s) => s.activeChatTabId)
+  const setChartSnapshot = useAIStore((s) => s.setChartSnapshot)
   const t = useT()
 
   if (isUser) {
@@ -242,7 +250,18 @@ export default function ChatMessage({ message }: Props): JSX.Element {
           <pre className="msg-source">{body}</pre>
         ) : (
           segments.map((seg, i) =>
-            renderSegment(seg, i, message.boundSessionId, message.boundTabId, message.streaming)
+            renderSegment(
+              seg,
+              i,
+              message.id,
+              message.boundSessionId,
+              message.boundTabId,
+              message.streaming,
+              message.chartSnapshots?.[String(i)],
+              activeChatTabId
+                ? (snapshot) => setChartSnapshot(activeChatTabId, message.id, String(i), snapshot)
+                : undefined
+            )
           )
         )}
       </div>
