@@ -4,6 +4,7 @@ import Markdown from './Markdown'
 import MermaidBlock from './MermaidBlock'
 import HtmlPreview from './HtmlPreview'
 import ChartBlock from './ChartBlock'
+import ThinkingBlock from './ThinkingBlock'
 import { parseJsonLoose } from '../../lib/chartSpec'
 import type { ChatMessage as ChatMessageType } from '../../store/aiStore'
 import { useT } from '../../lib/i18n'
@@ -27,6 +28,34 @@ interface Segment {
 const SPECIAL_FENCE = /```(bash|sh|shell|zsh|mermaid|html|chart|json)[^\n]*\n([\s\S]*?)```/g
 
 const CHART_TYPES = ['line', 'bar', 'pie', 'scatter']
+
+/**
+ * Some models emit their chain-of-thought inline as `<think>…</think>` in the
+ * answer body instead of via a separate reasoning field. Pull that out so it
+ * can join the dedicated thinking block. Handles a still-open `<think>` during
+ * streaming (no closing tag yet) by treating the rest as reasoning.
+ */
+function extractThinkTags(content: string): { reasoning: string; body: string } {
+  if (!content.includes('<think>')) return { reasoning: '', body: content }
+  const parts: string[] = []
+  let body = ''
+  let rest = content
+  let idx: number
+  while ((idx = rest.indexOf('<think>')) !== -1) {
+    body += rest.slice(0, idx)
+    const after = rest.slice(idx + '<think>'.length)
+    const close = after.indexOf('</think>')
+    if (close === -1) {
+      parts.push(after)
+      rest = ''
+      break
+    }
+    parts.push(after.slice(0, close))
+    rest = after.slice(close + '</think>'.length)
+  }
+  body += rest
+  return { reasoning: parts.join('\n').trim(), body }
+}
 
 /**
  * Heuristic: does this JSON body look like a chart spec? Conservative so that
@@ -160,11 +189,15 @@ export default function ChatMessage({ message }: Props): JSX.Element {
     )
   }
 
-  const empty = message.content.trim().length === 0
-  const segments = mode === 'preview' ? splitSegments(message.content) : []
+  const { reasoning: tagReasoning, body } = extractThinkTags(message.content)
+  const reasoning = [message.reasoning, tagReasoning].filter(Boolean).join('\n').trim()
+  const empty = body.trim().length === 0
+  // Still reasoning when the answer body hasn't started yet and we're streaming.
+  const thinking = !!message.streaming && empty
+  const segments = mode === 'preview' ? splitSegments(body) : []
 
   const copy = async (): Promise<void> => {
-    await navigator.clipboard.writeText(message.content)
+    await navigator.clipboard.writeText(body)
     setCopied(true)
   }
 
@@ -200,10 +233,13 @@ export default function ChatMessage({ message }: Props): JSX.Element {
         )}
       </div>
       <div className="chat-bubble">
+        {reasoning && (
+          <ThinkingBlock reasoning={reasoning} thinking={thinking} durationMs={message.thinkingMs} />
+        )}
         {empty && message.streaming ? (
-          <span style={{ color: 'var(--text-dim)' }}>…</span>
+          !reasoning && <span style={{ color: 'var(--text-dim)' }}>…</span>
         ) : mode === 'source' ? (
-          <pre className="msg-source">{message.content}</pre>
+          <pre className="msg-source">{body}</pre>
         ) : (
           segments.map((seg, i) =>
             renderSegment(seg, i, message.boundSessionId, message.boundTabId, message.streaming)

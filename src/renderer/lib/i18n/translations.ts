@@ -199,6 +199,8 @@ const zh = {
 
   'chat.preview': '预览',
   'chat.source': '源码',
+  'chat.thinking': '正在思考…',
+  'chat.thoughtFor': '已思考 {sec} 秒',
 
   'mermaid.renderError':
     '无法渲染该 mermaid 图（常见原因：节点标签中含未加引号的特殊字符，如 {bad} 应写成 {good}）：{error}',
@@ -415,6 +417,8 @@ const en: Record<keyof typeof zh, string> = {
 
   'chat.preview': 'Preview',
   'chat.source': 'Source',
+  'chat.thinking': 'Thinking…',
+  'chat.thoughtFor': 'Thought for {sec}s',
 
   'mermaid.renderError':
     'Cannot render this mermaid diagram (common cause: unquoted special characters in node labels, e.g. {bad} should be {good}): {error}',

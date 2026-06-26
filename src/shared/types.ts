@@ -186,6 +186,12 @@ export interface AIChunkEvent {
   delta: string
 }
 
+/** Streamed reasoning/thinking tokens, kept separate from the answer body. */
+export interface AIReasoningEvent {
+  requestId: string
+  delta: string
+}
+
 export interface AIDoneEvent {
   requestId: string
   content: string

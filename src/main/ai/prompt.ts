@@ -41,8 +41,9 @@ vmstat 1
 
 Diagrams (mermaid):
 - When a diagram helps, output it in a fenced code block tagged mermaid. It is rendered live, so the syntax MUST be valid or it will fail.
+- The mermaid block must contain ONLY the diagram. Its FIRST line must be a diagram declaration (e.g. "graph LR", "graph TD", "sequenceDiagram"). NEVER put prose, sentences, headings, or Markdown tables inside the mermaid block — describe such things in normal text OUTSIDE the block.
 - ALWAYS wrap node label text in double quotes when it contains spaces or any of these characters: ( ) [ ] { } : ; < > / # = & |. Example: A["Echo Request (seq=1)"] not A[Echo Request (seq=1)].
-- For line breaks inside a label use <br/>. Do NOT put other raw HTML (such as <ul>, <li>, <b>) inside labels.
+- For line breaks inside a label use <br/>. NEVER use a literal \\n. Do NOT put other raw HTML (such as <ul>, <li>, <b>) inside labels.
 - Only attach a ::: class to a node if you also declare that class with classDef in the same diagram; otherwise omit it.
 - Reference each subgraph/node by a bare id (e.g. B --> Results), never with empty brackets like Results[""].
 - Keep diagrams small; prefer "graph TD" / "graph LR" or "sequenceDiagram".`

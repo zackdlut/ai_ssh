@@ -5,6 +5,12 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   streaming?: boolean
+  /** Reasoning/thinking text, streamed separately from the answer body. */
+  reasoning?: string
+  /** Timestamp (ms) when the first reasoning token arrived. */
+  thinkingStartedAt?: number
+  /** Total reasoning duration (ms), set once the answer starts or finishes. */
+  thinkingMs?: number
   /** SSH session bound via @terminal, so charts can subscribe to its live stream. */
   boundSessionId?: string
   /** Tab id bound via @terminal, used for reading the current buffer snapshot. */
@@ -35,6 +41,7 @@ interface AIState {
   setPanelWidth: (width: number) => void
   addMessage: (msg: ChatMessage) => void
   appendToMessage: (id: string, delta: string) => void
+  appendReasoning: (id: string, delta: string) => void
   finishMessage: (id: string) => void
   setBusy: (busy: boolean, requestId?: string | null) => void
   clear: () => void
@@ -56,13 +63,38 @@ export const useAIStore = create<AIState>((set) => ({
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   appendToMessage: (id, delta) =>
     set((s) => ({
+      messages: s.messages.map((m) => {
+        if (m.id !== id) return m
+        // First answer token settles the thinking duration (thinking is done).
+        const thinkingMs =
+          m.thinkingMs === undefined && m.thinkingStartedAt !== undefined
+            ? Date.now() - m.thinkingStartedAt
+            : m.thinkingMs
+        return { ...m, content: m.content + delta, thinkingMs }
+      })
+    })),
+  appendReasoning: (id, delta) =>
+    set((s) => ({
       messages: s.messages.map((m) =>
-        m.id === id ? { ...m, content: m.content + delta } : m
+        m.id === id
+          ? {
+              ...m,
+              reasoning: (m.reasoning ?? '') + delta,
+              thinkingStartedAt: m.thinkingStartedAt ?? Date.now()
+            }
+          : m
       )
     })),
   finishMessage: (id) =>
     set((s) => ({
-      messages: s.messages.map((m) => (m.id === id ? { ...m, streaming: false } : m))
+      messages: s.messages.map((m) => {
+        if (m.id !== id) return m
+        const thinkingMs =
+          m.thinkingMs === undefined && m.thinkingStartedAt !== undefined
+            ? Date.now() - m.thinkingStartedAt
+            : m.thinkingMs
+        return { ...m, streaming: false, thinkingMs }
+      })
     })),
   setBusy: (busy, requestId = null) => set({ busy, activeRequestId: requestId }),
   clear: () => set({ messages: [] })

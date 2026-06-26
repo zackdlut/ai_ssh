@@ -1577,6 +1577,78 @@ select:focus {
   color: var(--text-dim);
 }
 
+/* ---------- Thinking block (Cursor-style reasoning) ---------- */
+.thinking {
+  margin: -2px 0 8px;
+}
+
+.thinking:last-child {
+  margin-bottom: 0;
+}
+
+.thinking-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: color 0.15s;
+}
+
+.thinking-head:hover {
+  color: var(--text-dim);
+}
+
+.thinking-chevron {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 0.18s ease;
+}
+
+.thinking.open .thinking-chevron {
+  transform: rotate(90deg);
+}
+
+.thinking-label.shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--text-faint) 25%,
+    var(--text) 50%,
+    var(--text-faint) 75%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: thinking-shimmer 1.6s linear infinite;
+}
+
+@keyframes thinking-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+.thinking-body {
+  margin-top: 6px;
+  padding: 4px 0 4px 12px;
+  border-left: 2px solid var(--line);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
 /* ---------- Markdown ---------- */
 .md {
   font-size: 13.5px;

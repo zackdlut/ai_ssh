@@ -77,6 +77,8 @@ const CHART_SPEC_JSON_SCHEMA = {
 
 export interface StreamCallbacks {
   onChunk: (delta: string) => void
+  /** Streamed reasoning/thinking tokens, kept separate from the answer body. */
+  onReasoning?: (delta: string) => void
   onDone: (content: string) => void
   onError: (error: string) => void
 }
@@ -151,6 +153,25 @@ function extractStreamDelta(part: OpenAI.Chat.ChatCompletionChunk): string {
   return extra.reasoning ?? extra.reasoning_content ?? ''
 }
 
+/**
+ * Split a streamed chunk into answer body (`content`) and reasoning tokens
+ * (`reasoning`/`reasoning_content`, emitted by reasoning models like Qwen3).
+ * Keeping them apart lets the renderer show a Cursor-style "thinking" block
+ * without polluting the answer or the conversation history.
+ */
+function splitStreamDelta(part: OpenAI.Chat.ChatCompletionChunk): {
+  content: string
+  reasoning: string
+} {
+  const delta = part.choices[0]?.delta
+  if (!delta) return { content: '', reasoning: '' }
+  const extra = delta as { reasoning?: string; reasoning_content?: string }
+  return {
+    content: delta.content ?? '',
+    reasoning: extra.reasoning ?? extra.reasoning_content ?? ''
+  }
+}
+
 function extractMessageText(
   message: OpenAI.Chat.ChatCompletionMessage | undefined
 ): string {
@@ -207,10 +228,13 @@ export class AIProvider {
       )
 
       for await (const part of stream) {
-        const delta = extractStreamDelta(part)
-        if (delta) {
-          full += delta
-          cb.onChunk(delta)
+        const { content, reasoning } = splitStreamDelta(part)
+        // Reasoning is streamed to a separate channel and intentionally NOT
+        // added to `full`, so it never leaks into the answer or the history.
+        if (reasoning) cb.onReasoning?.(reasoning)
+        if (content) {
+          full += content
+          cb.onChunk(content)
         }
       }
       cb.onDone(full)

@@ -4,6 +4,7 @@ import type {
   AIChartSpecRequest,
   AIChartSpecResult,
   AIChunkEvent,
+  AIReasoningEvent,
   AIDoneEvent,
   AIErrorEvent,
   AISettings,
@@ -69,6 +70,7 @@ const api = {
     summarize: (req: AISummarizeRequest): void => ipcRenderer.send('ai:summarize', req),
     cancel: (requestId: string): void => ipcRenderer.send('ai:cancel', requestId),
     onChunk: (cb: (e: AIChunkEvent) => void): Unsubscribe => on('ai:chunk', cb),
+    onReasoning: (cb: (e: AIReasoningEvent) => void): Unsubscribe => on('ai:reasoning', cb),
     onDone: (cb: (e: AIDoneEvent) => void): Unsubscribe => on('ai:done', cb),
     onError: (cb: (e: AIErrorEvent) => void): Unsubscribe => on('ai:error', cb)
   },

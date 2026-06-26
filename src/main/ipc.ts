@@ -8,6 +8,7 @@ import type {
   AIChartSpecRequest,
   AIChartSpecResult,
   AIChunkEvent,
+  AIReasoningEvent,
   AIDoneEvent,
   AIErrorEvent,
   AISettings,
@@ -46,6 +47,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
     void ai.chat(req, {
       onChunk: (delta) =>
         e.sender.send('ai:chunk', { requestId: req.requestId, delta } satisfies AIChunkEvent),
+      onReasoning: (delta) =>
+        e.sender.send('ai:reasoning', {
+          requestId: req.requestId,
+          delta
+        } satisfies AIReasoningEvent),
       onDone: (content) =>
         e.sender.send('ai:done', { requestId: req.requestId, content } satisfies AIDoneEvent),
       onError: (error) =>

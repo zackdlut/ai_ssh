@@ -19,6 +19,10 @@ export function initAIService(): void {
     const msgId = pending.get(requestId)
     if (msgId) useAIStore.getState().appendToMessage(msgId, delta)
   })
+  window.api.ai.onReasoning(({ requestId, delta }) => {
+    const msgId = pending.get(requestId)
+    if (msgId) useAIStore.getState().appendReasoning(msgId, delta)
+  })
   window.api.ai.onDone(({ requestId }) => {
     const msgId = pending.get(requestId)
     if (msgId) useAIStore.getState().finishMessage(msgId)
