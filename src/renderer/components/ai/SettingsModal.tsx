@@ -9,7 +9,8 @@ interface Props {
 export default function SettingsModal({ onClose }: Props): JSX.Element {
   const [baseURL, setBaseURL] = useState('')
   const [apiKey, setApiKey] = useState('')
-  const [modelProfile, setModelProfile] = useState<ModelProfile>('default')
+  const [editingProfile, setEditingProfile] = useState<ModelProfile>('default')
+  const [nlModelProfile, setNlModelProfile] = useState<ModelProfile>('fast')
   const [models, setModels] = useState<Record<ModelProfile, string>>({ ...DEFAULT_MODELS })
   const [loaded, setLoaded] = useState(false)
 
@@ -18,24 +19,26 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
       const normalized = normalizeAISettings(s)
       setBaseURL(normalized.baseURL)
       setApiKey(normalized.apiKey)
-      setModelProfile(normalized.modelProfile)
+      setNlModelProfile(normalized.nlModelProfile)
       setModels({ ...normalized.models })
       setLoaded(true)
     })
   }, [])
 
-  const activeProfileLabel =
-    MODEL_PROFILES.find((p) => p.id === modelProfile)?.label ?? modelProfile
+  const editingProfileLabel =
+    MODEL_PROFILES.find((p) => p.id === editingProfile)?.label ?? editingProfile
 
   const updateModel = (profile: ModelProfile, value: string): void => {
     setModels((prev) => ({ ...prev, [profile]: value }))
   }
 
   const handleSave = async (): Promise<void> => {
+    const current = normalizeAISettings(await window.api.config.getAISettings())
     await window.api.config.setAISettings({
+      ...current,
       baseURL,
       apiKey,
-      modelProfile,
+      nlModelProfile,
       models: { ...models }
     })
     onClose()
@@ -46,6 +49,30 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">AI Settings</div>
         <div className="modal-body">
+          <div className="field">
+            <label>Edit Profile</label>
+            <div className="seg seg-profile">
+              {MODEL_PROFILES.map((profile) => (
+                <button
+                  key={profile.id}
+                  type="button"
+                  className={editingProfile === profile.id ? 'active' : ''}
+                  onClick={() => setEditingProfile(profile.id)}
+                >
+                  {profile.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="field">
+            <label>Model ({editingProfileLabel})</label>
+            <input
+              key={editingProfile}
+              value={models[editingProfile]}
+              onChange={(e) => updateModel(editingProfile, e.target.value)}
+              placeholder="gpt-4o-mini"
+            />
+          </div>
           <div className="field">
             <label>Base URL (OpenAI-compatible)</label>
             <input
@@ -64,33 +91,25 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
             />
           </div>
           <div className="field">
-            <label>Model Profile</label>
+            <label>Terminal AI Mode Model</label>
             <div className="seg seg-profile">
               {MODEL_PROFILES.map((profile) => (
                 <button
                   key={profile.id}
                   type="button"
-                  className={modelProfile === profile.id ? 'active' : ''}
-                  onClick={() => setModelProfile(profile.id)}
+                  className={nlModelProfile === profile.id ? 'active' : ''}
+                  onClick={() => setNlModelProfile(profile.id)}
                 >
                   {profile.label}
                 </button>
               ))}
             </div>
           </div>
-          <div className="field">
-            <label>Model ({activeProfileLabel})</label>
-            <input
-              key={modelProfile}
-              value={models[modelProfile]}
-              onChange={(e) => updateModel(modelProfile, e.target.value)}
-              placeholder="gpt-4o-mini"
-            />
-          </div>
           <div className="context-hint">
             Works with OpenAI, DeepSeek, local vLLM/Ollama and other OpenAI-compatible endpoints. The
             key is stored locally and only used by the main process. Each profile can use a different
-            model; the active profile is used for AI requests.
+            model. Switch the Copilot model tier from the sidebar dropdown; configure the terminal
+            AI mode model tier here (default: Fast).
           </div>
         </div>
         <div className="modal-footer">

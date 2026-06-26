@@ -48,7 +48,11 @@ export function cloneModels(
 
 /** Normalize persisted or partial AI settings (incl. legacy `model` field). */
 export function normalizeAISettings(raw: unknown): AISettings {
-  const input = (raw ?? {}) as Partial<AISettings> & { model?: string }
+  const input = (raw ?? {}) as Partial<AISettings> & {
+    model?: string
+    /** @deprecated migrated to copilotModelProfile */
+    modelProfile?: ModelProfile
+  }
   const legacyModel = typeof input.model === 'string' ? input.model : ''
 
   const models = cloneModels(input.models)
@@ -58,16 +62,26 @@ export function normalizeAISettings(raw: unknown): AISettings {
     models.default = legacyModel
   }
 
+  const legacyProfile = isModelProfile(input.modelProfile) ? input.modelProfile : undefined
+
   return {
     baseURL: typeof input.baseURL === 'string' ? input.baseURL : '',
     apiKey: typeof input.apiKey === 'string' ? input.apiKey : '',
-    modelProfile: isModelProfile(input.modelProfile) ? input.modelProfile : 'default',
+    copilotModelProfile: isModelProfile(input.copilotModelProfile)
+      ? input.copilotModelProfile
+      : legacyProfile ?? 'default',
+    nlModelProfile: isModelProfile(input.nlModelProfile) ? input.nlModelProfile : 'fast',
     models
   }
 }
 
-/** Resolve the model name for the active profile. */
-export function resolveActiveModel(settings: AISettings): string {
-  const model = settings.models[settings.modelProfile]?.trim()
+/** Resolve the model name for a given profile tier. */
+export function resolveModel(settings: AISettings, profile: ModelProfile): string {
+  const model = settings.models[profile]?.trim()
   return model || FALLBACK_MODEL
+}
+
+/** Resolve the model name for the Copilot sidebar profile. */
+export function resolveActiveModel(settings: AISettings): string {
+  return resolveModel(settings, settings.copilotModelProfile)
 }

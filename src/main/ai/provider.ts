@@ -1,5 +1,5 @@
 import OpenAI from 'openai'
-import { resolveActiveModel } from '../../shared/aiSettings'
+import { resolveActiveModel, resolveModel } from '../../shared/aiSettings'
 import type {
   AISettings,
   AIChatRequest,
@@ -160,7 +160,7 @@ export class AIProvider {
     messages.push({ role: 'user', content: req.prompt })
 
     const completion = await client.chat.completions.create(
-      ollamaDirectAnswerBody(resolveActiveModel(settings), messages)
+      ollamaDirectAnswerBody(resolveModel(settings, settings.nlModelProfile), messages)
     )
     return extractMessageText(completion.choices[0]?.message)
   }
@@ -206,7 +206,7 @@ export class AIProvider {
     let full = ''
     try {
       const stream = await client.chat.completions.create(
-        ollamaDirectAnswerStreamBody(resolveActiveModel(settings), messages, 256),
+        ollamaDirectAnswerStreamBody(resolveModel(settings, settings.nlModelProfile), messages, 256),
         { signal: controller.signal }
       )
 

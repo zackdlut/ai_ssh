@@ -7,6 +7,8 @@ import {
 } from '../../store/aiStore'
 import { useTabsStore } from '../../store/tabsStore'
 import { sendPrompt } from '../../lib/aiService'
+import { MODEL_PROFILES, normalizeAISettings, resolveModel } from '../../../shared/aiSettings'
+import type { ModelProfile } from '../../../shared/types'
 import ChatMessage from './ChatMessage'
 
 const EXAMPLE_PROMPTS = [
@@ -24,8 +26,37 @@ export default function SidePanel(): JSX.Element {
   const [input, setInput] = useState('')
   const [resizing, setResizing] = useState(false)
   const [mentionOpen, setMentionOpen] = useState(false)
+  const [copilotProfile, setCopilotProfile] = useState<ModelProfile>('default')
+  const [modelNames, setModelNames] = useState<Record<ModelProfile, string>>({
+    default: '',
+    fast: '',
+    medium: '',
+    high: '',
+    custom: ''
+  })
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    void window.api.config.getAISettings().then((s) => {
+      const normalized = normalizeAISettings(s)
+      setCopilotProfile(normalized.copilotModelProfile)
+      setModelNames({ ...normalized.models })
+    })
+  }, [])
+
+  const activeModelName = resolveModel(
+    { baseURL: '', apiKey: '', copilotModelProfile: copilotProfile, nlModelProfile: 'fast', models: modelNames },
+    copilotProfile
+  )
+
+  const onProfileChange = (profile: ModelProfile): void => {
+    setCopilotProfile(profile)
+    void window.api.config.getAISettings().then((s) => {
+      const normalized = normalizeAISettings(s)
+      void window.api.config.setAISettings({ ...normalized, copilotModelProfile: profile })
+    })
+  }
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight })
@@ -195,9 +226,24 @@ export default function SidePanel(): JSX.Element {
           placeholder="Describe what you want to do…（输入 @terminal 绑定终端）"
         />
         <div className="composer-actions">
-          <span className="context-hint">
-            {activeTab ? `Context: ${activeTab.username}@${activeTab.host}` : 'No active terminal'}
-          </span>
+          <div className="composer-meta">
+            <select
+              className="model-select"
+              value={copilotProfile}
+              disabled={busy}
+              title={activeModelName}
+              onChange={(e) => onProfileChange(e.target.value as ModelProfile)}
+            >
+              {MODEL_PROFILES.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+            <span className="context-hint">
+              {activeTab ? `${activeTab.username}@${activeTab.host}` : 'No active terminal'}
+            </span>
+          </div>
           {busy ? (
             <button className="danger" onClick={stop}>
               Stop

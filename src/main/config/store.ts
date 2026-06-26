@@ -23,7 +23,8 @@ function store(): Store<StoreSchema> {
           // Ollama exposes an OpenAI-compatible API under /v1.
           baseURL: 'http://10.67.34.44:11434/v1',
           apiKey: 'ollam',
-          modelProfile: 'default',
+          copilotModelProfile: 'default',
+          nlModelProfile: 'fast',
           models: { ...DEFAULT_MODELS }
         },
         theme: 'aurora',

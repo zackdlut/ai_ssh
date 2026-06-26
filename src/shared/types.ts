@@ -59,8 +59,10 @@ export type ModelProfile = 'default' | 'fast' | 'medium' | 'high' | 'custom'
 export interface AISettings {
   baseURL: string
   apiKey: string
-  /** Currently active model profile. */
-  modelProfile: ModelProfile
+  /** Model profile used by the AI Copilot sidebar chat. */
+  copilotModelProfile: ModelProfile
+  /** Model profile used by in-terminal natural-language mode. */
+  nlModelProfile: ModelProfile
   /** Model name per profile tier. */
   models: Record<ModelProfile, string>
 }
