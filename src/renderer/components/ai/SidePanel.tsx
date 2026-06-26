@@ -311,24 +311,34 @@ export default function SidePanel(): JSX.Element {
       </div>
 
       <div className="composer">
-        {mentionOpen && (
-          <div className="mention-menu" role="listbox">
-            <button className="mention-item" onMouseDown={(e) => e.preventDefault()} onClick={insertTerminalMention}>
-              <span className="mention-name">@terminal</span>
-              <span className="mention-desc">{t('copilot.mentionDesc')}</span>
-            </button>
-          </div>
-        )}
-        <textarea
-          ref={inputRef}
-          value={input}
-          onChange={onInputChange}
-          onKeyDown={onKeyDown}
-          onContextMenu={onComposerContextMenu}
-          placeholder={t('copilot.placeholder')}
-        />
-        <div className="composer-actions">
-          <div className="composer-meta">
+        <span
+          className={`context-hint context-hint--composer ${terminalState}`}
+          title={terminalLabel}
+        >
+          {terminalLabel}
+        </span>
+        <div className="composer-box">
+          {mentionOpen && (
+            <div className="mention-menu" role="listbox">
+              <button
+                className="mention-item"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={insertTerminalMention}
+              >
+                <span className="mention-name">@terminal</span>
+                <span className="mention-desc">{t('copilot.mentionDesc')}</span>
+              </button>
+            </div>
+          )}
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={onInputChange}
+            onKeyDown={onKeyDown}
+            onContextMenu={onComposerContextMenu}
+            placeholder={t('copilot.placeholder')}
+          />
+          <div className="composer-toolbar">
             <ModelSelect
               value={copilotProfile}
               modelNames={modelNames}
@@ -336,19 +346,31 @@ export default function SidePanel(): JSX.Element {
               disabled={busy}
               onChange={onProfileChange}
             />
-            <span className={`context-hint context-hint--composer ${terminalState}`} title={terminalLabel}>
-              {terminalLabel}
-            </span>
+            {busy ? (
+              <button
+                type="button"
+                className="composer-send danger"
+                onClick={stop}
+                title={t('copilot.stop')}
+                aria-label={t('copilot.stop')}
+              >
+                <span className="composer-send-icon composer-send-icon--stop" aria-hidden />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="composer-send primary"
+                onClick={send}
+                disabled={!input.trim()}
+                title={t('copilot.send')}
+                aria-label={t('copilot.send')}
+              >
+                <span className="composer-send-icon" aria-hidden>
+                  ↑
+                </span>
+              </button>
+            )}
           </div>
-          {busy ? (
-            <button className="danger" onClick={stop}>
-              {t('copilot.stop')}
-            </button>
-          ) : (
-            <button className="primary" onClick={send} disabled={!input.trim()}>
-              {t('copilot.send')}
-            </button>
-          )}
         </div>
       </div>
 

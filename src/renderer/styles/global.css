@@ -1202,15 +1202,89 @@ select:focus {
   padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 8px;
   background: rgba(255, 255, 255, 0.015);
+}
+
+.composer-box {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(
+    180deg,
+    rgba(91, 233, 208, 0.04),
+    var(--control-inset)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    inset 0 -8px 16px -12px rgba(0, 0, 0, 0.18);
+  transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.composer-box:focus-within {
+  background: linear-gradient(
+    180deg,
+    rgba(91, 233, 208, 0.06),
+    rgba(255, 255, 255, 0.06)
+  );
+  border-color: var(--accent-border);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 0 0 3px var(--accent-ring);
+}
+
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 4px 6px 6px 4px;
+}
+
+.composer-toolbar .composer-send {
+  margin-left: auto;
+}
+
+.composer-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.composer-send:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.composer-send-icon {
+  display: block;
+  font-weight: 700;
+  transform: translateY(-1px);
+}
+
+.composer-send-icon--stop {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: currentColor;
+  transform: none;
 }
 
 .mention-menu {
   position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: calc(100% - 6px);
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
   z-index: 20;
   border: 1px solid var(--line-strong);
   border-radius: 10px;
@@ -1253,28 +1327,24 @@ select:focus {
   min-height: 56px;
   max-height: 150px;
   line-height: 1.5;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 12px 12px 0 0;
 }
 
-.composer-actions {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
+.composer textarea:focus {
+  outline: none;
+  border: none;
+  box-shadow: none;
 }
 
-.composer-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  min-width: 0;
-}
-
-/* Copilot model tier picker — rounded rect, matches composer controls */
+/* Copilot model tier picker — width matches dropdown menu */
 .model-select-wrap {
   position: relative;
+  flex: 0 0 auto;
   flex-shrink: 0;
-  width: 168px;
+  width: 220px;
 }
 
 .model-select-trigger {
@@ -1508,9 +1578,14 @@ select:focus {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 1;
   min-width: 0;
   line-height: 1;
+}
+
+.copilot-panel .context-hint--composer {
+  flex: 0 1 auto;
+  max-width: 100%;
+  padding: 0 2px;
 }
 
 .copilot-panel .context-hint::before {
@@ -1559,41 +1634,56 @@ select:focus {
 
 .copilot-panel .composer {
   padding: 12px 12px 14px;
-  gap: 10px;
+  gap: 8px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.01));
 }
 
 .copilot-panel .composer textarea {
-  border-radius: 12px;
   min-height: 60px;
-  padding: 10px 12px;
-  background: linear-gradient(
-    180deg,
-    rgba(91, 233, 208, 0.04),
-    var(--control-inset)
-  );
-  border: 1px solid var(--line);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    inset 0 -8px 16px -12px rgba(0, 0, 0, 0.18);
+  padding: 10px 12px 6px;
   line-height: 1.55;
   color: var(--text);
-  transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
 }
 
-.copilot-panel .composer textarea:focus {
-  background: linear-gradient(
-    180deg,
-    rgba(91, 233, 208, 0.06),
-    rgba(255, 255, 255, 0.06)
-  );
-  border-color: var(--accent-border);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.07),
-    0 0 0 3px var(--accent-ring);
+.copilot-panel .composer-box {
+  border-radius: 12px;
 }
 
-[data-theme='dawn'] .copilot-panel .composer textarea {
+.copilot-panel .composer-toolbar .model-select-wrap {
+  flex: 0 0 220px;
+  width: 220px;
+  min-width: 0;
+}
+
+.copilot-panel .composer-toolbar .model-select-trigger {
+  height: 26px;
+  padding: 0 8px 0 6px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.copilot-panel .composer-toolbar .model-select-trigger::before {
+  display: none;
+}
+
+.copilot-panel .composer-toolbar .model-select-trigger:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: transparent;
+}
+
+.copilot-panel .composer-toolbar .model-select-trigger.open,
+.copilot-panel .composer-toolbar .model-select-trigger:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+}
+
+.copilot-panel .composer-send.primary:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+[data-theme='dawn'] .copilot-panel .composer-box {
   background: linear-gradient(
     180deg,
     rgba(255, 255, 255, 0.96),
@@ -1603,7 +1693,7 @@ select:focus {
   box-shadow: inset 0 1px 2px rgba(26, 31, 46, 0.04);
 }
 
-[data-theme='dawn'] .copilot-panel .composer textarea:focus {
+[data-theme='dawn'] .copilot-panel .composer-box:focus-within {
   background: #fff;
   border-color: var(--accent-border-strong);
   box-shadow:
@@ -1611,13 +1701,12 @@ select:focus {
     0 0 0 3px var(--accent-ring);
 }
 
-.copilot-panel .composer-actions > .primary,
-.copilot-panel .composer-actions > .danger {
-  border-radius: 999px;
-  flex-shrink: 0;
-  padding: 6px 16px;
-  font-size: 12px;
-  min-width: 64px;
+[data-theme='dawn'] .copilot-panel .composer-toolbar .model-select-trigger:hover:not(:disabled),
+[data-theme='dawn'] .copilot-panel .composer-toolbar .model-select-trigger.open,
+[data-theme='dawn'] .copilot-panel .composer-toolbar .model-select-trigger:focus-visible {
+  background: rgba(26, 31, 46, 0.05);
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .copilot-panel .chat-empty {
@@ -3174,17 +3263,7 @@ select:focus {
     font-family: inherit;
   }
 
-  .copilot-panel .composer-meta .context-hint--composer {
+  .copilot-panel .context-hint--composer {
     display: none;
-  }
-
-  .copilot-panel .composer-meta {
-    flex: 0 1 auto;
-  }
-
-  .copilot-panel .model-select-wrap {
-    flex: 1 1 auto;
-    width: auto;
-    min-width: 0;
   }
 }
