@@ -199,7 +199,7 @@ export default function SidePanel(): JSX.Element {
   }
 
   return (
-    <div className="side-panel" style={{ width: panelWidth }}>
+    <div className="side-panel copilot-panel" style={{ width: panelWidth }}>
       <div
         className={`panel-resizer ${resizing ? 'active' : ''}`}
         role="separator"
@@ -219,11 +219,11 @@ export default function SidePanel(): JSX.Element {
           <span className="spark" />
           {t('copilot.title')}
         </span>
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div className="panel-toolbar">
           <button className="toolbar-btn" onClick={clear} title={t('copilot.clearTitle')}>
             {t('copilot.clear')}
           </button>
-          <button className="toolbar-btn" onClick={() => setPanelOpen(false)} title={t('copilot.hide')}>
+          <button className="toolbar-btn panel-close" onClick={() => setPanelOpen(false)} title={t('copilot.hide')}>
             ✕
           </button>
         </div>
@@ -285,7 +285,7 @@ export default function SidePanel(): JSX.Element {
                 </option>
               ))}
             </select>
-            <span className="context-hint">
+            <span className={`context-hint ${activeTab ? 'live' : 'idle'}`} title={activeTab ? `${activeTab.username}@${activeTab.host}` : t('copilot.noTerminal')}>
               {activeTab ? `${activeTab.username}@${activeTab.host}` : t('copilot.noTerminal')}
             </span>
           </div>

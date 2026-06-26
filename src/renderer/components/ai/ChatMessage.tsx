@@ -111,6 +111,7 @@ function renderSegment(
 export default function ChatMessage({ message }: Props): JSX.Element {
   const isUser = message.role === 'user'
   const [mode, setMode] = useState<'preview' | 'source'>('preview')
+  const [copied, setCopied] = useState(false)
   const t = useT()
 
   if (isUser) {
@@ -125,20 +126,38 @@ export default function ChatMessage({ message }: Props): JSX.Element {
   const empty = message.content.trim().length === 0
   const segments = mode === 'preview' ? splitSegments(message.content) : []
 
+  const copy = async (): Promise<void> => {
+    await navigator.clipboard.writeText(message.content)
+    setCopied(true)
+  }
+
   return (
     <div className="chat-msg assistant">
       <div className="msg-head">
         <span className="role">Copilot</span>
         {!empty && (
-          <div className="seg mini">
+          <div className="seg mini msg-toolbar">
             <button
-              className={mode === 'preview' ? 'active' : ''}
+              type="button"
+              className={`msg-toolbar-btn ${mode === 'preview' ? 'active' : ''}`}
               onClick={() => setMode('preview')}
             >
               {t('chat.preview')}
             </button>
-            <button className={mode === 'source' ? 'active' : ''} onClick={() => setMode('source')}>
+            <button
+              type="button"
+              className={`msg-toolbar-btn ${mode === 'source' ? 'active' : ''}`}
+              onClick={() => setMode('source')}
+            >
               {t('chat.source')}
+            </button>
+            <button
+              type="button"
+              className={`msg-toolbar-btn copy-btn ${copied ? 'copied' : ''}`}
+              onClick={() => void copy()}
+              title={copied ? t('cmd.copied') : t('common.copy')}
+            >
+              {copied ? t('cmd.copied') : t('common.copy')}
             </button>
           </div>
         )}
