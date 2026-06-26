@@ -1,4 +1,4 @@
-import { ipcMain, dialog, type BrowserWindow } from 'electron'
+import { app, ipcMain, dialog, type BrowserWindow } from 'electron'
 import { basename } from 'path'
 import { SshManager } from './ssh/manager'
 import { AIProvider } from './ai/provider'
@@ -14,6 +14,7 @@ import type {
   AISettings,
   AppLocale,
   AppTheme,
+  AppInfo,
   AITranslateRequest,
   AITranslateResult,
   AISummarizeRequest,
@@ -178,6 +179,21 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
         return { error: errMessage(err) }
       }
     }
+  )
+
+  // --- App ---
+  ipcMain.handle(
+    'app:getInfo',
+    (): AppInfo => ({
+      name: 'AI Terminal',
+      version: app.getVersion(),
+      description:
+        'AI-Augmented multi-tab SSH terminal with an integrated AI Copilot side panel.',
+      author: 'zackdlut',
+      email: 'zack.dlut@gmail.com',
+      license: 'MIT',
+      electron: process.versions.electron ?? ''
+    })
   )
 
   // --- Config ---

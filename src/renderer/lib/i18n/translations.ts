@@ -31,6 +31,7 @@ const zh = {
   'tabbar.themes': '主题',
   'tabbar.aiSettings': 'AI 设置',
   'tabbar.language': '语言',
+  'tabbar.about': '关于',
   'tabbar.aiCopilot': 'AI Copilot',
   'tabbar.toggleAi': '切换 AI 面板',
   'tabbar.sftp': 'SFTP',
@@ -88,6 +89,16 @@ const zh = {
   'themes.title': '主题',
   'themes.lead': '选择界面配色。切换后立即生效，并会保存到本地配置。',
   'themes.current': '当前',
+
+  'about.title': '关于',
+  'about.version': '版本 {version}',
+  'about.description':
+    '一个 MobaXterm 风格的多 tab SSH 终端，内置 AI Copilot 侧边栏。融合终端上下文感知与自然语言命令生成，让远程运维更高效。',
+  'about.author': '作者',
+  'about.email': '邮箱',
+  'about.electron': 'Electron',
+  'about.license': '许可证',
+
   'theme.aurora.label': 'Aurora Ink',
   'theme.aurora.description': '深墨底色与极光微光，适合长时间终端工作',
   'theme.aurora.tag': '深色',
@@ -241,6 +252,7 @@ const en: Record<keyof typeof zh, string> = {
   'tabbar.themes': 'Themes',
   'tabbar.aiSettings': 'AI Settings',
   'tabbar.language': 'Language',
+  'tabbar.about': 'About',
   'tabbar.aiCopilot': 'AI Copilot',
   'tabbar.toggleAi': 'Toggle AI panel',
   'tabbar.sftp': 'SFTP',
@@ -300,6 +312,16 @@ const en: Record<keyof typeof zh, string> = {
   'themes.title': 'Themes',
   'themes.lead': 'Choose a color theme. Changes apply immediately and are saved locally.',
   'themes.current': 'Current',
+
+  'about.title': 'About',
+  'about.version': 'Version {version}',
+  'about.description':
+    'A MobaXterm-style multi-tab SSH terminal with an integrated AI Copilot side panel. Combines terminal context awareness with natural-language command generation for efficient remote operations.',
+  'about.author': 'Author',
+  'about.email': 'Email',
+  'about.electron': 'Electron',
+  'about.license': 'License',
+
   'theme.aurora.label': 'Aurora Ink',
   'theme.aurora.description': 'Deep ink base with aurora highlights — built for long terminal sessions',
   'theme.aurora.tag': 'Dark',

@@ -6,7 +6,7 @@ import { useBookmarksStore } from '../store/bookmarksStore'
 import { cloneTab, connectFromConfig, reconnectTab } from '../lib/connect'
 import { useT } from '../lib/i18n'
 
-export type SettingsMenuItem = 'ai' | 'themes' | 'language'
+export type SettingsMenuItem = 'ai' | 'themes' | 'language' | 'about'
 
 interface Props {
   sidebarOpen: boolean
@@ -204,6 +204,16 @@ export default function TabBar({
               }}
             >
               {t('tabbar.aiSettings')}
+            </button>
+            <div className="toolbar-dropdown-divider" role="separator" />
+            <button
+              className="toolbar-dropdown-item"
+              onClick={() => {
+                setSettingsOpen(false)
+                onSettingsSelect('about')
+              }}
+            >
+              {t('tabbar.about')}
             </button>
           </div>
         )}

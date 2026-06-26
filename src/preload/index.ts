@@ -8,6 +8,7 @@ import type {
   AIDoneEvent,
   AIErrorEvent,
   AISettings,
+  AppInfo,
   AppLocale,
   AppTheme,
   AITranslateRequest,
@@ -34,6 +35,9 @@ function on<T>(channel: string, cb: (payload: T) => void): Unsubscribe {
 }
 
 const api = {
+  app: {
+    getInfo: (): Promise<AppInfo> => ipcRenderer.invoke('app:getInfo')
+  },
   ssh: {
     connect: (opts: ConnectOptions): Promise<ConnectResult> =>
       ipcRenderer.invoke('ssh:connect', opts),

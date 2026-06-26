@@ -8,6 +8,7 @@ import ConnectionSidebar from './components/connection/ConnectionSidebar'
 import SettingsModal from './components/ai/SettingsModal'
 import ThemesModal from './components/settings/ThemesModal'
 import LanguageModal from './components/settings/LanguageModal'
+import AboutModal from './components/settings/AboutModal'
 import { useTabsStore } from './store/tabsStore'
 import { useAIStore } from './store/aiStore'
 import { useSftpStore } from './store/sftpStore'
@@ -107,6 +108,7 @@ export default function App(): JSX.Element {
       {settingsPanel === 'ai' && <SettingsModal onClose={() => setSettingsPanel(null)} />}
       {settingsPanel === 'themes' && <ThemesModal onClose={() => setSettingsPanel(null)} />}
       {settingsPanel === 'language' && <LanguageModal onClose={() => setSettingsPanel(null)} />}
+      {settingsPanel === 'about' && <AboutModal onClose={() => setSettingsPanel(null)} />}
     </div>
   )
 }

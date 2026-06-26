@@ -201,3 +201,13 @@ export interface AIErrorEvent {
   requestId: string
   error: string
 }
+
+export interface AppInfo {
+  name: string
+  version: string
+  description: string
+  author: string
+  email: string
+  license: string
+  electron: string
+}
