@@ -10,6 +10,8 @@ import { sendPrompt } from '../../lib/aiService'
 import { normalizeAISettings } from '../../../shared/aiSettings'
 import type { ModelProfile } from '../../../shared/types'
 import { useT, type TranslationKey } from '../../lib/i18n'
+import { SHORTCUT_COPY, SHORTCUT_CUT, SHORTCUT_PASTE } from '../../lib/shortcuts'
+import ContextMenuItem from '../ContextMenuItem'
 import { useLocaleStore } from '../../store/localeStore'
 import ChatMessage from './ChatMessage'
 import ModelSelect from './ModelSelect'
@@ -378,22 +380,28 @@ export default function SidePanel(): JSX.Element {
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
           {menu.source === 'composer' ? (
             <>
-              <button
+              <ContextMenuItem
+                shortcut={SHORTCUT_COPY}
                 onClick={copySelection}
                 disabled={menu.selectionStart === menu.selectionEnd}
               >
                 {t('common.copy')}
-              </button>
-              <button
+              </ContextMenuItem>
+              <ContextMenuItem
+                shortcut={SHORTCUT_CUT}
                 onClick={cutSelection}
                 disabled={menu.selectionStart === menu.selectionEnd}
               >
                 {t('common.cut')}
-              </button>
-              <button onClick={pasteToComposer}>{t('common.paste')}</button>
+              </ContextMenuItem>
+              <ContextMenuItem shortcut={SHORTCUT_PASTE} onClick={pasteToComposer}>
+                {t('common.paste')}
+              </ContextMenuItem>
             </>
           ) : (
-            <button onClick={copySelection}>{t('common.copy')}</button>
+            <ContextMenuItem shortcut={SHORTCUT_COPY} onClick={copySelection}>
+              {t('common.copy')}
+            </ContextMenuItem>
           )}
         </div>
       )}

@@ -14,6 +14,8 @@ import { useLocaleStore } from '../store/localeStore'
 import { t, useT } from '../lib/i18n'
 import type { AppLocale } from '../../shared/types'
 import type { CommandRun } from '../../shared/types'
+import { SHORTCUT_ASK_COPILOT, SHORTCUT_COPY } from '../lib/shortcuts'
+import ContextMenuItem from './ContextMenuItem'
 
 interface Props {
   tab: TerminalTab
@@ -387,6 +389,46 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       finishNl()
     }
 
+    const insertNlChar = (ch: string): void => {
+      const nl = nlRef.current
+      const rest = nl.buffer.slice(nl.cursor)
+      nl.buffer = nl.buffer.slice(0, nl.cursor) + ch + rest
+      nl.cursor++
+      term.write(ch + rest)
+      if (rest.length > 0) term.write(' \b'.repeat(rest.length + 1))
+    }
+
+    const clearNlLine = (): void => {
+      const nl = nlRef.current
+      while (nl.cursor < nl.buffer.length) {
+        term.write(nl.buffer[nl.cursor])
+        nl.cursor++
+      }
+      while (nl.cursor > 0) {
+        term.write('\b \b')
+        nl.cursor--
+      }
+      nl.buffer = ''
+    }
+
+    const nlCopy = (): void => {
+      const nl = nlRef.current
+      if (!nl.buffer) return
+      void navigator.clipboard.writeText(nl.buffer)
+    }
+
+    const nlCut = (): void => {
+      const nl = nlRef.current
+      if (!nl.buffer) return
+      void navigator.clipboard.writeText(nl.buffer)
+      clearNlLine()
+    }
+
+    const nlInsertPasteText = (clip: string): void => {
+      const text = clip.replace(/[\r\n]+/g, ' ')
+      for (const ch of text) insertNlChar(ch)
+    }
+
     const handleNlInput = (data: string): void => {
       const nl = nlRef.current
 
@@ -426,11 +468,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       }
 
       const insertChar = (ch: string): void => {
-        const rest = nl.buffer.slice(nl.cursor)
-        nl.buffer = nl.buffer.slice(0, nl.cursor) + ch + rest
-        nl.cursor++
-        term.write(ch + rest)
-        if (rest.length > 0) term.write(' \b'.repeat(rest.length + 1))
+        insertNlChar(ch)
       }
 
       const consumeEscape = (start: number): number => {
@@ -494,12 +532,95 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
     // F12 toggles NL mode. Returning false stops xterm from emitting the
     // function-key escape sequence (which would otherwise hit the shell).
     term.attachCustomKeyEventHandler((e) => {
-      if (e.type === 'keydown' && e.key === 'F12') {
+      if (e.type !== 'keydown') return true
+
+      if (e.key === 'F12') {
         toggleNl()
         return false
       }
+
+      if (e.isComposing || e.keyCode === 229) return true
+
+      const mod = e.ctrlKey || e.metaKey
+      if (!mod || e.altKey) return true
+
+      const nl = nlRef.current
+      const key = e.key.toLowerCase()
+
+      if (key === 'c') {
+        // NL busy: keep Ctrl+C as interrupt for the remote command.
+        if (nl.mode === 'nl' && nl.busy) return true
+        const selection = term.getSelection()
+        if (selection) {
+          void navigator.clipboard.writeText(selection)
+          return false
+        }
+        if (nl.mode === 'nl' && !nl.confirmResolver && nl.buffer) {
+          nlCopy()
+          return false
+        }
+        return true
+      }
+
+      if (key === 'x') {
+        const selection = term.getSelection()
+        if (selection) {
+          void navigator.clipboard.writeText(selection)
+          return false
+        }
+        if (nl.mode === 'nl' && !nl.busy && !nl.confirmResolver) {
+          nlCut()
+          return false
+        }
+        return false
+      }
+
+      if (key === 'v') {
+        if (nl.mode === 'nl' && nl.busy) return true
+        if (nl.mode === 'nl' && nl.confirmResolver) return true
+        // Insertion is handled by the paste listener; block xterm's Ctrl+V key path only.
+        return false
+      }
+
+      if (key === 'f') {
+        const selection = term.getSelection().trim()
+        if (selection) {
+          e.preventDefault()
+          askAboutSelection(selection)
+          return false
+        }
+        return true
+      }
+
       return true
     })
+
+    const pasteIntoTerminal = (clip: string): void => {
+      const nl = nlRef.current
+      if (nl.mode === 'nl') {
+        nlInsertPasteText(clip)
+      } else {
+        window.api.ssh.write(tab.sessionId, clip)
+      }
+    }
+
+    // Single paste entry: Ctrl+V / Shift+Insert / menu paste all fire a paste event.
+    // Capture phase runs before xterm so we can prevent its duplicate handling.
+    const onTerminalPaste = (e: ClipboardEvent): void => {
+      const nl = nlRef.current
+      if (nl.mode === 'nl' && (nl.busy || nl.confirmResolver)) return
+      e.preventDefault()
+      e.stopPropagation()
+      const clip = e.clipboardData?.getData('text/plain')
+      if (clip) {
+        pasteIntoTerminal(clip)
+        return
+      }
+      void navigator.clipboard.readText().then((text) => {
+        if (text) pasteIntoTerminal(text)
+      })
+    }
+    term.textarea?.addEventListener('paste', onTerminalPaste, true)
 
     const onDataDisposable = term.onData((data) => {
       const nl = nlRef.current
@@ -564,6 +685,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
     term.focus()
 
     return () => {
+      term.textarea?.removeEventListener('paste', onTerminalPaste, true)
       onDataDisposable.dispose()
       onResizeDisposable.dispose()
       dataUnsub()
@@ -658,8 +780,12 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       />
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
-          <button onClick={ask}>{tr('terminal.askCopilot')}</button>
-          <button onClick={copy}>{tr('common.copy')}</button>
+          <ContextMenuItem shortcut={SHORTCUT_ASK_COPILOT} onClick={ask}>
+            {tr('terminal.askCopilot')}
+          </ContextMenuItem>
+          <ContextMenuItem shortcut={SHORTCUT_COPY} onClick={copy}>
+            {tr('common.copy')}
+          </ContextMenuItem>
         </div>
       )}
     </>
