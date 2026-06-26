@@ -101,6 +101,18 @@
   --scrollbar-thumb-hover: rgba(91, 233, 208, 0.4);
   --scrollbar-track: rgba(148, 163, 196, 0.25);
 
+  /* Markdown / prose rendering */
+  --md-code-bg: rgba(4, 10, 18, 0.72);
+  --md-code-border: rgba(91, 233, 208, 0.3);
+  --md-code-fg: #b8f5ec;
+  --md-strong-fg: #f4f7ff;
+  --md-pre-bg: #05070d;
+  --md-pre-fg: #d8f7f0;
+  --md-blockquote-bg: rgba(91, 233, 208, 0.06);
+  --md-blockquote-border: var(--signal-strong);
+  --md-th-bg: rgba(255, 255, 255, 0.05);
+  --md-heading-fg: var(--text);
+
   --radius: 12px;
   --radius-sm: 8px;
 
@@ -199,6 +211,17 @@
   --scrollbar-thumb: rgba(92, 99, 120, 0.22);
   --scrollbar-thumb-hover: rgba(10, 157, 135, 0.35);
   --scrollbar-track: rgba(92, 99, 120, 0.28);
+
+  --md-code-bg: rgba(10, 157, 135, 0.11);
+  --md-code-border: rgba(10, 157, 135, 0.34);
+  --md-code-fg: #0a4a42;
+  --md-strong-fg: #121722;
+  --md-pre-bg: #1a1f2e;
+  --md-pre-fg: #eef2f8;
+  --md-blockquote-bg: rgba(10, 157, 135, 0.08);
+  --md-blockquote-border: var(--signal-strong);
+  --md-th-bg: rgba(26, 31, 46, 0.06);
+  --md-heading-fg: var(--text);
 }
 
 [data-theme='dawn'] body {
@@ -218,6 +241,16 @@
   box-shadow:
     var(--shadow-soft),
     inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+[data-theme='dawn'] .chat-msg.assistant .chat-bubble {
+  background: rgba(255, 255, 255, 0.78);
+  border-color: var(--line-strong);
+}
+
+[data-theme='dawn'] .chat-msg.user .chat-bubble {
+  background: linear-gradient(135deg, rgba(10, 157, 135, 0.14), rgba(59, 111, 217, 0.1));
+  border-color: rgba(10, 157, 135, 0.3);
 }
 
 * {
@@ -1177,6 +1210,7 @@ select:focus {
   line-height: 1.3;
   font-weight: 700;
   letter-spacing: 0.01em;
+  color: var(--md-heading-fg);
 }
 .md h1 {
   font-size: 1.4em;
@@ -1193,47 +1227,54 @@ select:focus {
 }
 .md p {
   margin: 8px 0;
+  color: var(--text);
 }
 .md ul,
 .md ol {
   margin: 8px 0;
   padding-left: 22px;
+  color: var(--text);
 }
 .md li {
   margin: 3px 0;
 }
 .md li::marker {
-  color: var(--signal);
+  color: var(--signal-strong);
 }
 .md a {
-  color: var(--signal);
+  color: var(--signal-strong);
   text-decoration: none;
-  border-bottom: 1px solid rgba(91, 233, 208, 0.35);
+  border-bottom: 1px solid var(--accent-border);
+  font-weight: 500;
 }
 .md a:hover {
+  color: var(--signal);
   border-bottom-color: var(--signal);
 }
 .md strong {
-  color: #f4f7ff;
+  color: var(--md-strong-fg);
   font-weight: 700;
 }
 .md em {
   color: var(--text);
 }
-.md code {
+.md :not(pre) > code {
   font-family: var(--font-mono);
-  font-size: 0.9em;
-  background: rgba(91, 233, 208, 0.1);
-  border: 1px solid rgba(91, 233, 208, 0.16);
-  color: #d8f7f0;
-  padding: 1px 5px;
+  font-size: 0.88em;
+  font-weight: 500;
+  background: var(--md-code-bg);
+  border: 1px solid var(--md-code-border);
+  color: var(--md-code-fg);
+  padding: 2px 6px;
   border-radius: 5px;
+  letter-spacing: -0.01em;
+  word-break: break-word;
 }
 .md pre {
   margin: 10px 0;
   padding: 12px 13px;
-  background: #05070d;
-  border: 1px solid var(--line);
+  background: var(--md-pre-bg);
+  border: 1px solid var(--line-strong);
   border-radius: 10px;
   overflow-x: auto;
 }
@@ -1241,21 +1282,22 @@ select:focus {
   background: none;
   border: none;
   padding: 0;
-  color: #d8f7f0;
+  color: var(--md-pre-fg);
   font-size: 12.5px;
   line-height: 1.55;
+  font-weight: 400;
 }
 .md blockquote {
   margin: 10px 0;
   padding: 4px 13px;
-  border-left: 3px solid var(--signal-strong);
-  background: rgba(91, 233, 208, 0.06);
+  border-left: 3px solid var(--md-blockquote-border);
+  background: var(--md-blockquote-bg);
   border-radius: 0 8px 8px 0;
   color: var(--text-dim);
 }
 .md hr {
   border: none;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--line-strong);
   margin: 14px 0;
 }
 .md table {
@@ -1265,16 +1307,21 @@ select:focus {
   font-size: 12.5px;
   display: block;
   overflow-x: auto;
+  color: var(--text);
 }
 .md th,
 .md td {
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   padding: 6px 10px;
   text-align: left;
 }
 .md th {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--md-th-bg);
   font-weight: 600;
+  color: var(--text);
+}
+.md td {
+  color: var(--text);
 }
 .md img {
   max-width: 100%;
@@ -1328,7 +1375,7 @@ select:focus {
   width: 100%;
   height: 160px;
   border: 0;
-  background: #05070d;
+  background: var(--md-pre-bg);
 }
 .chart-canvas {
   width: 100%;
@@ -1377,11 +1424,11 @@ select:focus {
 .command-card pre {
   margin: 0;
   padding: 12px 13px;
-  background: linear-gradient(180deg, rgba(91, 233, 208, 0.05), transparent 60%), #05070d;
+  background: linear-gradient(180deg, var(--accent-subtle), transparent 60%), var(--md-pre-bg);
   font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.55;
-  color: #d8f7f0;
+  color: var(--md-pre-fg);
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-all;
