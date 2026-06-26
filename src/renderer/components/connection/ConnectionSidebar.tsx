@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useBookmarksStore, type TreeNode } from '../../store/bookmarksStore'
+import {
+  useConnSidebarStore,
+  clampConnSidebarWidth,
+  CONN_SIDEBAR_MIN_WIDTH,
+  CONN_SIDEBAR_MAX_WIDTH
+} from '../../store/connSidebarStore'
 import { useTabsStore } from '../../store/tabsStore'
 import { connectFromConfig } from '../../lib/connect'
 import type { ConnectionConfig } from '../../../shared/types'
@@ -37,10 +43,12 @@ export default function ConnectionSidebar({
   const folders = useBookmarksStore((s) => s.folders)
   const connections = useBookmarksStore((s) => s.connections)
   const tabs = useTabsStore((s) => s.tabs)
+  const { panelWidth, setPanelWidth } = useConnSidebarStore()
 
   const tree = getTree()
 
   const [menu, setMenu] = useState<Menu | null>(null)
+  const [resizing, setResizing] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -167,6 +175,34 @@ export default function ConnectionSidebar({
     if (dragged) await move(dragged, null, null)
   }
 
+  // Drag the right edge to resize. Dragging right widens the sidebar.
+  const startResize = (e: React.MouseEvent): void => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = panelWidth
+    setResizing(true)
+
+    const onMove = (ev: MouseEvent): void => {
+      setPanelWidth(startWidth + (ev.clientX - startX))
+    }
+    const onUp = (): void => {
+      setResizing(false)
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }
+
+  const onHandleKey = (e: React.KeyboardEvent): void => {
+    if (e.key === 'ArrowRight') setPanelWidth(panelWidth + 24)
+    else if (e.key === 'ArrowLeft') setPanelWidth(panelWidth - 24)
+  }
+
   const renderNode = (node: TreeNode, depth: number): JSX.Element => {
     const pad = 8 + depth * 14
     const isDropInside = dropTarget?.id === node.id && dropTarget.pos === 'inside'
@@ -252,32 +288,25 @@ export default function ConnectionSidebar({
   }
 
   return (
-    <div className="conn-sidebar">
-      <div className="conn-sidebar-header">
-        <div className="conn-sidebar-title-wrap">
-          <span className="conn-sidebar-title">连接</span>
+    <div className="side-panel conn-sidebar" style={{ width: panelWidth }}>
+      <div className="side-panel-header">
+        <span className="panel-title">
+          <span className="spark" />
+          连接
           {connections.length > 0 && (
             <span className="conn-count" title={`${connections.length} 个已保存连接`}>
               {connections.length}
             </span>
           )}
-        </div>
-        <div className="conn-sidebar-actions">
-          <button
-            className="icon-btn"
-            title="新建连接"
-            onClick={() => onNewConnection(null)}
-          >
+        </span>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button className="toolbar-btn" title="新建连接" onClick={() => onNewConnection(null)}>
             +
           </button>
-          <button
-            className="icon-btn"
-            title="新建文件夹"
-            onClick={() => void newFolder(null)}
-          >
+          <button className="toolbar-btn" title="新建文件夹" onClick={() => void newFolder(null)}>
             ⊕
           </button>
-          <button className="icon-btn" title="隐藏侧栏" onClick={onClose}>
+          <button className="toolbar-btn" title="隐藏侧栏" onClick={onClose}>
             ‹
           </button>
         </div>
@@ -304,6 +333,21 @@ export default function ConnectionSidebar({
           tree.map((node) => renderNode(node, 0))
         )}
       </div>
+
+      <div
+        className={`panel-resizer panel-resizer-right ${resizing ? 'active' : ''}`}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整连接侧栏宽度"
+        aria-valuemin={CONN_SIDEBAR_MIN_WIDTH}
+        aria-valuemax={CONN_SIDEBAR_MAX_WIDTH}
+        aria-valuenow={clampConnSidebarWidth(panelWidth)}
+        tabIndex={0}
+        onMouseDown={startResize}
+        onKeyDown={onHandleKey}
+        onDoubleClick={() => setPanelWidth(256)}
+        data-tip="拖动调整宽度（双击重置）"
+      />
 
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>

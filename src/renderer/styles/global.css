@@ -214,7 +214,7 @@
     0 10px 24px -20px rgba(52, 58, 72, 0.1);
 }
 
-[data-theme='dawn'] .conn-sidebar {
+[data-theme='dawn'] .side-panel {
   box-shadow:
     var(--shadow-soft),
     inset 0 1px 0 rgba(255, 255, 255, 0.7);
@@ -877,12 +877,41 @@ select:focus {
   box-shadow: 0 0 10px rgba(91, 233, 208, 0.8);
 }
 
+/* Drag handle on the panel's right edge (left-side panels). */
+.panel-resizer-right {
+  left: auto;
+  right: 0;
+}
+
+.panel-resizer-right::before {
+  left: auto;
+  right: 14px;
+  transform: translateY(-50%) translateX(4px);
+}
+
+.panel-resizer-right:hover::before,
+.panel-resizer-right:focus-visible::before {
+  transform: translateY(-50%) translateX(0);
+}
+
+.panel-resizer-right:hover,
+.panel-resizer-right:focus-visible,
+.panel-resizer-right.active {
+  background: linear-gradient(270deg, rgba(91, 233, 208, 0.18), transparent);
+}
+
 @keyframes panel-in {
   from { opacity: 0; transform: translateX(16px); }
   to { opacity: 1; transform: translateX(0); }
 }
 
+@keyframes panel-in-left {
+  from { opacity: 0; transform: translateX(-16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
 .side-panel-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -890,7 +919,17 @@ select:focus {
   border-bottom: 1px solid var(--line);
   font-weight: 600;
   letter-spacing: 0.01em;
-  background: rgba(255, 255, 255, 0.015);
+  background: var(--panel-header-bg);
+}
+
+.side-panel-header::after {
+  content: '';
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: -1px;
+  height: 1px;
+  background: var(--panel-header-accent);
 }
 
 .side-panel-header .panel-title {
@@ -1491,54 +1530,9 @@ select:focus {
 
 /* ---------- Connection sidebar (bookmarks tree) ---------- */
 .conn-sidebar {
-  position: relative;
-  width: 256px;
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  background: var(--panel-bg);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  overflow: hidden;
-  box-shadow: var(--shadow-soft);
-  animation: panel-in 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  animation: panel-in-left 0.28s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.conn-sidebar-header {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 12px;
-  border-bottom: 1px solid var(--line);
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  background: var(--panel-header-bg);
-}
-/* Aurora hairline under the header. */
-.conn-sidebar-header::after {
-  content: '';
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: -1px;
-  height: 1px;
-  background: var(--panel-header-accent);
-}
-
-.conn-sidebar-title-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.conn-sidebar-title {
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  color: var(--text);
-}
 .conn-count {
   display: inline-grid;
   place-items: center;
@@ -1552,35 +1546,6 @@ select:focus {
   background: var(--badge-bg);
   border: 1px solid var(--badge-border);
   border-radius: 999px;
-}
-
-.conn-sidebar-actions {
-  display: flex;
-  gap: 4px;
-}
-
-.icon-btn {
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  display: grid;
-  place-items: center;
-  font-size: 15px;
-  line-height: 1;
-  border: 1px solid var(--line);
-  background: transparent;
-  color: var(--text-dim);
-  border-radius: 7px;
-  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease,
-    transform 0.12s ease;
-}
-.icon-btn:hover {
-  background: var(--accent-hover);
-  border-color: var(--accent-border-strong);
-  color: var(--signal);
-}
-.icon-btn:active {
-  transform: translateY(1px);
 }
 
 .conn-tree {
