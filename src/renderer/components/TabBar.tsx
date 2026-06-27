@@ -220,86 +220,92 @@ export default function TabBar({
         )}
       </div>
       <div className="tabbar-spacer" />
-      <div className="toolbar-menu-wrap">
-        <button
-          className={`toolbar-btn toolbar-menu-btn ${settingsOpen ? 'active' : ''}`}
-          onClick={(e) => {
-            e.stopPropagation()
-            setSettingsOpen((v) => !v)
-          }}
-          title={t('tabbar.settings')}
-        >
-          <UiIcon name="settings" />
-          <span>{t('tabbar.settings')}</span>
-          <UiIcon name="caret-down" className={`toolbar-menu-caret ${settingsOpen ? 'open' : ''}`} size="sm" />
-        </button>
-        {settingsOpen && (
-          <div className="toolbar-dropdown-menu" onClick={(e) => e.stopPropagation()}>
-            <DropdownMenuItem
-              icon="themes"
-              onClick={() => {
-                setSettingsOpen(false)
-                onSettingsSelect('themes')
-              }}
-            >
-              {t('tabbar.themes')}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              icon="terminal"
-              onClick={() => {
-                setSettingsOpen(false)
-                onSettingsSelect('terminal')
-              }}
-            >
-              {t('tabbar.terminalAppearance')}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              icon="language"
-              onClick={() => {
-                setSettingsOpen(false)
-                onSettingsSelect('language')
-              }}
-            >
-              {t('tabbar.language')}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              icon="ai"
-              onClick={() => {
-                setSettingsOpen(false)
-                onSettingsSelect('ai')
-              }}
-            >
-              {t('tabbar.aiSettings')}
-            </DropdownMenuItem>
-            <div className="toolbar-dropdown-divider" role="separator" />
-            <DropdownMenuItem
-              icon="about"
-              onClick={() => {
-                setSettingsOpen(false)
-                onSettingsSelect('about')
-              }}
-            >
-              {t('tabbar.about')}
-            </DropdownMenuItem>
-          </div>
-        )}
+      <div className="tabbar-actions">
+        <div className="tabbar-action-slot toolbar-menu-wrap">
+          <button
+            className={`toolbar-btn toolbar-menu-btn tabbar-action-btn ${settingsOpen ? 'active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              setSettingsOpen((v) => !v)
+            }}
+            title={t('tabbar.settings')}
+          >
+            <UiIcon name="settings" />
+            <span>{t('tabbar.settings')}</span>
+            <UiIcon name="caret-down" className={`toolbar-menu-caret ${settingsOpen ? 'open' : ''}`} size="sm" />
+          </button>
+          {settingsOpen && (
+            <div className="toolbar-dropdown-menu" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenuItem
+                icon="themes"
+                onClick={() => {
+                  setSettingsOpen(false)
+                  onSettingsSelect('themes')
+                }}
+              >
+                {t('tabbar.themes')}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                icon="terminal"
+                onClick={() => {
+                  setSettingsOpen(false)
+                  onSettingsSelect('terminal')
+                }}
+              >
+                {t('tabbar.terminalAppearance')}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                icon="language"
+                onClick={() => {
+                  setSettingsOpen(false)
+                  onSettingsSelect('language')
+                }}
+              >
+                {t('tabbar.language')}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                icon="ai"
+                onClick={() => {
+                  setSettingsOpen(false)
+                  onSettingsSelect('ai')
+                }}
+              >
+                {t('tabbar.aiSettings')}
+              </DropdownMenuItem>
+              <div className="toolbar-dropdown-divider" role="separator" />
+              <DropdownMenuItem
+                icon="about"
+                onClick={() => {
+                  setSettingsOpen(false)
+                  onSettingsSelect('about')
+                }}
+              >
+                {t('tabbar.about')}
+              </DropdownMenuItem>
+            </div>
+          )}
+        </div>
+        <div className="tabbar-action-slot">
+          <button
+            className={`toolbar-btn tabbar-action-btn ${panelOpen ? 'active' : ''}`}
+            onClick={handleToggleAI}
+            title={t('tabbar.toggleAi')}
+          >
+            <UiIcon name="copilot" />
+            <span>{t('tabbar.aiCopilot')}</span>
+          </button>
+        </div>
+        <div className="tabbar-action-slot">
+          <button
+            className={`toolbar-btn tabbar-action-btn ${sftpOpen ? 'active' : ''}`}
+            onClick={handleToggleSftp}
+            title={t('tabbar.toggleSftp')}
+          >
+            <UiIcon name="sftp" />
+            <span>{t('tabbar.sftp')}</span>
+          </button>
+        </div>
       </div>
-      <button
-        className={`toolbar-btn ${panelOpen ? 'active' : ''}`}
-        onClick={handleToggleAI}
-        title={t('tabbar.toggleAi')}
-      >
-        <UiIcon name="copilot" />
-        <span>{t('tabbar.aiCopilot')}</span>
-      </button>
-      <button
-        className={`toolbar-btn ${sftpOpen ? 'active' : ''}`}
-        onClick={handleToggleSftp}
-        title={t('tabbar.toggleSftp')}
-      >
-        <UiIcon name="sftp" />
-        <span>{t('tabbar.sftp')}</span>
-      </button>
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
           <ContextMenuItem icon="save" onClick={() => void saveTabOutput(menu.tab)}>

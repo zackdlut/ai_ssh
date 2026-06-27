@@ -1017,13 +1017,75 @@ select:focus {
   flex: 1;
 }
 
+.tabbar-actions {
+  display: inline-flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  height: 30px;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  gap: 6px;
+}
+
+.tabbar-action-slot {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  flex: none;
+  width: var(--tabbar-action-slot-width, 108px);
+}
+
+.tabbar-action-btn {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 9px;
+  white-space: nowrap;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+}
+.tabbar-action-btn.toolbar-menu-btn {
+  justify-content: flex-start;
+}
+
+.tabbar-action-btn .toolbar-menu-caret {
+  margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0.55;
+}
+.tabbar-actions .tabbar-action-btn {
+  border: 1px solid transparent;
+  background: transparent;
+  box-shadow: none;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.18s ease;
+}
+.tabbar-actions .tabbar-action-btn:hover {
+  border-color: var(--accent-border-strong);
+  box-shadow: inset 0 1px 0 var(--control-inset-hover),
+    0 0 0 1px var(--accent-ring), 0 8px 20px -10px var(--accent-glow);
+}
+.tabbar-actions .tabbar-action-btn.active {
+  border-color: var(--accent-border-hover);
+  box-shadow: inset 0 1px 0 var(--control-inset-hover),
+    0 0 0 1px var(--accent-ring-strong), 0 10px 26px -10px var(--accent-glow-strong);
+}
+
 .toolbar-menu-wrap {
   position: relative;
 }
 .toolbar-menu-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
+  width: 100%;
 }
 .toolbar-menu-caret {
   opacity: 0.72;
