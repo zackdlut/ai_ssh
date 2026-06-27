@@ -1025,7 +1025,7 @@ select:focus {
   border: none;
   background: transparent;
   box-shadow: none;
-  gap: 6px;
+  gap: 3px;
 }
 
 .tabbar-action-slot {
