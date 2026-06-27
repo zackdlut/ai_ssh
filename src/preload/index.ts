@@ -24,6 +24,12 @@ import type {
   SftpOpResult,
   SftpRealpathResult,
   SftpTransferResult,
+  SftpBatchTransferResult,
+  SftpTransferProgressEvent,
+  SftpTransferDoneEvent,
+  LocalListResult,
+  LocalHomeResult,
+  PickDirectoryResult,
   SaveFileResult,
   SshDataEvent,
   SshStatusEvent
@@ -52,6 +58,16 @@ const api = {
     onData: (cb: (e: SshDataEvent) => void): Unsubscribe => on('ssh:data', cb),
     onStatus: (cb: (e: SshStatusEvent) => void): Unsubscribe => on('ssh:status', cb)
   },
+  local: {
+    home: (): Promise<LocalHomeResult> => ipcRenderer.invoke('local:home'),
+    list: (path: string): Promise<LocalListResult> => ipcRenderer.invoke('local:list', path),
+    pickDirectory: (defaultPath?: string): Promise<PickDirectoryResult> =>
+      ipcRenderer.invoke('local:pickDirectory', defaultPath),
+    rename: (from: string, to: string): Promise<SftpOpResult> =>
+      ipcRenderer.invoke('local:rename', from, to),
+    delete: (path: string, isDir: boolean): Promise<SftpOpResult> =>
+      ipcRenderer.invoke('local:delete', path, isDir)
+  },
   sftp: {
     list: (sessionId: string, path: string): Promise<SftpListResult> =>
       ipcRenderer.invoke('sftp:list', sessionId, path),
@@ -66,7 +82,25 @@ const api = {
     download: (sessionId: string, remotePath: string): Promise<SftpTransferResult> =>
       ipcRenderer.invoke('sftp:download', sessionId, remotePath),
     upload: (sessionId: string, remoteDir: string): Promise<SftpTransferResult> =>
-      ipcRenderer.invoke('sftp:upload', sessionId, remoteDir)
+      ipcRenderer.invoke('sftp:upload', sessionId, remoteDir),
+    uploadPaths: (
+      sessionId: string,
+      localPaths: string[],
+      remoteDir: string,
+      transferId?: string
+    ): Promise<SftpBatchTransferResult> =>
+      ipcRenderer.invoke('sftp:uploadPaths', sessionId, localPaths, remoteDir, transferId),
+    downloadPaths: (
+      sessionId: string,
+      remotePaths: string[],
+      localDir: string,
+      transferId?: string
+    ): Promise<SftpBatchTransferResult> =>
+      ipcRenderer.invoke('sftp:downloadPaths', sessionId, remotePaths, localDir, transferId),
+    onTransferProgress: (cb: (e: SftpTransferProgressEvent) => void): Unsubscribe =>
+      on('sftp:transferProgress', cb),
+    onTransferDone: (cb: (e: SftpTransferDoneEvent) => void): Unsubscribe =>
+      on('sftp:transferDone', cb)
   },
   terminal: {
     saveLog: (content: string, defaultPath: string): Promise<SaveFileResult> =>

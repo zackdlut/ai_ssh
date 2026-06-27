@@ -222,13 +222,66 @@ export interface SftpTransferResult {
   count?: number
   /** True when the user cancelled the file dialog. */
   cancelled?: boolean
+  /** Per-file errors from batch transfers. */
+  errors?: string[]
   error?: string
+}
+
+export type LocalEntryType = SftpEntryType
+
+export interface LocalEntry {
+  name: string
+  path: string
+  type: LocalEntryType
+  size: number
+  mtime: number
+}
+
+export interface LocalListResult {
+  cwd?: string
+  entries?: LocalEntry[]
+  error?: string
+}
+
+export interface LocalHomeResult {
+  path?: string
+  error?: string
+}
+
+export interface SftpBatchTransferResult {
+  count?: number
+  errors?: string[]
+  error?: string
+}
+
+export interface SftpTransferProgress {
+  fileName: string
+  fileIndex: number
+  fileTotal: number
+  bytesDone: number
+  bytesTotal: number
+}
+
+export interface SftpTransferProgressEvent extends SftpTransferProgress {
+  transferId: string
+  direction: 'upload' | 'download'
+}
+
+export interface SftpTransferDoneEvent {
+  transferId: string
+  direction: 'upload' | 'download'
 }
 
 export interface SaveFileResult {
   /** Path written when save succeeded. */
   path?: string
   /** True when the user cancelled the file dialog. */
+  cancelled?: boolean
+  error?: string
+}
+
+export interface PickDirectoryResult {
+  path?: string
   cancelled?: boolean
   error?: string
 }

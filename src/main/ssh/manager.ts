@@ -8,7 +8,8 @@ async function loadSsh2(): Promise<Ssh2Module> {
   return ssh2Module
 }
 import { readFileSync } from 'fs'
-import { basename } from 'path'
+import { basename, join } from 'path'
+import { mkdir, readdir, stat } from 'fs/promises'
 import { randomUUID } from 'crypto'
 import type { BrowserWindow } from 'electron'
 import type {
@@ -16,9 +17,36 @@ import type {
   ConnectResult,
   SftpEntry,
   SftpEntryType,
+  SftpTransferProgress,
   SshDataEvent,
   SshStatusEvent
 } from '../../shared/types'
+import { countLocalTransferFiles } from '../local/fs'
+
+interface TransferProgressTracker {
+  startFile: (fileName: string, bytesTotal: number) => void
+  updateFile: (fileName: string, bytesDone: number, bytesTotal: number) => void
+}
+
+function createTransferProgressTracker(
+  fileTotal: number,
+  onProgress?: (progress: SftpTransferProgress) => void
+): TransferProgressTracker | undefined {
+  if (!onProgress) return undefined
+  let fileIndex = 0
+  const emit = (fileName: string, bytesDone: number, bytesTotal: number): void => {
+    onProgress({ fileName, fileIndex, fileTotal, bytesDone, bytesTotal })
+  }
+  return {
+    startFile(fileName: string, bytesTotal: number) {
+      fileIndex++
+      emit(fileName, 0, bytesTotal)
+    },
+    updateFile(fileName: string, bytesDone: number, bytesTotal: number) {
+      emit(fileName, bytesDone, bytesTotal)
+    }
+  }
+}
 
 interface Session {
   client: Client
@@ -211,25 +239,230 @@ export class SshManager {
 
   async sftpDelete(sessionId: string, path: string, isDir: boolean): Promise<void> {
     const sftp = await this.getSftp(sessionId)
+    if (!isDir) {
+      return new Promise((resolve, reject) => {
+        sftp.unlink(path, (err) => (err ? reject(err) : resolve()))
+      })
+    }
+    const { entries } = await this.sftpList(sessionId, path)
+    for (const entry of entries) {
+      await this.sftpDelete(sessionId, entry.path, entry.type === 'dir')
+    }
     return new Promise((resolve, reject) => {
-      const cb = (err: Error | null | undefined): void => (err ? reject(err) : resolve())
-      if (isDir) sftp.rmdir(path, cb)
-      else sftp.unlink(path, cb)
+      sftp.rmdir(path, (err) => (err ? reject(err) : resolve()))
     })
   }
 
-  async sftpDownload(sessionId: string, remotePath: string, localPath: string): Promise<void> {
+  async sftpUploadEntry(
+    sessionId: string,
+    localPath: string,
+    remoteDir: string,
+    tracker?: TransferProgressTracker
+  ): Promise<number> {
+    const info = await stat(localPath)
+    if (info.isDirectory()) {
+      const remoteBase = `${remoteDir.replace(/\/$/, '')}/${basename(localPath)}`
+      await this.ensureRemoteDir(sessionId, remoteBase)
+      const names = await readdir(localPath)
+      let count = 0
+      for (const name of names) {
+        count += await this.sftpUploadEntry(sessionId, join(localPath, name), remoteBase, tracker)
+      }
+      return count
+    }
+    if (info.isFile()) {
+      const fileName = basename(localPath)
+      await this.ensureRemoteDir(sessionId, remoteDir)
+      tracker?.startFile(fileName, info.size)
+      await this.sftpUpload(sessionId, localPath, remoteDir, (bytesDone, bytesTotal) => {
+        tracker?.updateFile(fileName, bytesDone, bytesTotal)
+      })
+      return 1
+    }
+    return 0
+  }
+
+  async sftpDownloadEntry(
+    sessionId: string,
+    remotePath: string,
+    localDir: string,
+    tracker?: TransferProgressTracker
+  ): Promise<number> {
+    const kind = await this.sftpEntryKind(sessionId, remotePath)
+    const localDest = join(localDir, basename(remotePath))
+    if (kind === 'dir') {
+      await mkdir(localDest, { recursive: true })
+      const { entries } = await this.sftpList(sessionId, remotePath)
+      let count = 0
+      for (const entry of entries) {
+        count += await this.sftpDownloadEntry(sessionId, entry.path, localDest, tracker)
+      }
+      return count
+    }
+    if (kind === 'file') {
+      const fileName = basename(remotePath)
+      const remoteSize = await this.sftpFileSize(sessionId, remotePath)
+      await mkdir(localDir, { recursive: true })
+      tracker?.startFile(fileName, remoteSize)
+      await this.sftpDownload(sessionId, remotePath, localDest, (bytesDone, bytesTotal) => {
+        tracker?.updateFile(fileName, bytesDone, bytesTotal)
+      })
+      return 1
+    }
+    return 0
+  }
+
+  async sftpUploadPaths(
+    sessionId: string,
+    localPaths: string[],
+    remoteDir: string,
+    onProgress?: (progress: SftpTransferProgress) => void
+  ): Promise<{ count: number; errors: string[] }> {
+    const fileTotal = await countLocalTransferFiles(localPaths)
+    const tracker = createTransferProgressTracker(fileTotal, onProgress)
+    const errors: string[] = []
+    let count = 0
+    for (const local of localPaths) {
+      try {
+        count += await this.sftpUploadEntry(sessionId, local, remoteDir, tracker)
+      } catch (err) {
+        errors.push(`${basename(local)}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    return { count, errors }
+  }
+
+  async sftpDownloadPaths(
+    sessionId: string,
+    remotePaths: string[],
+    localDir: string,
+    onProgress?: (progress: SftpTransferProgress) => void
+  ): Promise<{ count: number; errors: string[] }> {
+    const fileTotal = await this.countRemoteTransferFiles(sessionId, remotePaths)
+    const tracker = createTransferProgressTracker(fileTotal, onProgress)
+    const errors: string[] = []
+    let count = 0
+    for (const remote of remotePaths) {
+      try {
+        count += await this.sftpDownloadEntry(sessionId, remote, localDir, tracker)
+      } catch (err) {
+        errors.push(`${basename(remote)}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    return { count, errors }
+  }
+
+  async countRemoteTransferFiles(sessionId: string, paths: string[]): Promise<number> {
+    let total = 0
+    for (const path of paths) {
+      total += await this.countRemotePathFiles(sessionId, path)
+    }
+    return total
+  }
+
+  private async countRemotePathFiles(sessionId: string, path: string): Promise<number> {
+    const kind = await this.sftpEntryKind(sessionId, path)
+    if (kind === 'file') return 1
+    if (kind !== 'dir') return 0
+    const { entries } = await this.sftpList(sessionId, path)
+    let count = 0
+    for (const entry of entries) {
+      count += await this.countRemotePathFiles(sessionId, entry.path)
+    }
+    return count
+  }
+
+  private async sftpFileSize(sessionId: string, path: string): Promise<number> {
     const sftp = await this.getSftp(sessionId)
     return new Promise((resolve, reject) => {
-      sftp.fastGet(remotePath, localPath, (err) => (err ? reject(err) : resolve()))
+      sftp.stat(path, (err, stats) => (err ? reject(err) : resolve(stats.size ?? 0)))
     })
   }
 
-  async sftpUpload(sessionId: string, localPath: string, remoteDir: string): Promise<void> {
+  private async sftpEntryKind(
+    sessionId: string,
+    path: string
+  ): Promise<'dir' | 'file' | 'other'> {
+    const sftp = await this.getSftp(sessionId)
+    return new Promise((resolve, reject) => {
+      sftp.stat(path, (err, stats) => {
+        if (err) return reject(err)
+        const type = fileTypeFromMode(stats.mode ?? 0)
+        if (type === 'dir') resolve('dir')
+        else if (type === 'file') resolve('file')
+        else resolve('other')
+      })
+    })
+  }
+
+  private async ensureRemoteDir(sessionId: string, dirPath: string): Promise<void> {
+    const normalized = dirPath.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '')
+    if (!normalized || normalized === '/') return
+
+    const isAbsolute = normalized.startsWith('/')
+    const parts = normalized.split('/').filter(Boolean)
+    let current = ''
+    for (const part of parts) {
+      current = current ? `${current}/${part}` : isAbsolute ? `/${part}` : part
+      await this.sftpMkdirOne(sessionId, current)
+    }
+  }
+
+  private async sftpMkdirOne(sessionId: string, path: string): Promise<void> {
+    const sftp = await this.getSftp(sessionId)
+    return new Promise((resolve, reject) => {
+      sftp.stat(path, (statErr) => {
+        if (!statErr) return resolve()
+        sftp.mkdir(path, (mkdirErr) => {
+          if (!mkdirErr) return resolve()
+          sftp.stat(path, (err2) => (err2 ? reject(mkdirErr) : resolve()))
+        })
+      })
+    })
+  }
+
+  async sftpDownload(
+    sessionId: string,
+    remotePath: string,
+    localPath: string,
+    onStep?: (bytesDone: number, bytesTotal: number) => void
+  ): Promise<void> {
+    const sftp = await this.getSftp(sessionId)
+    return new Promise((resolve, reject) => {
+      const cb = (err: Error | null | undefined): void => (err ? reject(err) : resolve())
+      if (onStep) {
+        sftp.fastGet(
+          remotePath,
+          localPath,
+          { step: (transferred, _chunk, total) => onStep(transferred, total) },
+          cb
+        )
+      } else {
+        sftp.fastGet(remotePath, localPath, cb)
+      }
+    })
+  }
+
+  async sftpUpload(
+    sessionId: string,
+    localPath: string,
+    remoteDir: string,
+    onStep?: (bytesDone: number, bytesTotal: number) => void
+  ): Promise<void> {
     const sftp = await this.getSftp(sessionId)
     const remotePath = `${remoteDir.endsWith('/') ? remoteDir.slice(0, -1) : remoteDir}/${basename(localPath)}`
     return new Promise((resolve, reject) => {
-      sftp.fastPut(localPath, remotePath, (err) => (err ? reject(err) : resolve()))
+      const cb = (err: Error | null | undefined): void => (err ? reject(err) : resolve())
+      if (onStep) {
+        sftp.fastPut(
+          localPath,
+          remotePath,
+          { step: (transferred, _chunk, total) => onStep(transferred, total) },
+          cb
+        )
+      } else {
+        sftp.fastPut(localPath, remotePath, cb)
+      }
     })
   }
 

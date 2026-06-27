@@ -26,6 +26,10 @@ export type UiIconName =
   | 'save'
   | 'folder'
   | 'folder-new'
+  | 'browse'
+  | 'download'
+  | 'upload'
+  | 'rename'
 
 interface Props {
   name: UiIconName

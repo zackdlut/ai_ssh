@@ -2,6 +2,7 @@ import { app, ipcMain, dialog, type BrowserWindow } from 'electron'
 import { writeFile } from 'fs/promises'
 import { basename } from 'path'
 import { SshManager } from './ssh/manager'
+import { deleteLocal, listLocal, localHome, renameLocal } from './local/fs'
 import { AIProvider } from './ai/provider'
 import * as config from './config/store'
 import type {
@@ -28,6 +29,13 @@ import type {
   SftpOpResult,
   SftpRealpathResult,
   SftpTransferResult,
+  SftpBatchTransferResult,
+  SftpTransferProgress,
+  SftpTransferProgressEvent,
+  SftpTransferDoneEvent,
+  LocalListResult,
+  LocalHomeResult,
+  PickDirectoryResult,
   SaveFileResult
 } from '../shared/types'
 
@@ -101,6 +109,60 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
     })
   })
 
+  // --- Local filesystem ---
+  ipcMain.handle('local:home', (): LocalHomeResult => {
+    try {
+      return { path: localHome() }
+    } catch (err) {
+      return { error: errMessage(err) }
+    }
+  })
+  ipcMain.handle('local:list', async (_e, path: string): Promise<LocalListResult> => {
+    try {
+      return await listLocal(path)
+    } catch (err) {
+      return { error: errMessage(err) }
+    }
+  })
+  ipcMain.handle(
+    'local:pickDirectory',
+    async (_e, defaultPath?: string): Promise<PickDirectoryResult> => {
+      const win = getWindow()
+      const opts = { properties: ['openDirectory'] as const }
+      const dialogOpts = {
+        properties: [...opts.properties],
+        ...(defaultPath ? { defaultPath } : {})
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, dialogOpts)
+        : await dialog.showOpenDialog(dialogOpts)
+      if (result.canceled || result.filePaths.length === 0) return { cancelled: true }
+      return { path: result.filePaths[0] }
+    }
+  )
+  ipcMain.handle(
+    'local:rename',
+    async (_e, from: string, to: string): Promise<SftpOpResult> => {
+      try {
+        await renameLocal(from, to)
+        return { ok: true }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
+  ipcMain.handle(
+    'local:delete',
+    async (_e, path: string, isDir: boolean): Promise<SftpOpResult> => {
+      try {
+        await deleteLocal(path, isDir)
+        return { ok: true }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
+
   // --- SFTP ---
   ipcMain.handle('sftp:list', async (_e, sessionId: string, path: string): Promise<SftpListResult> => {
     try {
@@ -163,6 +225,74 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
       } catch (err) {
         return { error: errMessage(err) }
       }
+    }
+  )
+  ipcMain.handle(
+    'sftp:uploadPaths',
+    async (
+      e,
+      sessionId: string,
+      localPaths: string[],
+      remoteDir: string,
+      transferId?: string
+    ): Promise<SftpBatchTransferResult> => {
+      const onProgress = transferId
+        ? (progress: SftpTransferProgress): void => {
+            e.sender.send('sftp:transferProgress', {
+              ...progress,
+              transferId,
+              direction: 'upload'
+            } satisfies SftpTransferProgressEvent)
+          }
+        : undefined
+      const { count, errors } = await ssh.sftpUploadPaths(
+        sessionId,
+        localPaths,
+        remoteDir,
+        onProgress
+      )
+      if (transferId) {
+        e.sender.send('sftp:transferDone', {
+          transferId,
+          direction: 'upload'
+        } satisfies SftpTransferDoneEvent)
+      }
+      if (count === 0 && errors.length > 0) return { count: 0, errors, error: errors[0] }
+      return { count, errors: errors.length > 0 ? errors : undefined }
+    }
+  )
+  ipcMain.handle(
+    'sftp:downloadPaths',
+    async (
+      e,
+      sessionId: string,
+      remotePaths: string[],
+      localDir: string,
+      transferId?: string
+    ): Promise<SftpBatchTransferResult> => {
+      const onProgress = transferId
+        ? (progress: SftpTransferProgress): void => {
+            e.sender.send('sftp:transferProgress', {
+              ...progress,
+              transferId,
+              direction: 'download'
+            } satisfies SftpTransferProgressEvent)
+          }
+        : undefined
+      const { count, errors } = await ssh.sftpDownloadPaths(
+        sessionId,
+        remotePaths,
+        localDir,
+        onProgress
+      )
+      if (transferId) {
+        e.sender.send('sftp:transferDone', {
+          transferId,
+          direction: 'download'
+        } satisfies SftpTransferDoneEvent)
+      }
+      if (count === 0 && errors.length > 0) return { count: 0, errors, error: errors[0] }
+      return { count, errors: errors.length > 0 ? errors : undefined }
     }
   )
   ipcMain.handle(
