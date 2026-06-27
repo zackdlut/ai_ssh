@@ -1,14 +1,19 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import CommandCard from './CommandCard'
 import Markdown from './Markdown'
-import MermaidBlock from './MermaidBlock'
 import HtmlPreview from './HtmlPreview'
-import ChartBlock from './ChartBlock'
 import ThinkingBlock from './ThinkingBlock'
 import { parseJsonLoose } from '../../lib/chartSpec'
 import { useAIStore, type ChatMessage as ChatMessageType } from '../../store/aiStore'
 import type { ChartSnapshot } from '../../../shared/types'
 import { useT } from '../../lib/i18n'
+
+const MermaidBlock = lazy(() => import('./MermaidBlock'))
+const ChartBlock = lazy(() => import('./ChartBlock'))
+
+function PreviewFallback(): JSX.Element {
+  return <div className="preview-block preview-loading">…</div>
+}
 
 interface Props {
   message: ChatMessageType
@@ -159,21 +164,26 @@ function renderSegment(
       // duplicate command card.
       return seg.consumed ? null : <CommandCard key={i} command={seg.content} />
     case 'mermaid':
-      return <MermaidBlock key={i} code={seg.content} />
+      return (
+        <Suspense key={i} fallback={<PreviewFallback />}>
+          <MermaidBlock code={seg.content} />
+        </Suspense>
+      )
     case 'html':
       return <HtmlPreview key={i} html={seg.content} />
     case 'chart':
       return (
-        <ChartBlock
-          key={i}
-          spec={seg.content}
-          command={seg.command}
-          boundSessionId={boundSessionId}
-          boundTabId={boundTabId}
-          streaming={streaming}
-          snapshot={snapshot}
-          onSnapshot={onSnapshot}
-        />
+        <Suspense key={i} fallback={<PreviewFallback />}>
+          <ChartBlock
+            spec={seg.content}
+            command={seg.command}
+            boundSessionId={boundSessionId}
+            boundTabId={boundTabId}
+            streaming={streaming}
+            snapshot={snapshot}
+            onSnapshot={onSnapshot}
+          />
+        </Suspense>
       )
     default:
       return seg.content.trim() ? <Markdown key={i} text={seg.content} /> : null

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import * as echarts from 'echarts'
+import type { ECharts, EChartsCoreOption, EChartsOption } from 'echarts'
 import { parseChartSpec, type ChartSpec } from '../../lib/chartSpec'
 import { createLineSplitter, extractValue, parseHumanNumber, stripAnsi } from '../../lib/streamParse'
 import { readTerminalOutput } from '../../lib/terminalRegistry'
@@ -7,6 +7,33 @@ import { isDangerous } from '../../lib/commands'
 import { useThemeStore } from '../../store/themeStore'
 import { useT } from '../../lib/i18n'
 import type { ChartSnapshot } from '../../../shared/types'
+
+type EchartsApi = typeof import('echarts/core')
+let echartsPromise: Promise<EchartsApi> | null = null
+async function loadEcharts(): Promise<EchartsApi> {
+  if (!echartsPromise) {
+    echartsPromise = Promise.all([
+      import('echarts/core'),
+      import('echarts/charts'),
+      import('echarts/components'),
+      import('echarts/renderers')
+    ]).then(([core, charts, components, renderers]) => {
+      core.use([
+        charts.LineChart,
+        charts.BarChart,
+        charts.PieChart,
+        charts.ScatterChart,
+        components.TitleComponent,
+        components.TooltipComponent,
+        components.GridComponent,
+        components.LegendComponent,
+        renderers.CanvasRenderer
+      ])
+      return core
+    })
+  }
+  return echartsPromise
+}
 
 interface Props {
   /**
@@ -103,7 +130,7 @@ function resolveFromSpecJson(specJson: string): { spec: ChartSpec; series: Compi
   }
 }
 
-function optionHasData(option: echarts.EChartsCoreOption): boolean {
+function optionHasData(option: EChartsCoreOption): boolean {
   const series = Array.isArray(option.series) ? option.series : option.series ? [option.series] : []
   return series.some((s) => {
     const item = s as { data?: unknown }
@@ -176,7 +203,7 @@ function buildOption(
   series: CompiledSeries[],
   points: Point[][],
   cats: Map<string, number>[]
-): echarts.EChartsOption {
+): EChartsOption {
   const useTime = spec.x === 'time'
   const axisName = spec.x === 'time' || spec.x === 'index' ? undefined : spec.x
   const hasBreakdown = series.some((s) => s.isBreakdown)
@@ -266,7 +293,7 @@ export default function ChartBlock({
   onSnapshot
 }: Props): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
-  const chartRef = useRef<echarts.ECharts | null>(null)
+  const chartRef = useRef<ECharts | null>(null)
   const snapshotSavedRef = useRef(!!snapshot?.option)
   /** Imperative (re)start of capture for the current chart instance. */
   const startRef = useRef<(() => void) | null>(null)
@@ -375,31 +402,42 @@ export default function ChartBlock({
     const fromSnapshot = snapshot.spec ? resolveFromSpecJson(snapshot.spec) : null
     if (fromSnapshot) setResolved(fromSnapshot)
 
-    const chart = echarts.init(containerRef.current, appTheme === 'dawn' ? undefined : 'dark', {
-      renderer: 'canvas'
-    })
-    chartRef.current = chart
-    try {
-      chart.setOption(JSON.parse(snapshot.option) as echarts.EChartsOption, { notMerge: true })
-    } catch {
-      setError(t('chart.renderError', { error: 'invalid snapshot' }))
-    }
+    let cancelled = false
+    let chart: ECharts | null = null
+    let resizeObserver: ResizeObserver | null = null
+    let visibilityObserver: IntersectionObserver | null = null
+    const el = containerRef.current
 
-    const resize = (): void => {
-      if (containerRef.current && containerRef.current.clientWidth > 0) chart.resize()
-    }
-    requestAnimationFrame(resize)
-    const resizeObserver = new ResizeObserver(resize)
-    resizeObserver.observe(containerRef.current)
-    const visibilityObserver = new IntersectionObserver((entries) => {
-      if (entries[0]?.isIntersecting) resize()
-    })
-    visibilityObserver.observe(containerRef.current)
+    void (async () => {
+      const echarts = await loadEcharts()
+      if (cancelled || !containerRef.current) return
+      chart = echarts.init(el, appTheme === 'dawn' ? undefined : 'dark', {
+        renderer: 'canvas'
+      })
+      chartRef.current = chart
+      try {
+        chart.setOption(JSON.parse(snapshot.option!) as EChartsOption, { notMerge: true })
+      } catch {
+        setError(t('chart.renderError', { error: 'invalid snapshot' }))
+      }
+
+      const resize = (): void => {
+        if (containerRef.current && containerRef.current.clientWidth > 0) chart?.resize()
+      }
+      requestAnimationFrame(resize)
+      resizeObserver = new ResizeObserver(resize)
+      resizeObserver.observe(el)
+      visibilityObserver = new IntersectionObserver((entries) => {
+        if (entries[0]?.isIntersecting) resize()
+      })
+      visibilityObserver.observe(el)
+    })()
 
     return () => {
-      visibilityObserver.disconnect()
-      resizeObserver.disconnect()
-      chart.dispose()
+      cancelled = true
+      visibilityObserver?.disconnect()
+      resizeObserver?.disconnect()
+      chart?.dispose()
       chartRef.current = null
     }
   }, [snapshot?.option, snapshot?.spec, appTheme, t])
@@ -410,6 +448,16 @@ export default function ChartBlock({
     const chartSpec = resolved.spec
     const series = resolved.series
     const cmd = command?.trim()
+    const el = containerRef.current
+    let cancelled = false
+    let chart: ECharts | null = null
+    let resizeObserver: ResizeObserver | null = null
+    let visibilityObserver: IntersectionObserver | null = null
+
+    void (async () => {
+      const echarts = await loadEcharts()
+      if (cancelled || !containerRef.current) return
+
     // Auto-run only a non-destructive collection command into the bound session,
     // and never while the assistant message (and thus the command) is still
     // streaming in.
@@ -423,10 +471,11 @@ export default function ChartBlock({
       !series.some((s) => s.isBreakdown) &&
       series.some((s) => s.columnIndex != null || s.columnName != null)
 
-    const chart = echarts.init(containerRef.current, appTheme === 'dawn' ? undefined : 'dark', {
+    chart = echarts.init(el, appTheme === 'dawn' ? undefined : 'dark', {
       renderer: 'canvas'
     })
     chartRef.current = chart
+    const activeChart = chart
 
     // Per-series rolling points (time/index series) plus ordered category maps
     // (breakdown series: one label→value entry per matching line).
@@ -438,12 +487,12 @@ export default function ChartBlock({
     let flushTimer: ReturnType<typeof setTimeout> | null = null
 
     const render = (): void => {
-      chart.setOption(buildOption(chartSpec, series, points, cats), { notMerge: true })
+      activeChart.setOption(buildOption(chartSpec, series, points, cats), { notMerge: true })
     }
 
     const maybeSaveSnapshot = (): void => {
       if (!onSnapshot || snapshotSavedRef.current) return
-      const option = chart.getOption() as echarts.EChartsCoreOption
+      const option = activeChart.getOption() as EChartsCoreOption
       if (!optionHasData(option)) return
       snapshotSavedRef.current = true
       onSnapshot({
@@ -716,25 +765,26 @@ export default function ChartBlock({
     }
 
     const resize = (): void => {
-      if (containerRef.current && containerRef.current.clientWidth > 0) chart.resize()
+      if (containerRef.current && containerRef.current.clientWidth > 0) chart?.resize()
     }
     requestAnimationFrame(resize)
-    const resizeObserver = new ResizeObserver(resize)
-    resizeObserver.observe(containerRef.current)
-    const visibilityObserver = new IntersectionObserver((entries) => {
+    resizeObserver = new ResizeObserver(resize)
+    resizeObserver.observe(el)
+    visibilityObserver = new IntersectionObserver((entries) => {
       if (entries[0]?.isIntersecting) resize()
     })
-    visibilityObserver.observe(containerRef.current)
+    visibilityObserver.observe(el)
+    })()
 
     return () => {
+      cancelled = true
       // Stop a runaway live command and tear everything down.
-      stopLive(true)
-      clearSubs()
+      stopRef.current?.()
       startRef.current = null
       stopRef.current = null
-      visibilityObserver.disconnect()
-      resizeObserver.disconnect()
-      chart.dispose()
+      visibilityObserver?.disconnect()
+      resizeObserver?.disconnect()
+      chart?.dispose()
       chartRef.current = null
     }
   }, [resolved.spec, resolved.series, appTheme, boundSessionId, boundTabId, command, streaming, snapshot?.option, onSnapshot])

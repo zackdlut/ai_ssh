@@ -4,9 +4,15 @@ directories:
   output: release
   buildResources: build
 npmRebuild: false
+# Renderer deps are bundled into out/ by electron-vite; only ship main-process runtime deps.
 files:
+  - '!**/*'
   - out/**/*
   - package.json
+  - node_modules/**/*
+electronLanguages:
+  - en-US
+  - zh-CN
 asarUnpack:
   - "**/node_modules/ssh2/**"
   - "**/node_modules/cpu-features/**"

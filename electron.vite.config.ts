@@ -28,7 +28,13 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/renderer/index.html') }
+        input: { index: resolve(__dirname, 'src/renderer/index.html') },
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules/mermaid')) return 'mermaid'
+            if (id.includes('node_modules/echarts')) return 'echarts'
+          }
+        }
       }
     },
     plugins: [react()]

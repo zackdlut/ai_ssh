@@ -3,6 +3,51 @@ import type { AppTheme } from '../../shared/types'
 import type { TerminalColorSchemeId } from '../../shared/terminalSettings'
 import { XTERM_THEMES } from './themes'
 
+function parseHexColor(input: string): [number, number, number] | null {
+  const hex = input.trim().replace(/^#/, '')
+  if (hex.length === 3) {
+    return hex.split('').map((c) => parseInt(c + c, 16)) as [number, number, number]
+  }
+  if (hex.length === 6 || hex.length === 8) {
+    return [
+      parseInt(hex.slice(0, 2), 16),
+      parseInt(hex.slice(2, 4), 16),
+      parseInt(hex.slice(4, 6), 16)
+    ]
+  }
+  return null
+}
+
+function parseRgbaColor(input: string): [number, number, number, number] | null {
+  const rgba = input.trim().match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)$/i)
+  if (!rgba) return null
+  return [Number(rgba[1]), Number(rgba[2]), Number(rgba[3]), rgba[4] !== undefined ? Number(rgba[4]) : 1]
+}
+
+function toHexByte(value: number): string {
+  return Math.max(0, Math.min(255, value)).toString(16).padStart(2, '0')
+}
+
+/**
+ * xterm pre-blends selection tint onto theme.background. With a transparent
+ * canvas (follow-app-theme), that blend uses black and looks far too dark on
+ * light themes — so we bake the tint against the real panel surface instead.
+ */
+function blendSelectionOnBackground(surfaceHex: string, selectionColor: string): string {
+  const surface = parseHexColor(surfaceHex)
+  const selection = parseRgbaColor(selectionColor)
+  if (!surface || !selection) return selectionColor
+
+  const [br, bg, bb] = surface
+  const [fr, fg, fb, alpha] = selection
+  if (alpha >= 1) return `#${toHexByte(fr)}${toHexByte(fg)}${toHexByte(fb)}`
+
+  const r = Math.round(br + (fr - br) * alpha)
+  const g = Math.round(bg + (fg - bg) * alpha)
+  const b = Math.round(bb + (fb - bb) * alpha)
+  return `#${toHexByte(r)}${toHexByte(g)}${toHexByte(b)}`
+}
+
 /** Fixed terminal color palettes (excludes `auto`). */
 export const TERMINAL_COLOR_SCHEMES: Record<Exclude<TerminalColorSchemeId, 'auto'>, ITheme> = {
   aurora: XTERM_THEMES.aurora,
@@ -253,7 +298,21 @@ export function xtermThemeForDisplay(
 ): ITheme {
   const theme = resolveTerminalTheme(colorScheme, appTheme)
   if (!isFollowAppTheme(colorScheme)) return theme
-  return { ...theme, background: '#00000000', cursorAccent: '#00000000' }
+
+  const surface = theme.background ?? '#f4f5f8'
+  const selection = theme.selectionBackground ?? 'rgba(255, 255, 255, 0.3)'
+  const opaqueSelection = blendSelectionOnBackground(surface, selection)
+  const opaqueInactive = theme.selectionInactiveBackground
+    ? blendSelectionOnBackground(surface, theme.selectionInactiveBackground)
+    : opaqueSelection
+
+  return {
+    ...theme,
+    background: '#00000000',
+    cursorAccent: '#00000000',
+    selectionBackground: opaqueSelection,
+    selectionInactiveBackground: opaqueInactive
+  }
 }
 
 /** 16 ANSI swatch colors for dropdown preview (normal + bright). */

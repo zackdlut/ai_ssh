@@ -167,7 +167,7 @@
   --surface-inset: rgba(26, 31, 46, 0.04);
   --btn-bg: rgba(26, 31, 46, 0.04);
   --btn-hover-bg: rgba(26, 31, 46, 0.08);
-  --selection-bg: rgba(10, 157, 135, 0.22);
+  --selection-bg: rgba(10, 157, 135, 0.30);
   --selection-fg: #0a2e28;
   --grain-opacity: 0.022;
   --dropdown-hover: linear-gradient(

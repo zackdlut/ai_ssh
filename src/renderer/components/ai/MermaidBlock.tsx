@@ -1,11 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import mermaid from 'mermaid'
 import { mermaidThemeFor } from '../../lib/themes'
 import { useThemeStore } from '../../store/themeStore'
 import { useT } from '../../lib/i18n'
 
+type MermaidApi = typeof import('mermaid').default
+let mermaidPromise: Promise<MermaidApi> | null = null
+function loadMermaid(): Promise<MermaidApi> {
+  mermaidPromise ??= import('mermaid').then((m) => m.default)
+  return mermaidPromise
+}
+
 let lastMermaidTheme: 'dark' | 'default' | null = null
-function ensureInit(theme: 'dark' | 'default'): void {
+function ensureInit(mermaid: MermaidApi, theme: 'dark' | 'default'): void {
   if (lastMermaidTheme === theme) return
   lastMermaidTheme = theme
   mermaid.initialize({
@@ -143,10 +149,9 @@ export default function MermaidBlock({ code }: Props): JSX.Element {
   const t = useT()
 
   useEffect(() => {
-    ensureInit(mermaidThemeFor(appTheme))
     let cancelled = false
 
-    const renderInto = async (src: string): Promise<void> => {
+    const renderInto = async (mermaid: MermaidApi, src: string): Promise<void> => {
       const { svg } = await mermaid.render(nextRenderId(), src)
       if (cancelled) return
       setError(null)
@@ -154,6 +159,10 @@ export default function MermaidBlock({ code }: Props): JSX.Element {
     }
 
     void (async () => {
+      const mermaid = await loadMermaid()
+      if (cancelled) return
+      ensureInit(mermaid, mermaidThemeFor(appTheme))
+
       // Try increasingly-aggressive repairs and render the first candidate that
       // actually parses; only surface an error if none of them do.
       const sanitized = sanitizeMermaid(code)
@@ -174,7 +183,7 @@ export default function MermaidBlock({ code }: Props): JSX.Element {
       }
       try {
         // Fall back to the original source so the error message is meaningful.
-        await renderInto(chosen ?? code)
+        await renderInto(mermaid, chosen ?? code)
       } catch (e: unknown) {
         if (cancelled) return
         setError(e instanceof Error ? e.message : String(e))

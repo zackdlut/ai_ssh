@@ -12,17 +12,19 @@ import '@fontsource/sora/700.css'
 import '@fontsource/jetbrains-mono/400.css'
 import '@fontsource/jetbrains-mono/500.css'
 import '@fontsource/jetbrains-mono/700.css'
-// Bundle the Simplified Chinese subset of Noto Sans SC so Chinese text renders
-// even when the OS has no CJK font installed (otherwise it shows as tofu boxes).
-// Latin glyphs keep falling back to the system UI font via the CSS stack.
-import '@fontsource/noto-sans-sc/chinese-simplified-400.css'
-import '@fontsource/noto-sans-sc/chinese-simplified-500.css'
 import './styles/global.css'
 import { applyTheme, readCachedTheme } from './lib/themes'
 import { readCachedLocale } from './lib/i18n/locale'
 
+const locale = readCachedLocale()
+// Load CJK fonts only when the UI is in Chinese — saves ~6 MB in the default bundle.
+if (locale === 'zh') {
+  void import('@fontsource/noto-sans-sc/chinese-simplified-400.css')
+  void import('@fontsource/noto-sans-sc/chinese-simplified-500.css')
+}
+
 applyTheme(readCachedTheme())
-document.documentElement.lang = readCachedLocale() === 'zh' ? 'zh-CN' : 'en'
+document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en'
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
