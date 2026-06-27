@@ -19,6 +19,7 @@ import type {
   ConnectOptions,
   CopilotChatState,
   ConnectResult,
+  TerminalAppearanceSettings,
   SftpListResult,
   SftpOpResult,
   SftpRealpathResult,
@@ -92,6 +93,10 @@ const api = {
     getLocale: (): Promise<AppLocale> => ipcRenderer.invoke('config:getLocale'),
     setLocale: (locale: AppLocale): Promise<AppLocale> =>
       ipcRenderer.invoke('config:setLocale', locale),
+    getTerminalAppearance: (): Promise<TerminalAppearanceSettings> =>
+      ipcRenderer.invoke('config:getTerminalAppearance'),
+    setTerminalAppearance: (s: TerminalAppearanceSettings): Promise<TerminalAppearanceSettings> =>
+      ipcRenderer.invoke('config:setTerminalAppearance', s),
     getConnections: (): Promise<ConnectionConfig[]> => ipcRenderer.invoke('config:getConnections'),
     saveConnection: (c: ConnectionConfig): Promise<ConnectionConfig[]> =>
       ipcRenderer.invoke('config:saveConnection', c),

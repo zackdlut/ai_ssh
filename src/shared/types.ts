@@ -70,6 +70,12 @@ export interface AISettings {
 /** Application color theme. `dawn` is the default light palette. */
 export type AppTheme = 'aurora' | 'dawn'
 
+export type {
+  TerminalAppearanceSettings,
+  TerminalColorSchemeId,
+  TerminalFontWeight
+} from './terminalSettings'
+
 /** UI display language. */
 export type AppLocale = 'zh' | 'en'
 

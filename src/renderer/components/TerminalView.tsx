@@ -8,8 +8,14 @@ import { registerNlToggle, registerTerminal, unregisterTerminal } from '../lib/t
 import { askAboutSelection } from '../lib/aiService'
 import { extractCommands, isDangerous } from '../lib/commands'
 import { stripAnsi } from '../lib/streamParse'
-import { XTERM_THEMES } from '../lib/themes'
+import {
+  isFollowAppTheme,
+  resolveTerminalTheme,
+  xtermThemeForDisplay
+} from '../lib/terminalColorSchemes'
 import { useThemeStore } from '../store/themeStore'
+import { useTerminalAppearanceStore } from '../store/terminalAppearanceStore'
+import { MIN_TERMINAL_LINE_HEIGHT, MAX_TERMINAL_LINE_HEIGHT, xtermFontWeight } from '../../shared/terminalSettings'
 import { useLocaleStore } from '../store/localeStore'
 import { t, useT } from '../lib/i18n'
 import type { AppLocale } from '../../shared/types'
@@ -195,30 +201,106 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const activeRef = useRef(active)
   const nlRef = useRef<NlState>({ mode: 'normal', buffer: '', cursor: 0, busy: false })
   const [menu, setMenu] = useState<MenuState | null>(null)
   const appTheme = useThemeStore((s) => s.theme)
+  const colorScheme = useTerminalAppearanceStore((s) => s.colorScheme)
+  const fontFamily = useTerminalAppearanceStore((s) => s.fontFamily)
+  const fontSize = useTerminalAppearanceStore((s) => s.fontSize)
+  const lineHeight = useTerminalAppearanceStore((s) => s.lineHeight)
+  const fontWeight = useTerminalAppearanceStore((s) => s.fontWeight)
+  const safeLineHeight = Math.min(
+    MAX_TERMINAL_LINE_HEIGHT,
+    Math.max(MIN_TERMINAL_LINE_HEIGHT, lineHeight)
+  )
   const tr = useT()
+  const followAppTheme = isFollowAppTheme(colorScheme)
+  const resolvedTheme = resolveTerminalTheme(colorScheme, appTheme)
+  const containerBg = resolvedTheme.background ?? '#000'
+
+  activeRef.current = active
+
+  const fitTerminal = (): boolean => {
+    const container = containerRef.current
+    const fit = fitRef.current
+    const term = termRef.current
+    if (!container || !fit || !term) return false
+    if (container.clientWidth <= 0 || container.clientHeight <= 0) return false
+    try {
+      fit.fit()
+      if (term.cols > 0 && term.rows > 0) {
+        window.api.ssh.resize(tab.sessionId, term.cols, term.rows)
+        return true
+      }
+    } catch {
+      // container may be hidden or mid-dispose
+    }
+    return false
+  }
+
+  const scheduleFit = (): void => {
+    if (!activeRef.current) return
+    const attempt = (): void => {
+      if (!activeRef.current) return
+      fitTerminal()
+    }
+    attempt()
+    requestAnimationFrame(() => {
+      attempt()
+      requestAnimationFrame(attempt)
+    })
+    for (const delay of [50, 150, 300]) {
+      window.setTimeout(attempt, delay)
+    }
+  }
 
   useEffect(() => {
+    const appearance = useTerminalAppearanceStore.getState()
+    const appThemeAtMount = useThemeStore.getState().theme
+    const theme = xtermThemeForDisplay(appearance.colorScheme, appThemeAtMount)
     const term = new Terminal({
-      fontFamily:
-        "'JetBrains Mono', 'Cascadia Code', 'Fira Code', Menlo, 'DejaVu Sans Mono', 'Noto Sans SC', 'Noto Sans CJK SC', 'WenQuanYi Zen Hei', 'WenQuanYi Micro Hei', monospace",
-      fontSize: 13,
-      lineHeight: 1.25,
+      allowTransparency: true,
+      fontFamily: appearance.fontFamily,
+      fontSize: appearance.fontSize,
+      lineHeight: Math.min(
+        MAX_TERMINAL_LINE_HEIGHT,
+        Math.max(MIN_TERMINAL_LINE_HEIGHT, appearance.lineHeight)
+      ),
+      fontWeight: xtermFontWeight(appearance.fontWeight),
+      fontWeightBold: 'bold',
       letterSpacing: 0.2,
       cursorBlink: true,
       cursorStyle: 'bar',
       scrollback: 5000,
-      theme: XTERM_THEMES[useThemeStore.getState().theme]
+      theme
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.loadAddon(new WebLinksAddon())
-    term.open(containerRef.current!)
-    fit.fit()
-    termRef.current = term
-    fitRef.current = fit
+
+    let cancelled = false
+    const attachTerminal = (): void => {
+      if (cancelled) return
+      const el = containerRef.current
+      if (!el) return
+      if (el.clientWidth <= 0 || el.clientHeight <= 0) {
+        requestAnimationFrame(attachTerminal)
+        return
+      }
+      el.replaceChildren()
+      term.open(el)
+      termRef.current = term
+      fitRef.current = fit
+      fitTerminal()
+      scheduleFit()
+      if (term.cols > 0 && term.rows > 0) {
+        window.api.ssh.resize(tab.sessionId, term.cols, term.rows)
+      }
+      term.focus()
+    }
+    attachTerminal()
+
     const loc = (): AppLocale => useLocaleStore.getState().locale
 
     // --- In-terminal natural-language mode ---
@@ -672,19 +754,13 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
     registerNlToggle(tab.id, toggleNl)
 
     const resizeObserver = new ResizeObserver(() => {
-      try {
-        fit.fit()
-      } catch {
-        // container may be hidden
-      }
+      if (!activeRef.current) return
+      fitTerminal()
     })
     resizeObserver.observe(containerRef.current!)
 
-    // Push the initial size to the remote shell.
-    window.api.ssh.resize(tab.sessionId, term.cols, term.rows)
-    term.focus()
-
     return () => {
+      cancelled = true
       term.textarea?.removeEventListener('paste', onTerminalPaste, true)
       onDataDisposable.dispose()
       onResizeDisposable.dispose()
@@ -705,22 +781,21 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
   // Refit and focus whenever this tab becomes the active one.
   useEffect(() => {
     if (active && fitRef.current && termRef.current) {
-      requestAnimationFrame(() => {
-        try {
-          fitRef.current?.fit()
-          termRef.current?.focus()
-        } catch {
-          // ignore
-        }
-      })
+      scheduleFit()
+      termRef.current.focus()
     }
   }, [active])
 
   useEffect(() => {
     const term = termRef.current
     if (!term) return
-    term.options.theme = XTERM_THEMES[appTheme]
-  }, [appTheme])
+    term.options.theme = xtermThemeForDisplay(colorScheme, appTheme)
+    term.options.fontFamily = fontFamily
+    term.options.fontSize = fontSize
+    term.options.lineHeight = safeLineHeight
+    term.options.fontWeight = xtermFontWeight(fontWeight)
+    if (activeRef.current) scheduleFit()
+  }, [appTheme, colorScheme, fontFamily, fontSize, safeLineHeight, fontWeight])
 
   // Dismiss the context menu on any outside interaction.
   useEffect(() => {
@@ -769,15 +844,14 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
   return (
     <>
       <div
-        ref={containerRef}
+        className={`terminal-view-host${active ? ' is-active' : ''}${
+          followAppTheme ? ' terminal-view-host--follow-theme' : ''
+        }`}
+        style={followAppTheme ? undefined : { background: containerBg }}
         onContextMenu={onContextMenu}
-        style={{
-          position: 'absolute',
-          inset: 0,
-          padding: '4px 6px',
-          display: active ? 'block' : 'none'
-        }}
-      />
+      >
+        <div ref={containerRef} className="terminal-view-surface" />
+      </div>
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
           <ContextMenuItem shortcut={SHORTCUT_ASK_COPILOT} onClick={ask}>

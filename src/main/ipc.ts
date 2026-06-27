@@ -23,6 +23,7 @@ import type {
   ConnectionConfig,
   ConnectOptions,
   CopilotChatState,
+  TerminalAppearanceSettings,
   SftpListResult,
   SftpOpResult,
   SftpRealpathResult,
@@ -228,6 +229,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
   ipcMain.handle('config:setTheme', (_e, theme: AppTheme) => config.setTheme(theme))
   ipcMain.handle('config:getLocale', () => config.getLocale())
   ipcMain.handle('config:setLocale', (_e, locale: AppLocale) => config.setLocale(locale))
+  ipcMain.handle('config:getTerminalAppearance', () => config.getTerminalAppearance())
+  ipcMain.handle('config:setTerminalAppearance', (_e, settings: TerminalAppearanceSettings) =>
+    config.setTerminalAppearance(settings)
+  )
   ipcMain.handle('config:getConnections', () => config.getConnections())
   ipcMain.handle('config:saveConnection', (_e, conn: ConnectionConfig) =>
     config.saveConnection(conn)

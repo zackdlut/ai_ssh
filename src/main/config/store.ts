@@ -1,5 +1,10 @@
 import Store from 'electron-store'
 import { DEFAULT_MODELS, cloneModels, normalizeAISettings } from '../../shared/aiSettings'
+import {
+  DEFAULT_TERMINAL_APPEARANCE,
+  normalizeTerminalAppearanceSettings
+} from '../../shared/terminalSettings'
+import type { TerminalAppearanceSettings } from '../../shared/terminalSettings'
 import type {
   AISettings,
   AppLocale,
@@ -13,6 +18,7 @@ interface StoreSchema {
   ai: AISettings
   theme: AppTheme
   locale: AppLocale
+  terminalAppearance: TerminalAppearanceSettings
   connections: ConnectionConfig[]
   folders: BookmarkFolder[]
   copilotChats: CopilotChatState | null
@@ -38,6 +44,7 @@ function store(): Store<StoreSchema> {
         },
         theme: 'dawn',
         locale: 'zh',
+        terminalAppearance: { ...DEFAULT_TERMINAL_APPEARANCE },
         connections: [],
         folders: [],
         copilotChats: null
@@ -78,6 +85,18 @@ export function getLocale(): AppLocale {
 export function setLocale(locale: AppLocale): AppLocale {
   store().set('locale', locale === 'en' ? 'en' : 'zh')
   return getLocale()
+}
+
+export function getTerminalAppearance(): TerminalAppearanceSettings {
+  return normalizeTerminalAppearanceSettings(store().get('terminalAppearance'))
+}
+
+export function setTerminalAppearance(
+  settings: TerminalAppearanceSettings
+): TerminalAppearanceSettings {
+  const normalized = normalizeTerminalAppearanceSettings(settings)
+  store().set('terminalAppearance', normalized)
+  return getTerminalAppearance()
 }
 
 export function getConnections(): ConnectionConfig[] {

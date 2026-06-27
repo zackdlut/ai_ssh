@@ -8,6 +8,7 @@ import ConnectModal from './components/connection/ConnectModal'
 import ConnectionSidebar from './components/connection/ConnectionSidebar'
 import SettingsModal from './components/ai/SettingsModal'
 import ThemesModal from './components/settings/ThemesModal'
+import TerminalAppearanceModal from './components/settings/TerminalAppearanceModal'
 import LanguageModal from './components/settings/LanguageModal'
 import AboutModal from './components/settings/AboutModal'
 import { useTabsStore } from './store/tabsStore'
@@ -16,6 +17,7 @@ import { useSftpStore } from './store/sftpStore'
 import { useBookmarksStore } from './store/bookmarksStore'
 import { useThemeStore } from './store/themeStore'
 import { useLocaleStore } from './store/localeStore'
+import { useTerminalAppearanceStore } from './store/terminalAppearanceStore'
 import { initAIService } from './lib/aiService'
 import type { ConnectionConfig } from '../shared/types'
 
@@ -31,6 +33,7 @@ export default function App(): JSX.Element {
   const loadBookmarks = useBookmarksStore((s) => s.load)
   const loadTheme = useThemeStore((s) => s.load)
   const loadLocale = useLocaleStore((s) => s.load)
+  const loadTerminalAppearance = useTerminalAppearanceStore((s) => s.load)
   const [connectModal, setConnectModal] = useState<ConnectModalState | null>(null)
   const [settingsPanel, setSettingsPanel] = useState<SettingsMenuItem | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -41,6 +44,7 @@ export default function App(): JSX.Element {
     void loadBookmarks()
     void loadTheme()
     void loadLocale()
+    void loadTerminalAppearance()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -97,6 +101,9 @@ export default function App(): JSX.Element {
       )}
       {settingsPanel === 'ai' && <SettingsModal onClose={() => setSettingsPanel(null)} />}
       {settingsPanel === 'themes' && <ThemesModal onClose={() => setSettingsPanel(null)} />}
+      {settingsPanel === 'terminal' && (
+        <TerminalAppearanceModal onClose={() => setSettingsPanel(null)} />
+      )}
       {settingsPanel === 'language' && <LanguageModal onClose={() => setSettingsPanel(null)} />}
       {settingsPanel === 'about' && <AboutModal onClose={() => setSettingsPanel(null)} />}
     </div>

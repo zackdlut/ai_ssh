@@ -7,7 +7,7 @@ import { cloneTab, connectFromConfig, reconnectTab } from '../lib/connect'
 import { readFullTerminalOutput } from '../lib/terminalRegistry'
 import { useT } from '../lib/i18n'
 
-export type SettingsMenuItem = 'ai' | 'themes' | 'language' | 'about'
+export type SettingsMenuItem = 'ai' | 'themes' | 'terminal' | 'language' | 'about'
 
 interface TabContextMenu {
   x: number
@@ -232,6 +232,15 @@ export default function TabBar({
               }}
             >
               {t('tabbar.themes')}
+            </button>
+            <button
+              className="toolbar-dropdown-item"
+              onClick={() => {
+                setSettingsOpen(false)
+                onSettingsSelect('terminal')
+              }}
+            >
+              {t('tabbar.terminalAppearance')}
             </button>
             <button
               className="toolbar-dropdown-item"

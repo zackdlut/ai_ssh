@@ -26,21 +26,25 @@ export const THEME_OPTIONS: ThemeMeta[] = [
   }
 ]
 
+/**
+ * Terminal palettes aligned with --panel-bg / --panel-bg-solid in global.css.
+ * When color scheme is "auto", backgrounds match the connection sidebar surface.
+ */
 export const XTERM_THEMES: Record<AppTheme, ITheme> = {
   aurora: {
-    background: '#0a0e16',
+    background: '#181e2b',
     foreground: '#e7ebf6',
     cursor: '#5be9d0',
-    cursorAccent: '#0a0e16',
+    cursorAccent: '#181e2b',
     selectionBackground: 'rgba(91, 233, 208, 0.28)',
-    black: '#11151f',
+    black: '#0e121b',
     red: '#ff7a93',
     green: '#82e8b6',
     yellow: '#ffce6a',
     blue: '#74a8ff',
     magenta: '#b292ff',
     cyan: '#5be9d0',
-    white: '#cdd3e3',
+    white: '#b8bfd4',
     brightBlack: '#5d6479',
     brightRed: '#ff95a9',
     brightGreen: '#9bf0c7',
@@ -51,10 +55,10 @@ export const XTERM_THEMES: Record<AppTheme, ITheme> = {
     brightWhite: '#f4f7ff'
   },
   dawn: {
-    background: '#fcfdfe',
+    background: '#f4f5f8',
     foreground: '#1a1f2e',
     cursor: '#0a9d87',
-    cursorAccent: '#fcfdfe',
+    cursorAccent: '#f4f5f8',
     selectionBackground: 'rgba(10, 157, 135, 0.22)',
     black: '#2a3142',
     red: '#c93d58',
@@ -63,8 +67,8 @@ export const XTERM_THEMES: Record<AppTheme, ITheme> = {
     blue: '#3b6fd9',
     magenta: '#7c5dd4',
     cyan: '#0a9d87',
-    white: '#4a5168',
-    brightBlack: '#6b728a',
+    white: '#5c6378',
+    brightBlack: '#8b92a6',
     brightRed: '#e25572',
     brightGreen: '#22b574',
     brightYellow: '#d4a017',
