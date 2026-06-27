@@ -404,6 +404,7 @@ export default function SidePanel(): JSX.Element {
             <>
               <ContextMenuItem
                 shortcut={SHORTCUT_COPY}
+                icon="copy"
                 onClick={copySelection}
                 disabled={menu.selectionStart === menu.selectionEnd}
               >
@@ -411,17 +412,18 @@ export default function SidePanel(): JSX.Element {
               </ContextMenuItem>
               <ContextMenuItem
                 shortcut={SHORTCUT_CUT}
+                icon="cut"
                 onClick={cutSelection}
                 disabled={menu.selectionStart === menu.selectionEnd}
               >
                 {t('common.cut')}
               </ContextMenuItem>
-              <ContextMenuItem shortcut={SHORTCUT_PASTE} onClick={pasteToComposer}>
+              <ContextMenuItem shortcut={SHORTCUT_PASTE} icon="paste" onClick={pasteToComposer}>
                 {t('common.paste')}
               </ContextMenuItem>
             </>
           ) : (
-            <ContextMenuItem shortcut={SHORTCUT_COPY} onClick={copySelection}>
+            <ContextMenuItem shortcut={SHORTCUT_COPY} icon="copy" onClick={copySelection}>
               {t('common.copy')}
             </ContextMenuItem>
           )}

@@ -6,6 +6,9 @@ import { useBookmarksStore } from '../store/bookmarksStore'
 import { cloneTab, connectFromConfig, reconnectTab } from '../lib/connect'
 import { readFullTerminalOutput } from '../lib/terminalRegistry'
 import { useT } from '../lib/i18n'
+import UiIcon from './UiIcon'
+import DropdownMenuItem from './DropdownMenuItem'
+import ContextMenuItem from './ContextMenuItem'
 
 export type SettingsMenuItem = 'ai' | 'themes' | 'terminal' | 'language' | 'about'
 
@@ -128,7 +131,8 @@ export default function TabBar({
         onClick={onToggleSidebar}
         title={t('tabbar.toggleSidebar')}
       >
-        {t('tabbar.connections')}
+        <UiIcon name="connections" />
+        <span>{t('tabbar.connections')}</span>
       </button>
       {tabs.map((tab) => (
         <div
@@ -171,7 +175,7 @@ export default function TabBar({
       ))}
       <div className="tab-add-wrap">
         <button className="tab-add" onClick={onNewConnection} title={t('tabbar.newConnection')}>
-          <span className="tab-add-glyph">+</span>
+          <UiIcon name="plus" className="tab-add-glyph" />
         </button>
         <button
           className={`tab-add-caret ${recentOpen ? 'active' : ''}`}
@@ -181,11 +185,14 @@ export default function TabBar({
           }}
           title={t('tabbar.recentConnections')}
         >
-          <span className="tab-add-caret-glyph">▾</span>
+          <UiIcon name="caret-down" className="tab-add-caret-glyph" />
         </button>
         {recentOpen && (
           <div className="recent-menu" onClick={(e) => e.stopPropagation()}>
-            <div className="recent-menu-title">{t('tabbar.recentTitle')}</div>
+            <div className="recent-menu-title">
+              <UiIcon name="clock" size="sm" className="menu-item-icon" />
+              {t('tabbar.recentTitle')}
+            </div>
             {connections.length === 0 || recent.length === 0 ? (
               <div className="recent-menu-empty">{t('tabbar.recentEmpty')}</div>
             ) : (
@@ -199,9 +206,12 @@ export default function TabBar({
                   }}
                   title={`${c.username}@${c.host}:${c.port}`}
                 >
-                  <span className="recent-item-name">{c.name}</span>
-                  <span className="recent-item-sub">
-                    {c.username}@{c.host}
+                  <UiIcon name="server" className="menu-item-icon" />
+                  <span className="recent-item-body">
+                    <span className="recent-item-name">{c.name}</span>
+                    <span className="recent-item-sub">
+                      {c.username}@{c.host}
+                    </span>
                   </span>
                 </button>
               ))
@@ -219,57 +229,58 @@ export default function TabBar({
           }}
           title={t('tabbar.settings')}
         >
-          {t('tabbar.settings')}
-          <span className={`toolbar-menu-caret ${settingsOpen ? 'open' : ''}`}>▾</span>
+          <UiIcon name="settings" />
+          <span>{t('tabbar.settings')}</span>
+          <UiIcon name="caret-down" className={`toolbar-menu-caret ${settingsOpen ? 'open' : ''}`} size="sm" />
         </button>
         {settingsOpen && (
           <div className="toolbar-dropdown-menu" onClick={(e) => e.stopPropagation()}>
-            <button
-              className="toolbar-dropdown-item"
+            <DropdownMenuItem
+              icon="themes"
               onClick={() => {
                 setSettingsOpen(false)
                 onSettingsSelect('themes')
               }}
             >
               {t('tabbar.themes')}
-            </button>
-            <button
-              className="toolbar-dropdown-item"
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              icon="terminal"
               onClick={() => {
                 setSettingsOpen(false)
                 onSettingsSelect('terminal')
               }}
             >
               {t('tabbar.terminalAppearance')}
-            </button>
-            <button
-              className="toolbar-dropdown-item"
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              icon="language"
               onClick={() => {
                 setSettingsOpen(false)
                 onSettingsSelect('language')
               }}
             >
               {t('tabbar.language')}
-            </button>
-            <button
-              className="toolbar-dropdown-item"
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              icon="ai"
               onClick={() => {
                 setSettingsOpen(false)
                 onSettingsSelect('ai')
               }}
             >
               {t('tabbar.aiSettings')}
-            </button>
+            </DropdownMenuItem>
             <div className="toolbar-dropdown-divider" role="separator" />
-            <button
-              className="toolbar-dropdown-item"
+            <DropdownMenuItem
+              icon="about"
               onClick={() => {
                 setSettingsOpen(false)
                 onSettingsSelect('about')
               }}
             >
               {t('tabbar.about')}
-            </button>
+            </DropdownMenuItem>
           </div>
         )}
       </div>
@@ -278,18 +289,22 @@ export default function TabBar({
         onClick={handleToggleAI}
         title={t('tabbar.toggleAi')}
       >
-        {t('tabbar.aiCopilot')}
+        <UiIcon name="copilot" />
+        <span>{t('tabbar.aiCopilot')}</span>
       </button>
       <button
         className={`toolbar-btn ${sftpOpen ? 'active' : ''}`}
         onClick={handleToggleSftp}
         title={t('tabbar.toggleSftp')}
       >
-        {t('tabbar.sftp')}
+        <UiIcon name="sftp" />
+        <span>{t('tabbar.sftp')}</span>
       </button>
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
-          <button onClick={() => void saveTabOutput(menu.tab)}>{t('tabbar.saveOutput')}</button>
+          <ContextMenuItem icon="save" onClick={() => void saveTabOutput(menu.tab)}>
+            {t('tabbar.saveOutput')}
+          </ContextMenuItem>
         </div>
       )}
     </div>

@@ -9,6 +9,8 @@ import {
 import { useTabsStore } from '../../store/tabsStore'
 import { connectFromConfig } from '../../lib/connect'
 import { useT } from '../../lib/i18n'
+import ContextMenuItem from '../ContextMenuItem'
+import UiIcon from '../UiIcon'
 import type { ConnectionConfig } from '../../../shared/types'
 
 interface Props {
@@ -302,14 +304,14 @@ export default function ConnectionSidebar({
           )}
         </span>
         <div style={{ display: 'flex', gap: 6 }}>
-          <button className="toolbar-btn" title={t('sidebar.newConnection')} onClick={() => onNewConnection(null)}>
-            +
+          <button className="toolbar-btn toolbar-btn--icon" title={t('sidebar.newConnection')} onClick={() => onNewConnection(null)}>
+            <UiIcon name="plus" />
           </button>
-          <button className="toolbar-btn" title={t('sidebar.newFolder')} onClick={() => void newFolder(null)}>
-            ⊕
+          <button className="toolbar-btn toolbar-btn--icon" title={t('sidebar.newFolder')} onClick={() => void newFolder(null)}>
+            <UiIcon name="folder-plus" />
           </button>
-          <button className="toolbar-btn" title={t('sidebar.hide')} onClick={onClose}>
-            ‹
+          <button className="toolbar-btn toolbar-btn--icon" title={t('sidebar.hide')} onClick={onClose}>
+            <UiIcon name="panel-close" />
           </button>
         </div>
       </div>
@@ -353,27 +355,39 @@ export default function ConnectionSidebar({
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
           {menu.node === null && (
             <>
-              <button onClick={() => onNewConnection(null)}>{t('sidebar.newConnection')}</button>
-              <button onClick={() => void newFolder(null)}>{t('sidebar.newFolder')}</button>
+              <ContextMenuItem icon="connect" onClick={() => onNewConnection(null)}>
+                {t('sidebar.newConnection')}
+              </ContextMenuItem>
+              <ContextMenuItem icon="folder-new" onClick={() => void newFolder(null)}>
+                {t('sidebar.newFolder')}
+              </ContextMenuItem>
             </>
           )}
           {menu.node?.kind === 'folder' && (
             <>
-              <button onClick={() => onNewConnection(menu.node!.id)}>{t('sidebar.newConnectionHere')}</button>
-              <button onClick={() => void newFolder(menu.node!.id)}>{t('sidebar.newSubfolder')}</button>
-              <button
+              <ContextMenuItem icon="connect" onClick={() => onNewConnection(menu.node!.id)}>
+                {t('sidebar.newConnectionHere')}
+              </ContextMenuItem>
+              <ContextMenuItem icon="folder-new" onClick={() => void newFolder(menu.node!.id)}>
+                {t('sidebar.newSubfolder')}
+              </ContextMenuItem>
+              <ContextMenuItem
+                icon="edit"
                 onClick={() =>
                   beginRename(menu.node!.id, (menu.node as { folder: { name: string } }).folder.name)
                 }
               >
                 {t('common.rename')}
-              </button>
-              <button onClick={() => void deleteFolder(menu.node!.id)}>{t('sidebar.deleteFolder')}</button>
+              </ContextMenuItem>
+              <ContextMenuItem icon="delete" onClick={() => void deleteFolder(menu.node!.id)}>
+                {t('sidebar.deleteFolder')}
+              </ContextMenuItem>
             </>
           )}
           {menu.node?.kind === 'connection' && (
             <>
-              <button
+              <ContextMenuItem
+                icon="connect"
                 onClick={() =>
                   void connectFromConfig(
                     (menu.node as { connection: ConnectionConfig }).connection
@@ -381,15 +395,18 @@ export default function ConnectionSidebar({
                 }
               >
                 {t('common.connect')}
-              </button>
-              <button
+              </ContextMenuItem>
+              <ContextMenuItem
+                icon="edit"
                 onClick={() =>
                   onEditConnection((menu.node as { connection: ConnectionConfig }).connection)
                 }
               >
                 {t('common.edit')}
-              </button>
-              <button onClick={() => void deleteConnection(menu.node!.id)}>{t('common.delete')}</button>
+              </ContextMenuItem>
+              <ContextMenuItem icon="delete" onClick={() => void deleteConnection(menu.node!.id)}>
+                {t('common.delete')}
+              </ContextMenuItem>
             </>
           )}
         </div>

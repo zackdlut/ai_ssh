@@ -903,17 +903,12 @@ select:focus {
 .tab-add-glyph,
 .tab-add-caret-glyph {
   display: block;
-  line-height: 1;
   transition: transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1), color 0.16s ease;
 }
 
 .tab-add {
   width: 30px;
   border-radius: 7px 0 0 7px;
-}
-.tab-add-glyph {
-  font-size: 17px;
-  font-weight: 400;
 }
 .tab-add:hover {
   background: var(--accent-subtle);
@@ -933,7 +928,7 @@ select:focus {
   border-radius: 0 7px 7px 0;
 }
 .tab-add-caret-glyph {
-  font-size: 11px;
+  opacity: 0.85;
 }
 .tab-add-caret::after {
   content: '';
@@ -970,6 +965,9 @@ select:focus {
   animation: modal-in 0.14s ease;
 }
 .recent-menu-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   padding: 6px 11px 4px;
   font-size: 11px;
   letter-spacing: 0.04em;
@@ -977,7 +975,7 @@ select:focus {
   color: var(--text-dim);
 }
 .recent-menu-empty {
-  padding: 8px 11px;
+  padding: 8px 11px 8px 36px;
   font-size: 13px;
   color: var(--text-dim);
 }
@@ -988,11 +986,23 @@ select:focus {
   border-radius: 6px;
   padding: 7px 11px;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 9px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.14s ease;
 }
 .recent-menu-item:hover {
   background: var(--dropdown-hover);
+}
+.recent-menu-item:hover .menu-item-icon {
+  color: var(--signal);
+}
+.recent-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 .recent-item-name {
   font-size: 13px;
@@ -1016,9 +1026,8 @@ select:focus {
   gap: 4px;
 }
 .toolbar-menu-caret {
-  font-size: 10px;
-  opacity: 0.7;
-  transition: transform 0.14s ease;
+  opacity: 0.72;
+  transition: transform 0.14s ease, color 0.14s ease;
 }
 .toolbar-menu-caret.open {
   transform: rotate(180deg);
@@ -1028,7 +1037,7 @@ select:focus {
   top: calc(100% + 6px);
   right: 0;
   z-index: 200;
-  min-width: 180px;
+  min-width: 196px;
   background: var(--ink-600);
   border: 1px solid var(--line-strong);
   border-radius: 10px;
@@ -1040,16 +1049,38 @@ select:focus {
   animation: modal-in 0.14s ease;
 }
 .toolbar-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
   border: none;
   background: transparent;
   text-align: left;
   border-radius: 6px;
-  padding: 7px 11px;
+  padding: 8px 11px;
   font-size: 13px;
   color: var(--text);
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
 }
-.toolbar-dropdown-item:hover {
+.toolbar-dropdown-item:hover:not(:disabled) {
   background: var(--dropdown-hover);
+  color: var(--text);
+}
+.toolbar-dropdown-item:hover:not(:disabled) .menu-item-icon {
+  color: var(--signal);
+}
+.toolbar-dropdown-item:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+.menu-item-icon {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  transition: color 0.14s ease;
+}
+.menu-item-label {
+  flex: 1;
+  min-width: 0;
 }
 
 .toolbar-dropdown-divider {
@@ -1142,21 +1173,67 @@ select:focus {
 }
 
 .toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-dim);
   padding: 6px 12px;
   font-size: 13px;
   border-radius: var(--radius-sm);
+  transition:
+    background 0.16s ease,
+    color 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+.toolbar-btn .ui-icon {
+  color: var(--text-faint);
+  transition: color 0.16s ease, transform 0.16s ease;
+}
+.toolbar-btn .sftp-icon {
+  color: var(--text-faint);
+  transition: color 0.16s ease, opacity 0.16s ease;
 }
 .toolbar-btn:hover {
   background: var(--surface-hover);
   color: var(--text);
 }
+.toolbar-btn:hover .ui-icon {
+  color: var(--text-dim);
+}
+.toolbar-btn:hover .sftp-icon {
+  color: var(--text-dim);
+}
 .toolbar-btn.active {
   color: var(--signal);
   background: var(--accent-hover);
   border-color: var(--accent-border);
+}
+.toolbar-btn.active .ui-icon {
+  color: var(--signal);
+}
+.toolbar-btn.active .sftp-icon {
+  color: var(--signal);
+}
+
+/* Unified icon slot for tabbar action buttons (settings, copilot, sftp). */
+.tabbar .toolbar-btn > .ui-icon:not(.toolbar-menu-caret),
+.tabbar .toolbar-btn > .copilot-sparkle-icon,
+.tabbar .toolbar-btn > .sftp-icon {
+  --copilot-size: 18px;
+  --sftp-size: 18px;
+  width: 18px;
+  height: 18px;
+}
+
+.toolbar-btn--icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+  gap: 0;
 }
 
 /* ---------- Side panel ---------- */
@@ -3601,7 +3678,7 @@ select:focus {
 .context-menu {
   position: fixed;
   z-index: 200;
-  min-width: 156px;
+  min-width: 172px;
   background: var(--ink-600);
   border: 1px solid var(--line-strong);
   border-radius: 10px;
@@ -3613,21 +3690,20 @@ select:focus {
   animation: modal-in 0.14s ease;
 }
 
-.context-menu button {
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 100%;
   border: none;
   background: transparent;
   text-align: left;
   border-radius: 6px;
   padding: 8px 11px;
   font-size: 13px;
-}
-
-.context-menu-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  min-width: 100%;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
 }
 
 .context-menu-label {
@@ -3642,14 +3718,615 @@ select:focus {
   letter-spacing: 0.02em;
 }
 
-.context-menu button:hover:not(:disabled) {
-  background: linear-gradient(135deg, rgba(91, 233, 208, 0.18), rgba(116, 168, 255, 0.12));
+.context-menu-item:hover:not(:disabled) {
+  background: var(--dropdown-hover);
+  color: var(--text);
+}
+
+.context-menu-item:hover:not(:disabled) .menu-item-icon {
   color: var(--signal);
 }
 
-.context-menu button:disabled {
+.context-menu-item:disabled {
   opacity: 0.38;
   cursor: default;
+}
+
+/* ---------- UI icons (CSS glyphs, theme-aware via currentColor) ---------- */
+.ui-icon {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: currentColor;
+}
+.ui-icon::before,
+.ui-icon::after {
+  content: '';
+  position: absolute;
+  box-sizing: border-box;
+}
+.ui-icon--sm {
+  width: 12px;
+  height: 12px;
+}
+.ui-icon--lg {
+  width: 20px;
+  height: 20px;
+}
+
+.ui-icon--plus::before,
+.ui-icon--plus::after {
+  left: 50%;
+  top: 50%;
+  background: currentColor;
+  border-radius: 1px;
+}
+.ui-icon--plus::before {
+  width: 10px;
+  height: 1.5px;
+  margin: -0.75px 0 0 -5px;
+}
+.ui-icon--plus::after {
+  width: 1.5px;
+  height: 10px;
+  margin: -5px 0 0 -0.75px;
+}
+
+.ui-icon--caret-down::before {
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -4px 0 0 -3px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+
+.ui-icon--connections::before {
+  left: 1px;
+  top: 2px;
+  width: 5px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px 0 0 2px;
+}
+.ui-icon--connections::after {
+  left: 7px;
+  top: 2px;
+  width: 5px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-left: none;
+  border-radius: 0 2px 2px 0;
+  opacity: 0.55;
+}
+
+/* Settings — compact gear cog */
+.ui-icon--settings {
+  background-color: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94L14.4 2.81a.488.488 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94L14.4 2.81a.488.488 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+.ui-icon--settings::before,
+.ui-icon--settings::after {
+  display: none;
+}
+
+/* AI Copilot — SVG sparkle cluster with twinkle animation */
+.copilot-sparkle-icon {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: var(--copilot-size, 20px);
+  height: var(--copilot-size, 20px);
+  --copilot-star-highlight: color-mix(in srgb, white 52%, var(--signal));
+  --copilot-star-mid: color-mix(in srgb, var(--signal) 88%, var(--azure));
+  --copilot-star-deep: color-mix(in srgb, var(--signal-strong) 72%, var(--azure));
+  --copilot-flare: color-mix(in srgb, white 62%, var(--signal));
+  --copilot-glow: color-mix(in srgb, var(--signal) 78%, var(--azure));
+}
+.tabbar .toolbar-btn:not(:hover):not(.active) .copilot-sparkle-icon:not(.copilot-sparkle-icon--menu) {
+  opacity: 0.86;
+}
+.tabbar .toolbar-btn:hover .copilot-sparkle-icon:not(.copilot-sparkle-icon--menu),
+.tabbar .toolbar-btn.active .copilot-sparkle-icon:not(.copilot-sparkle-icon--menu) {
+  opacity: 1;
+}
+.copilot-sparkle-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.copilot-sparkle-star {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.copilot-sparkle-star--main {
+  animation: copilot-sparkle-main 2.4s ease-in-out infinite;
+}
+.copilot-sparkle-star--a {
+  animation: copilot-sparkle-a 2.1s ease-in-out infinite;
+  animation-delay: 0.35s;
+}
+.copilot-sparkle-star--b {
+  animation: copilot-sparkle-b 2.6s ease-in-out infinite;
+  animation-delay: 0.7s;
+}
+.copilot-sparkle-flare {
+  opacity: 0.55;
+  animation: copilot-sparkle-flare 2.4s ease-in-out infinite;
+}
+@keyframes copilot-sparkle-main {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    filter: drop-shadow(0 0 2.5px color-mix(in srgb, var(--copilot-glow) 55%, transparent));
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1.08);
+    filter: drop-shadow(0 0 7px var(--copilot-glow)) drop-shadow(0 0 2px white);
+  }
+  68% {
+    opacity: 0.9;
+    transform: scale(0.96);
+  }
+}
+@keyframes copilot-sparkle-a {
+  0%, 100% { opacity: 0.78; transform: scale(0.94); }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+    filter: drop-shadow(0 0 4px var(--copilot-glow));
+  }
+}
+@keyframes copilot-sparkle-b {
+  0%, 100% { opacity: 0.7; transform: scale(0.92); }
+  55% {
+    opacity: 1;
+    transform: scale(1.12);
+    filter: drop-shadow(0 0 4px var(--copilot-glow));
+  }
+}
+@keyframes copilot-sparkle-flare {
+  0%, 100% { opacity: 0.3; }
+  42% { opacity: 1; }
+}
+.toolbar-btn:hover .copilot-sparkle-icon .copilot-sparkle-star--main,
+.toolbar-btn.active .copilot-sparkle-icon .copilot-sparkle-star--main {
+  animation-duration: 1.6s;
+  filter: drop-shadow(0 0 6px var(--copilot-glow));
+}
+.copilot-sparkle-icon--menu {
+  --copilot-star-highlight: currentColor;
+  --copilot-star-mid: currentColor;
+  --copilot-star-deep: color-mix(in srgb, currentColor 78%, transparent);
+  --copilot-flare: color-mix(in srgb, currentColor 50%, transparent);
+}
+.copilot-sparkle-icon--menu .copilot-sparkle-star,
+.copilot-sparkle-icon--menu .copilot-sparkle-flare {
+  animation: none;
+  filter: none;
+  transform: none;
+}
+.copilot-sparkle-icon--menu .copilot-sparkle-star--main {
+  opacity: 1;
+}
+.copilot-sparkle-icon--menu .copilot-sparkle-star--a,
+.copilot-sparkle-icon--menu .copilot-sparkle-star--b {
+  opacity: 0.72;
+}
+.copilot-sparkle-icon--menu .copilot-sparkle-flare {
+  opacity: 0.38;
+}
+.context-menu-item:hover:not(:disabled) .copilot-sparkle-icon--menu .copilot-sparkle-star--a,
+.context-menu-item:hover:not(:disabled) .copilot-sparkle-icon--menu .copilot-sparkle-star--b {
+  opacity: 0.92;
+}
+.context-menu-item:hover:not(:disabled) .copilot-sparkle-icon--menu .copilot-sparkle-flare {
+  opacity: 0.55;
+}
+[data-theme='dawn'] .copilot-sparkle-icon:not(.copilot-sparkle-icon--menu) {
+  --copilot-star-highlight: color-mix(in srgb, white 34%, var(--signal));
+  --copilot-star-mid: var(--signal-strong);
+  --copilot-star-deep: color-mix(in srgb, var(--signal-strong) 68%, var(--azure));
+  --copilot-flare: color-mix(in srgb, white 48%, var(--signal));
+}
+@media (prefers-reduced-motion: reduce) {
+  .copilot-sparkle-star,
+  .copilot-sparkle-flare {
+    animation: none !important;
+  }
+}
+
+/* SFTP — folder label over secured shield (SVG component) */
+.sftp-icon {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: var(--sftp-size, 14px);
+  height: var(--sftp-size, 14px);
+  --sftp-folder-stroke: color-mix(in srgb, var(--azure) 88%, currentColor);
+  --sftp-label: color-mix(in srgb, var(--azure) 72%, currentColor);
+  --sftp-connector: color-mix(in srgb, currentColor 78%, transparent);
+  --sftp-shield-stroke: color-mix(in srgb, var(--signal) 82%, currentColor);
+  --sftp-check: var(--signal);
+}
+.sftp-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.tabbar .toolbar-btn:not(:hover):not(.active) .sftp-icon {
+  opacity: 0.9;
+}
+.tabbar .toolbar-btn:hover .sftp-icon,
+.tabbar .toolbar-btn.active .sftp-icon {
+  --sftp-folder-stroke: color-mix(in srgb, var(--signal) 55%, var(--azure));
+  --sftp-label: color-mix(in srgb, var(--signal) 45%, var(--azure));
+  --sftp-connector: currentColor;
+  --sftp-shield-stroke: var(--signal);
+  --sftp-check: var(--signal-strong);
+  opacity: 1;
+}
+[data-theme='dawn'] .sftp-icon {
+  --sftp-folder-stroke: color-mix(in srgb, var(--azure) 80%, currentColor);
+  --sftp-label: color-mix(in srgb, var(--signal-strong) 55%, var(--azure));
+  --sftp-shield-stroke: color-mix(in srgb, var(--signal-strong) 85%, currentColor);
+  --sftp-check: var(--signal-strong);
+}
+[data-theme='dawn'] .tabbar .toolbar-btn:hover .sftp-icon,
+[data-theme='dawn'] .tabbar .toolbar-btn.active .sftp-icon {
+  --sftp-folder-stroke: var(--signal-strong);
+  --sftp-label: var(--signal-strong);
+  --sftp-shield-stroke: var(--signal-strong);
+  --sftp-check: var(--signal-strong);
+}
+
+.ui-icon--themes::before {
+  left: 1px;
+  top: 1px;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+.ui-icon--themes::after {
+  left: 4px;
+  top: 4px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow:
+    4px 0 0 currentColor,
+    -1px 3px 0 var(--azure),
+    3px 3px 0 var(--violet);
+}
+
+.ui-icon--terminal::before {
+  left: 1px;
+  top: 2px;
+  width: 12px;
+  height: 9px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+.ui-icon--terminal::after {
+  left: 3px;
+  top: 7px;
+  width: 5px;
+  height: 1.5px;
+  background: currentColor;
+  border-radius: 1px;
+  box-shadow: 3px -2px 0 currentColor;
+}
+
+.ui-icon--language::before {
+  left: 1px;
+  top: 1px;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+.ui-icon--language::after {
+  left: 50%;
+  top: 1px;
+  bottom: 1px;
+  width: 1.5px;
+  margin-left: -0.75px;
+  background: currentColor;
+  border-radius: 1px;
+  box-shadow:
+    -3px 0 0 -0.75px currentColor,
+    3px 0 0 -0.75px currentColor;
+}
+
+.ui-icon--ai::before {
+  left: 1px;
+  top: 4px;
+  width: 12px;
+  height: 7px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+.ui-icon--ai::after {
+  left: 3px;
+  top: 1px;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow:
+    4px 0 0 currentColor,
+    8px 0 0 currentColor;
+}
+
+.ui-icon--about::before {
+  left: 1px;
+  top: 1px;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+.ui-icon--about::after {
+  left: 50%;
+  top: 6px;
+  width: 1.5px;
+  height: 4px;
+  margin-left: -0.75px;
+  background: currentColor;
+  border-radius: 1px;
+  box-shadow: 0 -3px 0 0 currentColor;
+}
+
+.ui-icon--panel-close::before {
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -2px;
+  border-left: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+
+.ui-icon--folder-plus::before {
+  left: 1px;
+  top: 4px;
+  width: 10px;
+  height: 7px;
+  border: 1.5px solid var(--azure);
+  border-radius: 0 2px 2px 2px;
+  opacity: 0.9;
+}
+.ui-icon--folder-plus::after {
+  right: 0;
+  top: 0;
+  width: 1.5px;
+  height: 6px;
+  background: currentColor;
+  border-radius: 1px;
+  box-shadow: -2.25px 2.25px 0 currentColor;
+}
+
+.ui-icon--folder::before {
+  left: 1px;
+  top: 4px;
+  width: 10px;
+  height: 7px;
+  border: 1.5px solid var(--azure);
+  border-radius: 0 2px 2px 2px;
+}
+.ui-icon--folder::after {
+  left: 1px;
+  top: 2px;
+  width: 5px;
+  height: 2px;
+  border-radius: 1px 1px 0 0;
+  background: var(--azure);
+  opacity: 0.75;
+}
+
+.ui-icon--folder-new::before {
+  left: 1px;
+  top: 4px;
+  width: 9px;
+  height: 7px;
+  border: 1.5px solid var(--azure);
+  border-radius: 0 2px 2px 2px;
+}
+.ui-icon--folder-new::after {
+  right: 1px;
+  top: 1px;
+  width: 4px;
+  height: 4px;
+  border-right: 1.5px solid currentColor;
+  border-top: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+}
+
+.ui-icon--server::before {
+  left: 2px;
+  top: 1px;
+  width: 10px;
+  height: 3px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  box-shadow: 0 4px 0 -0.5px currentColor, 0 8px 0 -0.5px currentColor;
+}
+.ui-icon--server::after {
+  left: 4px;
+  top: 3px;
+  width: 2px;
+  height: 1px;
+  background: currentColor;
+  border-radius: 1px;
+  box-shadow: 0 4px 0 currentColor, 0 8px 0 currentColor;
+}
+
+.ui-icon--clock::before {
+  left: 1px;
+  top: 1px;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+.ui-icon--clock::after {
+  left: 50%;
+  top: 3px;
+  width: 1.5px;
+  height: 4px;
+  margin-left: -0.75px;
+  background: currentColor;
+  border-radius: 1px;
+  transform-origin: bottom center;
+  transform: rotate(55deg);
+  box-shadow: 2px 1px 0 -0.25px currentColor;
+}
+
+.ui-icon--connect::before {
+  left: 1px;
+  top: 5px;
+  width: 4px;
+  height: 4px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+.ui-icon--connect::after {
+  right: 1px;
+  top: 5px;
+  width: 4px;
+  height: 4px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  box-shadow: -3px 0 0 0 currentColor;
+}
+
+.ui-icon--edit::before {
+  left: 2px;
+  top: 1px;
+  width: 8px;
+  height: 8px;
+  border-top: 1.5px solid currentColor;
+  border-right: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+}
+.ui-icon--edit::after {
+  left: 2px;
+  bottom: 1px;
+  width: 8px;
+  height: 1.5px;
+  background: currentColor;
+  border-radius: 1px;
+  transform: rotate(-45deg);
+  transform-origin: left center;
+}
+
+.ui-icon--delete::before {
+  left: 3px;
+  top: 3px;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-top: none;
+  border-radius: 0 0 2px 2px;
+}
+.ui-icon--delete::after {
+  left: 2px;
+  top: 2px;
+  width: 10px;
+  height: 1.5px;
+  background: currentColor;
+  border-radius: 1px;
+}
+
+.ui-icon--copy::before {
+  left: 1px;
+  top: 3px;
+  width: 7px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--ink-600) 70%, transparent);
+}
+.ui-icon--copy::after {
+  right: 1px;
+  top: 1px;
+  width: 7px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-radius: 1px;
+  background: var(--ink-600);
+}
+
+.ui-icon--cut::before {
+  left: 1px;
+  top: 6px;
+  width: 5px;
+  height: 5px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+.ui-icon--cut::after {
+  right: 1px;
+  top: 6px;
+  width: 5px;
+  height: 5px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  box-shadow: -4px -3px 0 -1.5px currentColor, -4px 3px 0 -1.5px currentColor;
+}
+
+.ui-icon--paste::before {
+  left: 3px;
+  top: 1px;
+  width: 8px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+.ui-icon--paste::after {
+  left: 5px;
+  top: 4px;
+  width: 4px;
+  height: 1.5px;
+  background: currentColor;
+  border-radius: 1px;
+  box-shadow: 0 2.5px 0 currentColor;
+}
+
+.ui-icon--save::before {
+  left: 3px;
+  top: 1px;
+  width: 8px;
+  height: 9px;
+  border: 1.5px solid currentColor;
+  border-radius: 1px;
+}
+.ui-icon--save::after {
+  left: 50%;
+  top: 5px;
+  width: 0;
+  height: 0;
+  margin-left: -3px;
+  border: 3px solid transparent;
+  border-top-color: currentColor;
+  box-shadow: 0 4px 0 -1px currentColor;
 }
 
 /* ---------- SFTP panel ---------- */

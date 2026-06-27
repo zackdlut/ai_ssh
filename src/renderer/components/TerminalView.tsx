@@ -855,10 +855,10 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       </div>
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
-          <ContextMenuItem shortcut={SHORTCUT_ASK_COPILOT} onClick={ask}>
+          <ContextMenuItem shortcut={SHORTCUT_ASK_COPILOT} icon="copilot" onClick={ask}>
             {tr('terminal.askCopilot')}
           </ContextMenuItem>
-          <ContextMenuItem shortcut={SHORTCUT_COPY} onClick={copy}>
+          <ContextMenuItem shortcut={SHORTCUT_COPY} icon="copy" onClick={copy}>
             {tr('common.copy')}
           </ContextMenuItem>
         </div>
