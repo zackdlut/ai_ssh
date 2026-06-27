@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import TabBar, { type SettingsMenuItem } from './components/TabBar'
 import TerminalView from './components/TerminalView'
+import TerminalEmptyState from './components/TerminalEmptyState'
 import SidePanel from './components/ai/SidePanel'
 import SftpPanel from './components/sftp/SftpPanel'
 import ConnectModal from './components/connection/ConnectModal'
@@ -16,7 +17,6 @@ import { useBookmarksStore } from './store/bookmarksStore'
 import { useThemeStore } from './store/themeStore'
 import { useLocaleStore } from './store/localeStore'
 import { initAIService } from './lib/aiService'
-import { useT } from './lib/i18n'
 import type { ConnectionConfig } from '../shared/types'
 
 interface ConnectModalState {
@@ -31,8 +31,6 @@ export default function App(): JSX.Element {
   const loadBookmarks = useBookmarksStore((s) => s.load)
   const loadTheme = useThemeStore((s) => s.load)
   const loadLocale = useLocaleStore((s) => s.load)
-  const t = useT()
-
   const [connectModal, setConnectModal] = useState<ConnectModalState | null>(null)
   const [settingsPanel, setSettingsPanel] = useState<SettingsMenuItem | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -78,16 +76,7 @@ export default function App(): JSX.Element {
         <div className="main-pane">
           <div className="terminal-area">
             {tabs.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-mark">⌁</div>
-                <div>
-                  <div className="empty-title">{t('app.emptyTitle')}</div>
-                  <div className="empty-sub">{t('app.emptySub')}</div>
-                </div>
-                <button className="primary" onClick={() => openNewConnection(null)}>
-                  {t('app.newConnection')}
-                </button>
-              </div>
+              <TerminalEmptyState onNewConnection={() => openNewConnection(null)} />
             ) : (
               tabs.map((tab) => (
                 <TerminalView key={tab.id} tab={tab} active={tab.id === activeTabId} />

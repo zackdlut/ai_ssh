@@ -29,7 +29,7 @@ interface BookmarksState {
 
   getTree: () => TreeNode[]
   /** Saved connections ranked by usage frequency then recency, capped at `limit`. */
-  getRecentConnections: (limit?: number) => ConnectionConfig[]
+  getRecentConnections: (limit?: number, usedOnly?: boolean) => ConnectionConfig[]
 }
 
 function genId(): string {
@@ -201,8 +201,12 @@ export const useBookmarksStore = create<BookmarksState>((set, get) => ({
 
   getTree: () => buildTree(get().folders, get().connections),
 
-  getRecentConnections: (limit = 5) => {
-    return [...get().connections]
+  getRecentConnections: (limit = 5, usedOnly = false) => {
+    let list = [...get().connections]
+    if (usedOnly) {
+      list = list.filter((c) => (c.useCount ?? 0) > 0 || (c.lastUsedAt ?? 0) > 0)
+    }
+    return list
       .sort((a, b) => {
         const ac = a.useCount ?? 0
         const bc = b.useCount ?? 0

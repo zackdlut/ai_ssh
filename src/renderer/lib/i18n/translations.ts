@@ -45,6 +45,7 @@ const zh = {
   'app.emptyTitle': '还没有活动会话',
   'app.emptySub': '连接到一台主机即可开始。AI Copilot 会感知当前终端的输出，帮你生成可执行命令。',
   'app.newConnection': '+ 新建 SSH 连接',
+  'app.recentConnections': '最近常用',
 
   'sidebar.title': '连接',
   'sidebar.savedCount': '{count} 个已保存连接',
@@ -292,6 +293,7 @@ const en: Record<keyof typeof zh, string> = {
   'app.emptySub':
     'Connect to a host to get started. AI Copilot reads your terminal output and suggests runnable commands.',
   'app.newConnection': '+ New SSH Connection',
+  'app.recentConnections': 'Frequently used',
 
   'sidebar.title': 'Connections',
   'sidebar.savedCount': '{count} saved connections',
