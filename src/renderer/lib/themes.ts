@@ -77,7 +77,7 @@ export const XTERM_THEMES: Record<AppTheme, ITheme> = {
 
 export function readCachedTheme(): AppTheme {
   const cached = localStorage.getItem(THEME_CACHE_KEY)
-  return cached === 'dawn' ? 'dawn' : 'aurora'
+  return cached === 'aurora' ? 'aurora' : 'dawn'
 }
 
 export function applyTheme(theme: AppTheme): void {

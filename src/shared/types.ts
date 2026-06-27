@@ -67,7 +67,7 @@ export interface AISettings {
   models: Record<ModelProfile, string>
 }
 
-/** Application color theme. `aurora` is the default dark palette. */
+/** Application color theme. `dawn` is the default light palette. */
 export type AppTheme = 'aurora' | 'dawn'
 
 /** UI display language. */

@@ -36,7 +36,7 @@ function store(): Store<StoreSchema> {
           nlModelProfile: 'fast',
           models: { ...DEFAULT_MODELS }
         },
-        theme: 'aurora',
+        theme: 'dawn',
         locale: 'zh',
         connections: [],
         folders: [],
@@ -62,11 +62,11 @@ export function setAISettings(settings: AISettings): AISettings {
 
 export function getTheme(): AppTheme {
   const theme = store().get('theme')
-  return theme === 'dawn' ? 'dawn' : 'aurora'
+  return theme === 'aurora' ? 'aurora' : 'dawn'
 }
 
 export function setTheme(theme: AppTheme): AppTheme {
-  store().set('theme', theme === 'dawn' ? 'dawn' : 'aurora')
+  store().set('theme', theme === 'aurora' ? 'aurora' : 'dawn')
   return getTheme()
 }
 

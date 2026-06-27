@@ -4,9 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "slidev",
-    "build": "slidev build",
-    "export": "slidev export"
+    "dev": "slidev slides.md",
+    "dev:en": "slidev slides.en.md",
+    "build": "slidev build slides.md",
+    "build:en": "slidev build slides.en.md",
+    "export": "slidev export slides.md",
+    "export:en": "slidev export slides.en.md"
   },
   "dependencies": {
     "@slidev/cli": "^0.50.0",
