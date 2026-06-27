@@ -1,16 +1,7 @@
-import { useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import TabBar, { type SettingsMenuItem } from './components/TabBar'
-import TerminalView from './components/TerminalView'
 import TerminalEmptyState from './components/TerminalEmptyState'
-import SidePanel from './components/ai/SidePanel'
-import SftpPanel from './components/sftp/SftpPanel'
-import ConnectModal from './components/connection/ConnectModal'
 import ConnectionSidebar from './components/connection/ConnectionSidebar'
-import SettingsModal from './components/ai/SettingsModal'
-import ThemesModal from './components/settings/ThemesModal'
-import TerminalAppearanceModal from './components/settings/TerminalAppearanceModal'
-import LanguageModal from './components/settings/LanguageModal'
-import AboutModal from './components/settings/AboutModal'
 import { useTabsStore } from './store/tabsStore'
 import { useAIStore } from './store/aiStore'
 import { useSftpStore } from './store/sftpStore'
@@ -20,6 +11,16 @@ import { useLocaleStore } from './store/localeStore'
 import { useTerminalAppearanceStore } from './store/terminalAppearanceStore'
 import { initAIService } from './lib/aiService'
 import type { ConnectionConfig } from '../shared/types'
+
+const TerminalView = lazy(() => import('./components/TerminalView'))
+const SidePanel = lazy(() => import('./components/ai/SidePanel'))
+const SftpPanel = lazy(() => import('./components/sftp/SftpPanel'))
+const ConnectModal = lazy(() => import('./components/connection/ConnectModal'))
+const SettingsModal = lazy(() => import('./components/ai/SettingsModal'))
+const ThemesModal = lazy(() => import('./components/settings/ThemesModal'))
+const TerminalAppearanceModal = lazy(() => import('./components/settings/TerminalAppearanceModal'))
+const LanguageModal = lazy(() => import('./components/settings/LanguageModal'))
+const AboutModal = lazy(() => import('./components/settings/AboutModal'))
 
 interface ConnectModalState {
   editConn?: ConnectionConfig | null
@@ -82,30 +83,60 @@ export default function App(): JSX.Element {
             {tabs.length === 0 ? (
               <TerminalEmptyState onNewConnection={() => openNewConnection(null)} />
             ) : (
-              tabs.map((tab) => (
-                <TerminalView key={tab.id} tab={tab} active={tab.id === activeTabId} />
-              ))
+              <Suspense fallback={null}>
+                {tabs.map((tab) => (
+                  <TerminalView key={tab.id} tab={tab} active={tab.id === activeTabId} />
+                ))}
+              </Suspense>
             )}
           </div>
         </div>
-        {panelOpen && <SidePanel />}
-        {sftpOpen && <SftpPanel />}
+        {panelOpen && (
+          <Suspense fallback={null}>
+            <SidePanel />
+          </Suspense>
+        )}
+        {sftpOpen && (
+          <Suspense fallback={null}>
+            <SftpPanel />
+          </Suspense>
+        )}
       </div>
 
       {connectModal && (
-        <ConnectModal
-          editConn={connectModal.editConn}
-          defaultParentId={connectModal.parentId}
-          onClose={() => setConnectModal(null)}
-        />
+        <Suspense fallback={null}>
+          <ConnectModal
+            editConn={connectModal.editConn}
+            defaultParentId={connectModal.parentId}
+            onClose={() => setConnectModal(null)}
+          />
+        </Suspense>
       )}
-      {settingsPanel === 'ai' && <SettingsModal onClose={() => setSettingsPanel(null)} />}
-      {settingsPanel === 'themes' && <ThemesModal onClose={() => setSettingsPanel(null)} />}
+      {settingsPanel === 'ai' && (
+        <Suspense fallback={null}>
+          <SettingsModal onClose={() => setSettingsPanel(null)} />
+        </Suspense>
+      )}
+      {settingsPanel === 'themes' && (
+        <Suspense fallback={null}>
+          <ThemesModal onClose={() => setSettingsPanel(null)} />
+        </Suspense>
+      )}
       {settingsPanel === 'terminal' && (
-        <TerminalAppearanceModal onClose={() => setSettingsPanel(null)} />
+        <Suspense fallback={null}>
+          <TerminalAppearanceModal onClose={() => setSettingsPanel(null)} />
+        </Suspense>
       )}
-      {settingsPanel === 'language' && <LanguageModal onClose={() => setSettingsPanel(null)} />}
-      {settingsPanel === 'about' && <AboutModal onClose={() => setSettingsPanel(null)} />}
+      {settingsPanel === 'language' && (
+        <Suspense fallback={null}>
+          <LanguageModal onClose={() => setSettingsPanel(null)} />
+        </Suspense>
+      )}
+      {settingsPanel === 'about' && (
+        <Suspense fallback={null}>
+          <AboutModal onClose={() => setSettingsPanel(null)} />
+        </Suspense>
+      )}
     </div>
   )
 }

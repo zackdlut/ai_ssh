@@ -8,9 +8,31 @@
       content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; frame-src 'self'; connect-src 'self'"
     />
     <title>AI Terminal</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0c0f18;
+      }
+      #root {
+        min-height: 100%;
+      }
+      .boot-splash {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        color: #8b95a8;
+        font: 500 14px/1.4 system-ui, sans-serif;
+        letter-spacing: 0.04em;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="boot-splash" aria-hidden="true">AI Terminal</div>
+    </div>
     <script type="module" src="./main.tsx"></script>
   </body>
 </html>

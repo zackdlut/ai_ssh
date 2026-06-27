@@ -31,6 +31,7 @@ export default defineConfig({
         input: { index: resolve(__dirname, 'src/renderer/index.html') },
         output: {
           manualChunks(id) {
+            if (id.includes('node_modules/@xterm')) return 'xterm'
             if (id.includes('node_modules/mermaid')) return 'mermaid'
             if (id.includes('node_modules/echarts')) return 'echarts'
           }

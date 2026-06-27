@@ -1,4 +1,12 @@
-import { Client, type ClientChannel, type SFTPWrapper, type FileEntry } from 'ssh2'
+import type { Client, ClientChannel, SFTPWrapper, FileEntry } from 'ssh2'
+
+type Ssh2Module = typeof import('ssh2')
+let ssh2Module: Ssh2Module | null = null
+
+async function loadSsh2(): Promise<Ssh2Module> {
+  if (!ssh2Module) ssh2Module = await import('ssh2')
+  return ssh2Module
+}
 import { readFileSync } from 'fs'
 import { basename } from 'path'
 import { randomUUID } from 'crypto'
@@ -36,7 +44,8 @@ export class SshManager {
   }
 
   connect(opts: ConnectOptions): Promise<ConnectResult> {
-    return new Promise((resolve) => {
+    return loadSsh2().then(({ Client }) => {
+      return new Promise<ConnectResult>((resolve) => {
       const sessionId = randomUUID()
       const client = new Client()
       this.sessions.set(sessionId, { client })
@@ -99,6 +108,7 @@ export class SshManager {
       } catch (e) {
         fail(e instanceof Error ? e.message : String(e))
       }
+    })
     })
   }
 

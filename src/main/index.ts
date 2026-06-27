@@ -1,12 +1,13 @@
 import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'path'
-import { registerIpc } from './ipc'
+import type { SshManager } from './ssh/manager'
 
 // A terminal app needs no GPU acceleration; disabling it avoids GPU process
 // crashes in headless / VM / WSL environments.
 app.disableHardwareAcceleration()
 
 let mainWindow: BrowserWindow | null = null
+let sshManager: SshManager | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -43,16 +44,20 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  const ssh = registerIpc(() => mainWindow)
-
+  // Show the window first; defer IPC registration so cold starts do not block
+  // on loading ssh2 / openai from disk before the renderer can begin loading.
   createWindow()
+
+  void import('./ipc').then(({ registerIpc }) => {
+    sshManager = registerIpc(() => mainWindow)
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
-
-  app.on('before-quit', () => ssh.disposeAll())
 })
+
+app.on('before-quit', () => sshManager?.disposeAll())
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

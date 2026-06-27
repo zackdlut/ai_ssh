@@ -1,4 +1,15 @@
-import OpenAI from 'openai'
+import type OpenAI from 'openai'
+
+type OpenAIConstructor = typeof import('openai').default
+let openaiCtor: OpenAIConstructor | null = null
+
+async function loadOpenAI(): Promise<OpenAIConstructor> {
+  if (!openaiCtor) {
+    const mod = await import('openai')
+    openaiCtor = mod.default
+  }
+  return openaiCtor
+}
 import { resolveActiveModel, resolveModel } from '../../shared/aiSettings'
 import type {
   AISettings,
@@ -190,6 +201,15 @@ export class AIProvider {
 
   constructor(private getSettings: () => AISettings) {}
 
+  private async createClient(): Promise<OpenAI> {
+    const settings = this.getSettings()
+    const OpenAIClient = await loadOpenAI()
+    return new OpenAIClient({
+      apiKey: settings.apiKey,
+      baseURL: normalizeBaseURL(settings.baseURL)
+    })
+  }
+
   async chat(req: AIChatRequest, cb: StreamCallbacks): Promise<void> {
     const settings = this.getSettings()
     if (!settings.apiKey) {
@@ -197,10 +217,7 @@ export class AIProvider {
       return
     }
 
-    const client = new OpenAI({
-      apiKey: settings.apiKey,
-      baseURL: normalizeBaseURL(settings.baseURL)
-    })
+    const client = await this.createClient()
 
     const controller = new AbortController()
     this.controllers.set(req.requestId, controller)
@@ -267,10 +284,7 @@ export class AIProvider {
       throw new Error('AI is not configured. Set the API key in Settings.')
     }
 
-    const client = new OpenAI({
-      apiKey: settings.apiKey,
-      baseURL: normalizeBaseURL(settings.baseURL)
-    })
+    const client = await this.createClient()
 
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: 'system', content: CHART_SPEC_SYSTEM_PROMPT }
@@ -378,10 +392,7 @@ export class AIProvider {
       throw new Error('AI is not configured. Set the API key in Settings.')
     }
 
-    const client = new OpenAI({
-      apiKey: settings.apiKey,
-      baseURL: normalizeBaseURL(settings.baseURL)
-    })
+    const client = await this.createClient()
 
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: 'system', content: TRANSLATE_SYSTEM_PROMPT }
@@ -409,10 +420,7 @@ export class AIProvider {
       return
     }
 
-    const client = new OpenAI({
-      apiKey: settings.apiKey,
-      baseURL: normalizeBaseURL(settings.baseURL)
-    })
+    const client = await this.createClient()
 
     const controller = new AbortController()
     this.controllers.set(req.requestId, controller)
