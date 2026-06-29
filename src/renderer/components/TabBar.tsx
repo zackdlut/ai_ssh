@@ -39,21 +39,9 @@ export default function TabBar({
   onSettingsSelect
 }: Props): JSX.Element {
   const { tabs, activeTabId, setActive, removeTab } = useTabsStore()
-  const { panelOpen, togglePanel, setPanelOpen } = useAIStore()
+  const { panelOpen, togglePanel } = useAIStore()
   const sftpOpen = useSftpStore((s) => s.panelOpen)
   const toggleSftp = useSftpStore((s) => s.togglePanel)
-  const setSftpOpen = useSftpStore((s) => s.setPanelOpen)
-
-  // The AI Copilot and SFTP panels share the right slot, so they are mutually
-  // exclusive: opening one closes the other.
-  const handleToggleAI = (): void => {
-    if (!panelOpen) setSftpOpen(false)
-    togglePanel()
-  }
-  const handleToggleSftp = (): void => {
-    if (!sftpOpen) setPanelOpen(false)
-    toggleSftp()
-  }
   // Subscribe to connections so the recent list refreshes as usage changes.
   const connections = useBookmarksStore((s) => s.connections)
   const getRecentConnections = useBookmarksStore((s) => s.getRecentConnections)
@@ -288,7 +276,7 @@ export default function TabBar({
         <div className="tabbar-action-slot">
           <button
             className={`toolbar-btn tabbar-action-btn ${panelOpen ? 'active' : ''}`}
-            onClick={handleToggleAI}
+            onClick={togglePanel}
             title={t('tabbar.toggleAi')}
           >
             <UiIcon name="copilot" />
@@ -298,7 +286,7 @@ export default function TabBar({
         <div className="tabbar-action-slot">
           <button
             className={`toolbar-btn tabbar-action-btn ${sftpOpen ? 'active' : ''}`}
-            onClick={handleToggleSftp}
+            onClick={toggleSftp}
             title={t('tabbar.toggleSftp')}
           >
             <UiIcon name="sftp" />
