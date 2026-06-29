@@ -1,5 +1,5 @@
 import Store from 'electron-store'
-import { DEFAULT_MODELS, cloneModels, normalizeAISettings } from '../../shared/aiSettings'
+import { DEFAULT_MODELS, DEFAULT_CONTEXT_LENGTHS, cloneModels, cloneContextLengths, normalizeAISettings } from '../../shared/aiSettings'
 import {
   DEFAULT_TERMINAL_APPEARANCE,
   normalizeTerminalAppearanceSettings
@@ -40,7 +40,8 @@ function store(): Store<StoreSchema> {
           apiKey: 'ollam',
           copilotModelProfile: 'default',
           nlModelProfile: 'fast',
-          models: { ...DEFAULT_MODELS }
+          models: { ...DEFAULT_MODELS },
+          contextLengths: { ...DEFAULT_CONTEXT_LENGTHS }
         },
         theme: 'dawn',
         locale: 'zh',
@@ -62,7 +63,8 @@ export function setAISettings(settings: AISettings): AISettings {
   const normalized = normalizeAISettings(settings)
   store().set('ai', {
     ...normalized,
-    models: cloneModels(normalized.models)
+    models: cloneModels(normalized.models),
+    contextLengths: cloneContextLengths(normalized.contextLengths)
   })
   return getAISettings()
 }

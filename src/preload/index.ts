@@ -7,6 +7,8 @@ import type {
   AIReasoningEvent,
   AIDoneEvent,
   AIErrorEvent,
+  AICompressHistoryRequest,
+  AICompressHistoryResult,
   AISettings,
   AppInfo,
   AppLocale,
@@ -108,6 +110,8 @@ const api = {
   },
   ai: {
     chat: (req: AIChatRequest): void => ipcRenderer.send('ai:chat', req),
+    compressHistory: (req: AICompressHistoryRequest): Promise<AICompressHistoryResult> =>
+      ipcRenderer.invoke('ai:compressHistory', req),
     chartSpec: (req: AIChartSpecRequest): Promise<AIChartSpecResult> =>
       ipcRenderer.invoke('ai:chartSpec', req),
     translate: (req: AITranslateRequest): Promise<AITranslateResult> =>

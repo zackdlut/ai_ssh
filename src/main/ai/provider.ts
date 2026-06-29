@@ -16,13 +16,15 @@ import type {
   AIChatRequest,
   AIChartSpecRequest,
   AITranslateRequest,
-  AISummarizeRequest
+  AISummarizeRequest,
+  AICompressHistoryRequest
 } from '../../shared/types'
 import {
   SYSTEM_PROMPT,
   CHART_SPEC_SYSTEM_PROMPT,
   TRANSLATE_SYSTEM_PROMPT,
   SUMMARIZE_SYSTEM_PROMPT,
+  HISTORY_SUMMARY_SYSTEM_PROMPT,
   buildContextMessage
 } from './prompt'
 
@@ -130,12 +132,14 @@ function isCompleteChartSpec(text: string): boolean {
 
 function ollamaDirectAnswerBody(
   model: string,
-  messages: OpenAI.Chat.ChatCompletionMessageParam[]
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  maxTokens?: number
 ): OpenAI.Chat.ChatCompletionCreateParamsNonStreaming {
   return {
     model,
     messages,
     stream: false,
+    ...(maxTokens != null ? { max_tokens: maxTokens } : {}),
     // Ollama reasoning models (Qwen3, etc.) otherwise return empty `content`.
     ...({ reasoning_effort: 'none' } as Record<string, unknown>)
   } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming
@@ -409,10 +413,6 @@ export class AIProvider {
     return extractMessageText(completion.choices[0]?.message)
   }
 
-  /**
-   * Stream a summary of command execution results back to the user in natural
-   * language. Uses streaming so the terminal can render tokens as they arrive.
-   */
   async summarize(req: AISummarizeRequest, cb: StreamCallbacks): Promise<void> {
     const settings = this.getSettings()
     if (!settings.apiKey) {
@@ -468,6 +468,44 @@ export class AIProvider {
     } finally {
       this.controllers.delete(req.requestId)
     }
+  }
+
+  /** Compress older Copilot turns into a short summary (non-streaming). */
+  async compressHistory(req: AICompressHistoryRequest): Promise<string> {
+    const settings = this.getSettings()
+    if (!settings.apiKey) {
+      throw new Error('AI is not configured. Set the API key in Settings.')
+    }
+    if (req.messages.length === 0) {
+      throw new Error('No messages to compress.')
+    }
+
+    const client = await this.createClient()
+
+    const convText = req.messages
+      .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+      .join('\n\n')
+
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      { role: 'system', content: HISTORY_SUMMARY_SYSTEM_PROMPT }
+    ]
+    const contextMessage = buildContextMessage(req.context)
+    if (contextMessage) {
+      messages.push({ role: 'system', content: contextMessage })
+    }
+    messages.push({
+      role: 'user',
+      content: `请压缩以下较早的对话记录：\n\n${convText}`
+    })
+
+    const completion = await client.chat.completions.create(
+      ollamaDirectAnswerBody(resolveActiveModel(settings), messages, 1024)
+    )
+    const summary = extractMessageText(completion.choices[0]?.message).trim()
+    if (!summary) {
+      throw new Error('Empty summary from model.')
+    }
+    return summary
   }
 }
 

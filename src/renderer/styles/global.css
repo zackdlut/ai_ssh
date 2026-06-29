@@ -2918,6 +2918,92 @@ select:focus {
   min-width: 0;
 }
 
+.context-meter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.context-meter-pie {
+  flex-shrink: 0;
+  display: block;
+}
+
+.context-meter-pie-track {
+  stroke: rgba(255, 255, 255, 0.1);
+}
+
+.context-meter-pie-used {
+  stroke: var(--accent);
+  transition: stroke-dasharray 0.25s ease, stroke 0.2s ease;
+}
+
+.context-meter--warn .context-meter-pie-used {
+  stroke: #d4a017;
+}
+
+.context-meter--danger .context-meter-pie-used {
+  stroke: #e05252;
+}
+
+.context-meter-pie-label {
+  fill: var(--text-dim);
+  font-size: 8px;
+  font-weight: 600;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  pointer-events: none;
+}
+
+.context-meter-caption {
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 72px;
+}
+
+.context-summary-msg {
+  opacity: 0.92;
+}
+
+.context-summary-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  text-align: left;
+}
+
+.context-summary-toggle:hover {
+  color: var(--text);
+}
+
+.context-summary-chevron {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.context-summary-body {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  border-left: 2px solid var(--line-strong);
+  padding-left: 10px;
+}
+
+[data-theme='dawn'] .context-meter-pie-track {
+  stroke: rgba(26, 31, 46, 0.1);
+}
+
 .copilot-panel .composer-toolbar .model-select-trigger {
   height: 26px;
   padding: 0 8px 0 6px;

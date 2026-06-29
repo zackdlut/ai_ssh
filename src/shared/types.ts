@@ -65,6 +65,8 @@ export interface AISettings {
   nlModelProfile: ModelProfile
   /** Model name per profile tier. */
   models: Record<ModelProfile, string>
+  /** Context window size (tokens) per profile tier. */
+  contextLengths: Record<ModelProfile, number>
 }
 
 /** Application color theme. `dawn` is the default light palette. */
@@ -103,6 +105,8 @@ export interface CopilotChatMessage {
   boundTabId?: string
   /** Replay snapshots keyed by chart segment index within the message. */
   chartSnapshots?: Record<string, ChartSnapshot>
+  /** True when this message is a compressed summary of earlier turns. */
+  isContextSummary?: boolean
 }
 
 /** One conversation topic in the Copilot side panel. */
@@ -134,6 +138,17 @@ export interface AIChatRequest {
   requestId: string
   messages: ChatMessageDTO[]
   context?: TerminalContext
+}
+
+/** Summarize older Copilot turns before they exceed the context budget. */
+export interface AICompressHistoryRequest {
+  messages: ChatMessageDTO[]
+  context?: TerminalContext
+}
+
+export interface AICompressHistoryResult {
+  summary?: string
+  error?: string
 }
 
 /**

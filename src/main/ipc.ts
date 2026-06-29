@@ -13,6 +13,8 @@ import type {
   AIReasoningEvent,
   AIDoneEvent,
   AIErrorEvent,
+  AICompressHistoryRequest,
+  AICompressHistoryResult,
   AISettings,
   AppLocale,
   AppTheme,
@@ -72,6 +74,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
     })
   })
   ipcMain.on('ai:cancel', (_e, requestId: string) => ai.cancel(requestId))
+
+  ipcMain.handle(
+    'ai:compressHistory',
+    async (_e, req: AICompressHistoryRequest): Promise<AICompressHistoryResult> => {
+      try {
+        return { summary: await ai.compressHistory(req) }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
 
   // Phase-2 chart spec generation (structured JSON output, non-streaming).
   ipcMain.handle(

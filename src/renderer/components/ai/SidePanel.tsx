@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   useAIStore,
   clampPanelWidth,
@@ -6,8 +6,8 @@ import {
   PANEL_MAX_WIDTH
 } from '../../store/aiStore'
 import { useTabsStore } from '../../store/tabsStore'
-import { sendPrompt } from '../../lib/aiService'
-import { normalizeAISettings } from '../../../shared/aiSettings'
+import { sendPrompt, computeActiveTabBudget } from '../../lib/aiService'
+import { normalizeAISettings, DEFAULT_CONTEXT_LENGTHS } from '../../../shared/aiSettings'
 import type { ModelProfile } from '../../../shared/types'
 import { useT, type TranslationKey } from '../../lib/i18n'
 import { SHORTCUT_COPY, SHORTCUT_CUT, SHORTCUT_PASTE } from '../../lib/shortcuts'
@@ -17,6 +17,10 @@ import ChatMessage from './ChatMessage'
 import ChatTabBar from './ChatTabBar'
 import ChatHistoryPanel from './ChatHistoryPanel'
 import ModelSelect from './ModelSelect'
+import ContextMeter from './ContextMeter'
+import { COPILOT_CONTEXT_MAX_LINES, COPILOT_TERMINAL_MENTION_MAX_LINES, readTerminalOutput } from '../../lib/terminalRegistry'
+
+const TERMINAL_MENTION = /@terminal\b/i
 
 const EXAMPLE_KEYS = [
   'copilot.example1',
@@ -30,20 +34,17 @@ type ContextMenu =
   | { source: 'composer'; x: number; y: number; selectionStart: number; selectionEnd: number }
 
 export default function SidePanel(): JSX.Element {
-  const {
-    busy,
-    activeRequestId,
-    activeChatTabId,
-    panelWidth,
-    setPanelWidth,
-    setBusy,
-    setPanelOpen,
-    updateDraft,
-    activeChatTab,
-    notice,
-    setNotice
-  } = useAIStore()
-  const activeChat = activeChatTab()
+  const activeChatTabId = useAIStore((s) => s.activeChatTabId)
+  const activeChat = useAIStore((s) => s.chatTabs.find((t) => t.id === s.activeChatTabId))
+  const busy = useAIStore((s) => s.busy)
+  const activeRequestId = useAIStore((s) => s.activeRequestId)
+  const panelWidth = useAIStore((s) => s.panelWidth)
+  const notice = useAIStore((s) => s.notice)
+  const setPanelWidth = useAIStore((s) => s.setPanelWidth)
+  const setBusy = useAIStore((s) => s.setBusy)
+  const setPanelOpen = useAIStore((s) => s.setPanelOpen)
+  const updateDraft = useAIStore((s) => s.updateDraft)
+  const setNotice = useAIStore((s) => s.setNotice)
   const messages = activeChat?.messages ?? []
   const input = activeChat?.draft ?? ''
 
@@ -58,6 +59,9 @@ export default function SidePanel(): JSX.Element {
     medium: '',
     high: '',
     custom: ''
+  })
+  const [contextLengths, setContextLengths] = useState<Record<ModelProfile, number>>({
+    ...DEFAULT_CONTEXT_LENGTHS
   })
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -77,8 +81,34 @@ export default function SidePanel(): JSX.Element {
       const normalized = normalizeAISettings(s)
       setCopilotProfile(normalized.copilotModelProfile)
       setModelNames({ ...normalized.models })
+      setContextLengths({ ...normalized.contextLengths })
     })
   }, [])
+
+  const contextBudget = useMemo(() => {
+    const limit = contextLengths[copilotProfile] ?? DEFAULT_CONTEXT_LENGTHS[copilotProfile]
+    const mentionsTerminal = TERMINAL_MENTION.test(input)
+    const context = activeTab
+      ? {
+          recentOutput: readTerminalOutput(
+            activeTab.id,
+            mentionsTerminal ? COPILOT_TERMINAL_MENTION_MAX_LINES : COPILOT_CONTEXT_MAX_LINES
+          ),
+          host: activeTab.host,
+          username: activeTab.username
+        }
+      : undefined
+    return computeActiveTabBudget({
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      draft: input,
+      context,
+      limit
+    })
+  }, [messages, input, activeTab, copilotProfile, contextLengths, activeChatTabId])
+
+  useEffect(() => {
+    setMentionOpen(false)
+  }, [activeChatTabId])
 
   const onProfileChange = (profile: ModelProfile): void => {
     setCopilotProfile(profile)
@@ -188,7 +218,7 @@ export default function SidePanel(): JSX.Element {
   const send = (): void => {
     const text = input.trim()
     if (!text || busy) return
-    sendPrompt(text)
+    void sendPrompt(text)
     setMentionOpen(false)
   }
 
@@ -351,6 +381,7 @@ export default function SidePanel(): JSX.Element {
             </div>
           )}
           <textarea
+            key={activeChatTabId ?? 'composer'}
             ref={inputRef}
             value={input}
             onChange={onInputChange}
@@ -359,6 +390,7 @@ export default function SidePanel(): JSX.Element {
             placeholder={t('copilot.placeholder')}
           />
           <div className="composer-toolbar">
+            <ContextMeter key={activeChatTabId ?? 'meter'} budget={contextBudget} />
             <ModelSelect
               value={copilotProfile}
               modelNames={modelNames}

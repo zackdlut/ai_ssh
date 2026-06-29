@@ -194,9 +194,33 @@ export default function ChatMessage({ message }: Props): JSX.Element {
   const isUser = message.role === 'user'
   const [mode, setMode] = useState<'preview' | 'source'>('preview')
   const [copied, setCopied] = useState(false)
+  const [summaryOpen, setSummaryOpen] = useState(false)
   const activeChatTabId = useAIStore((s) => s.activeChatTabId)
   const setChartSnapshot = useAIStore((s) => s.setChartSnapshot)
   const t = useT()
+
+  if (message.isContextSummary) {
+    return (
+      <div className="chat-msg assistant context-summary-msg">
+        <button
+          type="button"
+          className="context-summary-toggle"
+          onClick={() => setSummaryOpen((o) => !o)}
+          aria-expanded={summaryOpen}
+        >
+          <span className="role">{t('copilot.context.summaryTitle')}</span>
+          <span className="context-summary-chevron" aria-hidden>
+            {summaryOpen ? '▾' : '▸'}
+          </span>
+        </button>
+        {summaryOpen && (
+          <div className="chat-bubble context-summary-body">
+            <Markdown text={message.content} />
+          </div>
+        )}
+      </div>
+    )
+  }
 
   if (isUser) {
     return (

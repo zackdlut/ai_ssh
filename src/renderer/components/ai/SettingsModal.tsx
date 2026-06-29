@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react'
-import { DEFAULT_MODELS, MODEL_PROFILES, normalizeAISettings } from '../../../shared/aiSettings'
+import {
+  DEFAULT_CONTEXT_LENGTHS,
+  DEFAULT_MODELS,
+  MODEL_PROFILES,
+  normalizeAISettings
+} from '../../../shared/aiSettings'
 import type { AISettings, ModelProfile } from '../../../shared/types'
 import { modelProfileLabel, useT } from '../../lib/i18n'
 import { useLocaleStore } from '../../store/localeStore'
@@ -15,6 +20,9 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
   const [editingProfile, setEditingProfile] = useState<ModelProfile>('default')
   const [nlModelProfile, setNlModelProfile] = useState<ModelProfile>('fast')
   const [models, setModels] = useState<Record<ModelProfile, string>>({ ...DEFAULT_MODELS })
+  const [contextLengths, setContextLengths] = useState<Record<ModelProfile, number>>({
+    ...DEFAULT_CONTEXT_LENGTHS
+  })
   const [loaded, setLoaded] = useState(false)
   const locale = useLocaleStore((s) => s.locale)
 
@@ -25,6 +33,7 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
       setApiKey(normalized.apiKey)
       setNlModelProfile(normalized.nlModelProfile)
       setModels({ ...normalized.models })
+      setContextLengths({ ...normalized.contextLengths })
       setLoaded(true)
     })
   }, [])
@@ -35,6 +44,12 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
     setModels((prev) => ({ ...prev, [profile]: value }))
   }
 
+  const updateContextLength = (profile: ModelProfile, value: string): void => {
+    const parsed = Number.parseInt(value, 10)
+    if (!Number.isFinite(parsed)) return
+    setContextLengths((prev) => ({ ...prev, [profile]: parsed }))
+  }
+
   const handleSave = async (): Promise<void> => {
     const current = normalizeAISettings(await window.api.config.getAISettings())
     await window.api.config.setAISettings({
@@ -42,7 +57,8 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
       baseURL,
       apiKey,
       nlModelProfile,
-      models: { ...models }
+      models: { ...models },
+      contextLengths: { ...contextLengths }
     })
     onClose()
   }
@@ -74,6 +90,18 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
               value={models[editingProfile]}
               onChange={(e) => updateModel(editingProfile, e.target.value)}
               placeholder="gpt-4o-mini"
+            />
+          </div>
+          <div className="field">
+            <label>{t('settings.ai.contextLength', { profile: editingProfileLabel })}</label>
+            <input
+              key={`ctx-${editingProfile}`}
+              type="number"
+              min={1024}
+              step={1024}
+              value={contextLengths[editingProfile]}
+              onChange={(e) => updateContextLength(editingProfile, e.target.value)}
+              placeholder="32768"
             />
           </div>
           <div className="field">

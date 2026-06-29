@@ -87,7 +87,8 @@ function toPersistedState(
         thinkingMs: m.thinkingMs,
         boundSessionId: m.boundSessionId,
         boundTabId: m.boundTabId,
-        chartSnapshots: m.chartSnapshots
+        chartSnapshots: m.chartSnapshots,
+        isContextSummary: m.isContextSummary
       }))
     }))
   }
@@ -178,6 +179,7 @@ interface AIState {
   clearActiveTab: () => void
   renameTab: (tabId: string, title: string) => void
   addMessage: (tabId: string, msg: ChatMessage) => void
+  replaceMessages: (tabId: string, messages: ChatMessage[]) => void
   appendToMessage: (tabId: string, id: string, delta: string) => void
   appendReasoning: (tabId: string, id: string, delta: string) => void
   finishMessage: (tabId: string, id: string) => void
@@ -326,6 +328,14 @@ export const useAIStore = create<AIState>((set, get) => ({
       chatTabs[idx] = { ...tab, messages, updatedAt: Date.now() }
       return { chatTabs }
     })
+    schedulePersist(get)
+  },
+  replaceMessages: (tabId, messages) => {
+    set((s) => ({
+      chatTabs: updateTab(s.chatTabs, tabId, {
+        messages: messages.slice(-MAX_MESSAGES_PER_TAB)
+      })
+    }))
     schedulePersist(get)
   },
   appendToMessage: (tabId, id, delta) => {
