@@ -17,7 +17,7 @@ export interface AIToolDefinition {
 }
 
 /** Tools that only read state and are safe to run without user approval. */
-export const READONLY_TOOLS = new Set(['list_ssh_configs', 'list_open_tabs'])
+export const READONLY_TOOLS = new Set(['list_ssh_configs', 'list_open_tabs', 'get_app_settings'])
 
 /** Action tools whose effect is destructive and deserves a stronger warning. */
 export const DANGEROUS_TOOLS = new Set(['exec_command', 'close_tab', 'close_tabs'])
@@ -177,6 +177,129 @@ export const AI_TOOLS: AIToolDefinition[] = [
           command: { type: 'string', description: 'The shell command to execute.' }
         },
         required: ['tab_id', 'command'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_app_settings',
+      description:
+        'Read the current application settings: UI theme, language, terminal appearance, and AI configuration (apiKey is not returned; only hasApiKey). Call this when unsure of current values before updating.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_app_settings',
+      description:
+        'Update application settings. Pass an updates object with only the fields to change. Supports theme (aurora/dawn), locale (zh/en), terminal_appearance (colorScheme, fontFamily, fontSize, lineHeight, fontWeight), and ai (baseURL, apiKey, copilotModelProfile, nlModelProfile, models, contextLengths). Batch multiple categories in one call when the user asks for several changes.',
+      parameters: {
+        type: 'object',
+        properties: {
+          updates: {
+            type: 'object',
+            description: 'Partial settings to change.',
+            properties: {
+              theme: {
+                type: 'string',
+                enum: ['aurora', 'dawn'],
+                description: 'Application UI theme. aurora = dark, dawn = light.'
+              },
+              locale: {
+                type: 'string',
+                enum: ['zh', 'en'],
+                description: 'UI display language.'
+              },
+              terminal_appearance: {
+                type: 'object',
+                description: 'Terminal font and color settings.',
+                properties: {
+                  colorScheme: {
+                    type: 'string',
+                    enum: [
+                      'auto',
+                      'aurora',
+                      'dawn',
+                      'campbell',
+                      'campbell-powershell',
+                      'one-half-dark',
+                      'one-half-light',
+                      'solarized-dark',
+                      'solarized-light',
+                      'dark-plus',
+                      'tango-dark',
+                      'tango-light'
+                    ]
+                  },
+                  fontFamily: { type: 'string' },
+                  fontSize: { type: 'number', description: '8–32 px.' },
+                  lineHeight: { type: 'number', description: '1.0–2.5.' },
+                  fontWeight: {
+                    type: 'string',
+                    enum: [
+                      'thin',
+                      'extra-light',
+                      'light',
+                      'semi-light',
+                      'normal',
+                      'medium',
+                      'semi-bold',
+                      'bold',
+                      'extra-bold',
+                      'black',
+                      'extra-black'
+                    ]
+                  }
+                },
+                additionalProperties: false
+              },
+              ai: {
+                type: 'object',
+                description: 'AI provider and model settings.',
+                properties: {
+                  baseURL: { type: 'string' },
+                  apiKey: { type: 'string' },
+                  copilotModelProfile: {
+                    type: 'string',
+                    enum: ['default', 'fast', 'medium', 'high', 'custom']
+                  },
+                  nlModelProfile: {
+                    type: 'string',
+                    enum: ['default', 'fast', 'medium', 'high', 'custom']
+                  },
+                  models: {
+                    type: 'object',
+                    properties: {
+                      default: { type: 'string' },
+                      fast: { type: 'string' },
+                      medium: { type: 'string' },
+                      high: { type: 'string' },
+                      custom: { type: 'string' }
+                    },
+                    additionalProperties: false
+                  },
+                  contextLengths: {
+                    type: 'object',
+                    properties: {
+                      default: { type: 'number' },
+                      fast: { type: 'number' },
+                      medium: { type: 'number' },
+                      high: { type: 'number' },
+                      custom: { type: 'number' }
+                    },
+                    additionalProperties: false
+                  }
+                },
+                additionalProperties: false
+              }
+            },
+            additionalProperties: false
+          }
+        },
+        required: ['updates'],
         additionalProperties: false
       }
     }

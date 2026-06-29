@@ -9,6 +9,11 @@ import { translate } from './i18n/translations'
 import { useLocaleStore } from '../store/localeStore'
 import { isReadonlyTool } from '../../shared/aiTools'
 import { buildToolContextMessage, executeToolCall, parseToolArgs } from './aiTools'
+import {
+  getPendingToolCalls,
+  hasPendingToolCalls,
+  parseToolApprovalInput
+} from './toolApproval'
 import type { ChatMessage } from '../store/aiStore'
 import type { ChatMessageDTO, TerminalContext, ToolCallView } from '../../shared/types'
 
@@ -105,6 +110,35 @@ export function rejectToolCall(tabId: string, messageId: string, callId: string)
     result: 'User rejected this action.'
   })
   maybeContinueLoop(tabId, messageId)
+}
+
+export type ToolApprovalHandleResult =
+  | { handled: false }
+  | { handled: true; action: 'approve' | 'reject'; count: number }
+  | { handled: true; action: 'unrecognized' }
+
+/**
+ * When action tools are awaiting approval, interpret short chat replies like
+ * "确认" / "approve" as approve/reject instead of sending a new LLM turn.
+ */
+export function tryHandleToolApprovalFromInput(
+  tabId: string,
+  text: string
+): ToolApprovalHandleResult {
+  if (!hasPendingToolCalls(tabId)) return { handled: false }
+
+  const action = parseToolApprovalInput(text)
+  if (action === 'approve') {
+    const refs = getPendingToolCalls(tabId)
+    for (const ref of refs) approveToolCall(tabId, ref.messageId, ref.callId)
+    return refs.length > 0 ? { handled: true, action: 'approve', count: refs.length } : { handled: false }
+  }
+  if (action === 'reject') {
+    const refs = getPendingToolCalls(tabId)
+    for (const ref of refs) rejectToolCall(tabId, ref.messageId, ref.callId)
+    return refs.length > 0 ? { handled: true, action: 'reject', count: refs.length } : { handled: false }
+  }
+  return { handled: true, action: 'unrecognized' }
 }
 
 /** When every tool call of a turn is resolved, feed results back and continue. */

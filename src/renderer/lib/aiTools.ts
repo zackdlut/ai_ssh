@@ -7,9 +7,20 @@
  */
 import { useTabsStore } from '../store/tabsStore'
 import { useBookmarksStore } from '../store/bookmarksStore'
+import { useThemeStore } from '../store/themeStore'
+import { useLocaleStore } from '../store/localeStore'
+import { useTerminalAppearanceStore } from '../store/terminalAppearanceStore'
 import { connect, connectFromConfig } from './connect'
 import { readFullTerminalOutput } from './terminalRegistry'
-import type { ConnectionConfig } from '../../shared/types'
+import { normalizeAISettings } from '../../shared/aiSettings'
+import type { TerminalAppearanceSettings } from '../../shared/terminalSettings'
+import type {
+  AISettings,
+  AppLocale,
+  AppTheme,
+  ConnectionConfig,
+  ModelProfile
+} from '../../shared/types'
 
 export interface ToolResult {
   ok: boolean
@@ -209,6 +220,125 @@ function listOpenTabs(): ToolResult {
   return { ok: true, result: JSON.stringify(tabs) }
 }
 
+function sanitizeAISettings(ai: AISettings): Record<string, unknown> {
+  return {
+    baseURL: ai.baseURL,
+    hasApiKey: !!ai.apiKey,
+    copilotModelProfile: ai.copilotModelProfile,
+    nlModelProfile: ai.nlModelProfile,
+    models: { ...ai.models },
+    contextLengths: { ...ai.contextLengths }
+  }
+}
+
+async function readAppSettings(): Promise<Record<string, unknown>> {
+  const theme = useThemeStore.getState().theme
+  const locale = useLocaleStore.getState().locale
+  const terminal = useTerminalAppearanceStore.getState()
+  const ai = normalizeAISettings(await window.api.config.getAISettings())
+  return {
+    theme,
+    locale,
+    terminal_appearance: {
+      colorScheme: terminal.colorScheme,
+      fontFamily: terminal.fontFamily,
+      fontSize: terminal.fontSize,
+      lineHeight: terminal.lineHeight,
+      fontWeight: terminal.fontWeight
+    },
+    ai: sanitizeAISettings(ai)
+  }
+}
+
+function isAppTheme(v: unknown): v is AppTheme {
+  return v === 'aurora' || v === 'dawn'
+}
+
+function isAppLocale(v: unknown): v is AppLocale {
+  return v === 'zh' || v === 'en'
+}
+
+function isModelProfile(v: unknown): v is ModelProfile {
+  return v === 'default' || v === 'fast' || v === 'medium' || v === 'high' || v === 'custom'
+}
+
+async function getAppSettings(): Promise<ToolResult> {
+  const settings = await readAppSettings()
+  return { ok: true, result: JSON.stringify(settings) }
+}
+
+async function updateAppSettings(args: Record<string, unknown>): Promise<ToolResult> {
+  const updates = (args.updates ?? {}) as Record<string, unknown>
+  if (!updates || typeof updates !== 'object' || Object.keys(updates).length === 0) {
+    return { ok: false, error: 'updates object with at least one field is required.' }
+  }
+
+  if (updates.theme !== undefined) {
+    if (!isAppTheme(updates.theme)) {
+      return { ok: false, error: 'theme must be "aurora" or "dawn".' }
+    }
+    await useThemeStore.getState().setTheme(updates.theme)
+  }
+
+  if (updates.locale !== undefined) {
+    if (!isAppLocale(updates.locale)) {
+      return { ok: false, error: 'locale must be "zh" or "en".' }
+    }
+    await useLocaleStore.getState().setLocale(updates.locale)
+  }
+
+  if (updates.terminal_appearance !== undefined) {
+    if (!updates.terminal_appearance || typeof updates.terminal_appearance !== 'object') {
+      return { ok: false, error: 'terminal_appearance must be an object.' }
+    }
+    await useTerminalAppearanceStore
+      .getState()
+      .set(updates.terminal_appearance as Partial<TerminalAppearanceSettings>)
+  }
+
+  if (updates.ai !== undefined) {
+    if (!updates.ai || typeof updates.ai !== 'object') {
+      return { ok: false, error: 'ai must be an object.' }
+    }
+    const aiUpdates = updates.ai as Record<string, unknown>
+    const current = normalizeAISettings(await window.api.config.getAISettings())
+    const merged: AISettings = { ...current }
+
+    if (typeof aiUpdates.baseURL === 'string') merged.baseURL = aiUpdates.baseURL
+    if (typeof aiUpdates.apiKey === 'string') merged.apiKey = aiUpdates.apiKey
+    if (isModelProfile(aiUpdates.copilotModelProfile)) {
+      merged.copilotModelProfile = aiUpdates.copilotModelProfile
+    }
+    if (isModelProfile(aiUpdates.nlModelProfile)) {
+      merged.nlModelProfile = aiUpdates.nlModelProfile
+    }
+
+    if (aiUpdates.models && typeof aiUpdates.models === 'object') {
+      const models = aiUpdates.models as Record<string, unknown>
+      for (const key of Object.keys(models)) {
+        if (isModelProfile(key) && typeof models[key] === 'string') {
+          merged.models[key] = models[key]
+        }
+      }
+    }
+
+    if (aiUpdates.contextLengths && typeof aiUpdates.contextLengths === 'object') {
+      const lengths = aiUpdates.contextLengths as Record<string, unknown>
+      for (const key of Object.keys(lengths)) {
+        if (isModelProfile(key)) {
+          const n = num(lengths[key])
+          if (n !== undefined) merged.contextLengths[key] = n
+        }
+      }
+    }
+
+    await window.api.config.setAISettings(normalizeAISettings(merged))
+  }
+
+  const settings = await readAppSettings()
+  return { ok: true, result: JSON.stringify(settings) }
+}
+
 /** Parse the raw JSON arguments string a model emits for a tool call. */
 export function parseToolArgs(raw: string): Record<string, unknown> {
   if (!raw || !raw.trim()) return {}
@@ -242,6 +372,10 @@ export async function executeToolCall(
       return listSshConfigs()
     case 'list_open_tabs':
       return listOpenTabs()
+    case 'get_app_settings':
+      return getAppSettings()
+    case 'update_app_settings':
+      return updateAppSettings(args)
     default:
       return { ok: false, error: `Unknown tool "${name}".` }
   }
@@ -255,7 +389,9 @@ export async function executeToolCall(
 export function buildToolContextMessage(): string | undefined {
   const tabs = useTabsStore.getState().tabs
   const configs = useBookmarksStore.getState().connections
-  if (tabs.length === 0 && configs.length === 0) return undefined
+  const theme = useThemeStore.getState().theme
+  const locale = useLocaleStore.getState().locale
+  const terminal = useTerminalAppearanceStore.getState()
 
   const tabsText = tabs.length
     ? tabs
@@ -279,11 +415,19 @@ export function buildToolContextMessage(): string | undefined {
         .join('\n')
     : '(none)'
 
+  const settingsLine = `App settings: theme=${theme} | locale=${locale} | terminal fontSize=${terminal.fontSize} | terminal colorScheme=${terminal.colorScheme}`
+
+  if (tabs.length === 0 && configs.length === 0) {
+    return `Current app state:\n\n${settingsLine}`
+  }
+
   return `Current SSH terminal manager state (use these exact ids with the tools; do NOT invent ids):
 
 Open terminal tabs:
 ${tabsText}
 
 Saved connection configs:
-${configsText}`
+${configsText}
+
+${settingsLine}`
 }

@@ -6,7 +6,8 @@ import {
   PANEL_MAX_WIDTH
 } from '../../store/aiStore'
 import { useTabsStore } from '../../store/tabsStore'
-import { sendPrompt, computeActiveTabBudget } from '../../lib/aiService'
+import { sendPrompt, computeActiveTabBudget, tryHandleToolApprovalFromInput } from '../../lib/aiService'
+import { hasPendingToolCalls } from '../../lib/toolApproval'
 import { normalizeAISettings, DEFAULT_CONTEXT_LENGTHS } from '../../../shared/aiSettings'
 import type { ModelProfile } from '../../../shared/types'
 import { useT, type TranslationKey } from '../../lib/i18n'
@@ -105,6 +106,10 @@ export default function SidePanel(): JSX.Element {
       limit
     })
   }, [messages, input, activeTab, copilotProfile, contextLengths, activeChatTabId])
+
+  const waitingToolApproval = Boolean(
+    activeChatTabId && hasPendingToolCalls(activeChatTabId)
+  )
 
   useEffect(() => {
     setMentionOpen(false)
@@ -217,7 +222,25 @@ export default function SidePanel(): JSX.Element {
 
   const send = (): void => {
     const text = input.trim()
-    if (!text || busy) return
+    if (!text) return
+
+    if (activeChatTabId) {
+      const approval = tryHandleToolApprovalFromInput(activeChatTabId, text)
+      if (approval.handled) {
+        if (approval.action === 'approve') {
+          setNotice(t('tool.approvedViaChat', { count: approval.count }))
+        } else if (approval.action === 'reject') {
+          setNotice(t('tool.rejectedViaChat', { count: approval.count }))
+        } else {
+          setNotice(t('tool.approvalRequired'))
+        }
+        updateDraft(activeChatTabId, '')
+        setMentionOpen(false)
+        return
+      }
+    }
+
+    if (busy) return
     void sendPrompt(text)
     setMentionOpen(false)
   }
@@ -387,7 +410,9 @@ export default function SidePanel(): JSX.Element {
             onChange={onInputChange}
             onKeyDown={onKeyDown}
             onContextMenu={onComposerContextMenu}
-            placeholder={t('copilot.placeholder')}
+            placeholder={
+              waitingToolApproval ? t('tool.approvalPlaceholder') : t('copilot.placeholder')
+            }
           />
           <div className="composer-toolbar">
             <ContextMeter key={activeChatTabId ?? 'meter'} budget={contextBudget} />
@@ -398,7 +423,7 @@ export default function SidePanel(): JSX.Element {
               disabled={busy}
               onChange={onProfileChange}
             />
-            {busy ? (
+            {busy && activeRequestId ? (
               <button
                 type="button"
                 className="composer-send danger"
@@ -414,8 +439,8 @@ export default function SidePanel(): JSX.Element {
                 className="composer-send primary"
                 onClick={send}
                 disabled={!input.trim()}
-                title={t('copilot.send')}
-                aria-label={t('copilot.send')}
+                title={waitingToolApproval ? t('tool.approve') : t('copilot.send')}
+                aria-label={waitingToolApproval ? t('tool.approve') : t('copilot.send')}
               >
                 <span className="composer-send-icon" aria-hidden>
                   ↑
