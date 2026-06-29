@@ -208,6 +208,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const pasteIntoTerminalRef = useRef<((clip: string) => void) | null>(null)
   const activeRef = useRef(active)
   const nlRef = useRef<NlState>({ mode: 'normal', buffer: '', cursor: 0, busy: false })
   const [menu, setMenu] = useState<MenuState | null>(null)
@@ -692,6 +693,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
         window.api.ssh.write(tab.sessionId, clip)
       }
     }
+    pasteIntoTerminalRef.current = pasteIntoTerminal
 
     // Single paste entry: Ctrl+V / Shift+Insert / menu paste all fire a paste event.
     // Capture phase runs before xterm so we can prevent its duplicate handling.
@@ -781,6 +783,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       term.dispose()
       termRef.current = null
       fitRef.current = null
+      pasteIntoTerminalRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.id, tab.sessionId])
@@ -834,7 +837,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
     }
     setMenu(null)
     void navigator.clipboard.readText().then((text) => {
-      if (text) term.paste(text)
+      if (text) pasteIntoTerminalRef.current?.(text)
     })
   }
 

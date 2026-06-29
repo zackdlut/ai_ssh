@@ -28,6 +28,21 @@ function toHexByte(value: number): string {
   return Math.max(0, Math.min(255, value)).toString(16).padStart(2, '0')
 }
 
+function surfaceLuminance(surfaceHex: string): number | null {
+  const surface = parseHexColor(surfaceHex)
+  if (!surface) return null
+  const [r, g, b] = surface
+  return 0.299 * r + 0.587 * g + 0.114 * b
+}
+
+/** High-contrast selection text when the theme omits selectionForeground. */
+function resolveSelectionForeground(theme: ITheme, surfaceHex: string): string {
+  if (theme.selectionForeground) return theme.selectionForeground
+  const luminance = surfaceLuminance(surfaceHex)
+  if (luminance === null) return theme.foreground ?? '#ffffff'
+  return luminance > 140 ? '#0a2e28' : '#f4fffb'
+}
+
 /**
  * xterm pre-blends selection tint onto theme.background. With a transparent
  * canvas (follow-app-theme), that blend uses black and looks far too dark on
@@ -311,7 +326,8 @@ export function xtermThemeForDisplay(
     background: '#00000000',
     cursorAccent: '#00000000',
     selectionBackground: opaqueSelection,
-    selectionInactiveBackground: opaqueInactive
+    selectionInactiveBackground: opaqueInactive,
+    selectionForeground: resolveSelectionForeground(theme, surface)
   }
 }
 

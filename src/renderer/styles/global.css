@@ -470,8 +470,15 @@ select:focus {
   background: transparent;
 }
 
-.terminal-view-host--follow-theme .xterm .xterm-screen {
+.terminal-view-host--follow-theme .xterm .xterm-screen,
+.terminal-view-host--follow-theme .xterm .xterm-viewport {
   background-color: transparent !important;
+}
+
+/* xterm accessibility mirror uses transparent text; restore readable selection. */
+.terminal-view-host .xterm .xterm-accessibility-tree:not(.debug) *::selection {
+  color: var(--selection-fg);
+  background: var(--selection-bg);
 }
 
 .terminal-view-surface {
@@ -3862,7 +3869,7 @@ select:focus {
 .context-menu-shortcut {
   flex-shrink: 0;
   font-size: 11px;
-  opacity: 0.52;
+  opacity: 0.68;
   letter-spacing: 0.02em;
 }
 

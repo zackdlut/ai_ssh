@@ -37,6 +37,7 @@ export const XTERM_THEMES: Record<AppTheme, ITheme> = {
     cursor: '#5be9d0',
     cursorAccent: '#181e2b',
     selectionBackground: 'rgba(91, 233, 208, 0.28)',
+    selectionForeground: '#f4fffb',
     black: '#0e121b',
     red: '#ff7a93',
     green: '#82e8b6',
