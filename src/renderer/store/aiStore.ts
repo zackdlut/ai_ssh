@@ -22,8 +22,6 @@ const PANEL_DEFAULT_WIDTH = 392
 const PANEL_WIDTH_KEY = 'ai.panelWidth'
 const PANEL_OPEN_KEY = 'ai.panelOpen'
 const MAX_MESSAGES_PER_TAB = 200
-/** Cap on a persisted tool result so chat history doesn't balloon. */
-const TOOL_RESULT_PERSIST_MAX = 2000
 const PERSIST_DEBOUNCE_MS = 500
 const STREAM_PERSIST_DEBOUNCE_MS = 2000
 export const MAX_CHAT_TABS = 5
@@ -97,10 +95,7 @@ function toPersistedState(
         boundTabId: m.boundTabId,
         chartSnapshots: m.chartSnapshots,
         isContextSummary: m.isContextSummary,
-        toolCalls: m.toolCalls?.map((tc) => ({
-          ...tc,
-          result: tc.result?.slice(0, TOOL_RESULT_PERSIST_MAX)
-        }))
+        toolCalls: m.toolCalls
       }))
     }))
   }

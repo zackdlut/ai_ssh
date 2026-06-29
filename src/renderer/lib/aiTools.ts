@@ -74,7 +74,7 @@ async function execAndCapture(
   await delay(1500)
   const after = readFullTerminalOutput(tabId)
   const added = after.startsWith(before) ? after.slice(before.length) : after
-  return added.trim().slice(-2000)
+  return added.trim()
 }
 
 /** The ids of the open terminal tabs, used to detect a newly opened tab. */

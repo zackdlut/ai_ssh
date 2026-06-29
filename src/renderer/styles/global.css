@@ -3447,6 +3447,10 @@ select:focus {
   box-shadow: var(--shadow-soft);
 }
 
+.command-card.tool-call-card {
+  overflow: visible;
+}
+
 .command-card.danger {
   border-color: rgba(255, 122, 147, 0.55);
   box-shadow: 0 0 0 1px rgba(255, 122, 147, 0.15), var(--shadow-soft);
@@ -3488,52 +3492,259 @@ select:focus {
 }
 
 .tool-call-card .tool-approval-hint {
-  color: var(--text-faint);
+  color: var(--text-dim);
   font-size: 11.5px;
   line-height: 1.45;
-  padding: 8px 13px 0;
 }
 
 /* ---------- AI tool-call (function calling) cards ---------- */
 .tool-call-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+}
+
+.tool-call-card {
+  position: relative;
+  border-radius: 12px;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.25s ease;
+}
+
+.tool-call-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--tool-accent, var(--signal));
+  opacity: 0.85;
+}
+
+.tool-call-card.tool-cat-connection {
+  --tool-accent: var(--azure);
+}
+
+.tool-call-card.tool-cat-config {
+  --tool-accent: var(--violet);
+}
+
+.tool-call-card.tool-cat-command {
+  --tool-accent: var(--signal);
+}
+
+.tool-call-card.tool-cat-settings {
+  --tool-accent: #ffce6a;
+}
+
+.tool-call-card.tool-cat-read {
+  --tool-accent: var(--text-dim);
+}
+
+.tool-call-card.status-pending {
+  border-color: color-mix(in srgb, var(--tool-accent) 45%, var(--line-strong));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--tool-accent) 12%, transparent),
+    var(--shadow-soft);
+}
+
+.tool-call-card.status-pending::before {
+  animation: tool-accent-pulse 2s ease-in-out infinite;
+}
+
+.tool-call-card.status-running::before {
+  animation: tool-accent-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tool-accent-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .tool-call-card .tool-call-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
-  padding: 8px 13px;
+  gap: 12px;
+  padding: 12px 14px 12px 16px;
   border-bottom: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.02);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent);
+}
+
+.tool-call-card .tool-call-head-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tool-call-card .tool-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  color: var(--tool-accent, var(--signal));
+  background: color-mix(in srgb, var(--tool-accent, var(--signal)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tool-accent, var(--signal)) 22%, transparent);
+}
+
+.tool-call-card .tool-glyph svg {
+  width: 18px;
+  height: 18px;
+}
+
+.tool-call-card .tool-call-head-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
 }
 
 .tool-call-card .tool-call-name {
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--text);
 }
 
-.tool-call-card .tool-call-status {
-  font-size: 11px;
-  font-weight: 500;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
+.tool-call-card .tool-call-desc {
+  font-size: 11.5px;
+  line-height: 1.45;
   color: var(--text-dim);
 }
 
+.tool-call-card .tool-call-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 9px 4px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-dim);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.tool-call-card .tool-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: tool-status-blink 1.4s ease-in-out infinite;
+}
+
+.tool-call-card .tool-status-icon {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+
+@keyframes tool-status-blink {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.tool-call-card .tool-call-status.status-pending {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+.tool-call-card .tool-call-status.status-running {
+  background: color-mix(in srgb, var(--azure) 16%, transparent);
+  color: var(--azure);
+}
+
 .tool-call-card .tool-call-status.status-done {
-  background: rgba(120, 220, 160, 0.16);
-  color: var(--success, #6fd59a);
+  background: rgba(130, 232, 182, 0.16);
+  color: var(--ok);
 }
 
 .tool-call-card .tool-call-status.status-error,
 .tool-call-card .tool-call-status.status-rejected {
   background: rgba(255, 122, 147, 0.16);
   color: var(--danger);
+}
+
+.tool-call-card .tool-call-body,
+.tool-call-card .tool-call-result-block {
+  padding: 4px 14px 10px 16px;
+}
+
+.tool-call-card .tool-section-label {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 8px 0 6px;
+}
+
+.tool-call-card .tool-detail-grid {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tool-call-card .tool-detail-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 34%) 1fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.tool-call-card .tool-detail-row:nth-child(odd) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.tool-call-card .tool-detail-row dt {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.tool-call-card .tool-detail-row dd {
+  margin: 0;
+  word-break: break-word;
+  color: var(--text);
+}
+
+.tool-call-card .tool-detail-row dd.mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.tool-call-card .tool-settings-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tool-call-card .tool-settings-group + .tool-settings-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--line);
 }
 
 .tool-call-card .tool-params {
@@ -3564,14 +3775,17 @@ select:focus {
 }
 
 .tool-call-card .tool-command {
-  margin: 0;
+  margin: 4px 0 0;
+  border-radius: 8px;
+  border: 1px solid var(--line);
 }
 
 .tool-call-card .tool-call-error {
-  padding: 8px 13px;
+  padding: 10px 14px 10px 16px;
   font-size: 12px;
   color: var(--danger);
   border-top: 1px solid var(--line);
+  background: rgba(255, 122, 147, 0.06);
 }
 
 .tool-call-card .tool-call-result {
@@ -3591,6 +3805,78 @@ select:focus {
   overflow: auto;
 }
 
+.tool-call-card .tool-approval-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px 12px 16px;
+  border-top: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255, 206, 106, 0.06), rgba(255, 255, 255, 0.02));
+}
+
+.tool-call-card .tool-approval-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: min(100%, 220px);
+}
+
+.tool-call-card .tool-approval-title {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.tool-call-card .tool-approval-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.tool-call-card .tool-btn-approve,
+.tool-call-card .tool-btn-reject {
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.1s ease;
+}
+
+.tool-call-card .tool-btn-approve {
+  background: linear-gradient(180deg, rgba(91, 233, 208, 0.22), rgba(91, 233, 208, 0.12));
+  border-color: rgba(91, 233, 208, 0.35);
+  color: var(--signal);
+}
+
+.tool-call-card .tool-btn-approve:hover {
+  background: linear-gradient(180deg, rgba(91, 233, 208, 0.3), rgba(91, 233, 208, 0.16));
+  border-color: rgba(91, 233, 208, 0.5);
+}
+
+.tool-call-card .tool-btn-reject {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--line-strong);
+  color: var(--text-dim);
+}
+
+.tool-call-card .tool-btn-reject:hover {
+  background: rgba(255, 122, 147, 0.1);
+  border-color: rgba(255, 122, 147, 0.35);
+  color: var(--danger);
+}
+
+.tool-call-card .tool-btn-approve:active,
+.tool-call-card .tool-btn-reject:active {
+  transform: scale(0.98);
+}
+
 /* Friendly rendering for read-only list tool results */
 .tool-call-card .tool-list {
   display: flex;
@@ -3602,8 +3888,26 @@ select:focus {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 8px 13px;
+  padding: 8px 10px;
   border-top: 1px solid var(--line);
+}
+
+.tool-call-card .tool-list-row--solo {
+  border-top: none;
+}
+
+.tool-call-card .tool-list-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-faint);
+  background: rgba(255, 255, 255, 0.05);
+  flex-shrink: 0;
 }
 
 .tool-call-card .tool-list-row:first-child {
@@ -3692,23 +3996,82 @@ select:focus {
   font-family: var(--font-mono);
 }
 
-/* exec_command captured output */
+/* exec_command captured output and other long text results */
 .tool-call-card .tool-output-wrap {
-  border-top: 1px solid var(--line);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--md-pre-bg);
+}
+
+.tool-call-card .tool-output-scroll {
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tool-call-card .tool-output-scroll:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: -2px;
 }
 
 .tool-call-card .tool-output {
   margin: 0;
-  max-height: 240px;
-  overflow: auto;
-  padding: 10px 13px;
-  background: var(--md-pre-bg);
+  padding: 10px 12px;
+  background: transparent;
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   color: var(--md-pre-fg);
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.tool-call-card .tool-output-wrap.is-short .tool-output-scroll {
+  max-height: none;
+  overflow: visible;
+}
+
+.tool-call-card .tool-output-wrap.is-collapsed .tool-output-scroll {
+  max-height: min(360px, 50vh);
+}
+
+.tool-call-card .tool-output-wrap.is-expanded .tool-output-scroll {
+  max-height: min(75vh, 1400px);
+}
+
+.tool-call-card .tool-output-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border-top: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.tool-call-card .tool-output-meta {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.tool-call-card .tool-output-toggle {
+  padding: 4px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--signal);
+  background: rgba(91, 233, 208, 0.1);
+  border: 1px solid rgba(91, 233, 208, 0.28);
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.tool-call-card .tool-output-toggle:hover {
+  background: rgba(91, 233, 208, 0.16);
+  border-color: rgba(91, 233, 208, 0.42);
 }
 
 /* ---------- Modal ---------- */
