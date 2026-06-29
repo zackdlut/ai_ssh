@@ -63,12 +63,24 @@ export class SshManager {
 
   constructor(private getWindow: () => BrowserWindow | null) {}
 
+  /**
+   * Send to the renderer, guarding against a window/webContents that has
+   * already been destroyed (e.g. SSH 'close' fires while the app is quitting).
+   */
+  private send(channel: string, payload: unknown): void {
+    const win = this.getWindow()
+    if (!win || win.isDestroyed()) return
+    const wc = win.webContents
+    if (!wc || wc.isDestroyed()) return
+    wc.send(channel, payload)
+  }
+
   private emitData(event: SshDataEvent): void {
-    this.getWindow()?.webContents.send('ssh:data', event)
+    this.send('ssh:data', event)
   }
 
   private emitStatus(event: SshStatusEvent): void {
-    this.getWindow()?.webContents.send('ssh:status', event)
+    this.send('ssh:status', event)
   }
 
   connect(opts: ConnectOptions): Promise<ConnectResult> {

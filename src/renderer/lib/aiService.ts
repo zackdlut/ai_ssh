@@ -7,16 +7,126 @@ import { selectMessagesToCompress, buildChatPayload, type BudgetMessage } from '
 import { buildContextMessage } from '../../shared/terminalContext'
 import { translate } from './i18n/translations'
 import { useLocaleStore } from '../store/localeStore'
-import type { ChatMessageDTO, TerminalContext } from '../../shared/types'
+import { isReadonlyTool } from '../../shared/aiTools'
+import { buildToolContextMessage, executeToolCall, parseToolArgs } from './aiTools'
+import type { ChatMessage } from '../store/aiStore'
+import type { ChatMessageDTO, TerminalContext, ToolCallView } from '../../shared/types'
+
+/**
+ * State for an in-progress function-calling agent loop. The `conversation`
+ * carries the running model message list (user turn, assistant tool-call turns,
+ * and tool-result turns) that is replayed on each continuation. The loop pauses
+ * whenever an action tool needs user approval and resumes once every tool call
+ * in the latest assistant turn has reached a terminal state.
+ */
+interface LoopState {
+  tabId: string
+  context?: TerminalContext
+  boundSessionId?: string
+  boundTabId?: string
+  conversation: ChatMessageDTO[]
+  /** True once we've auto-nudged a degenerate (empty, no-tool-call) turn. */
+  nudged?: boolean
+  /** True once any tool call has been executed within this loop. */
+  executedAnyTool?: boolean
+}
 
 interface PendingRequest {
   tabId: string
   messageId: string
+  loop: LoopState
 }
 
 /** Maps an in-flight requestId to the assistant message being streamed. */
 const pending = new Map<string, PendingRequest>()
+/** Assistant messages whose tool calls are awaiting execution/approval. */
+const loops = new Map<string, LoopState>()
 let initialized = false
+
+function findMessage(tabId: string, messageId: string): ChatMessage | undefined {
+  const tab = useAIStore.getState().chatTabs.find((t) => t.id === tabId)
+  return tab?.messages.find((m) => m.id === messageId)
+}
+
+/** Begin one LLM turn for the loop: a fresh assistant message + chat request. */
+function startTurn(loop: LoopState): void {
+  const ai = useAIStore.getState()
+  const snapshot = buildToolContextMessage()
+  const messages: ChatMessageDTO[] = snapshot
+    ? [{ role: 'system', content: snapshot }, ...loop.conversation]
+    : [...loop.conversation]
+
+  const assistantId = crypto.randomUUID()
+  const requestId = crypto.randomUUID()
+  ai.addMessage(loop.tabId, {
+    id: assistantId,
+    role: 'assistant',
+    content: '',
+    streaming: true,
+    boundSessionId: loop.boundSessionId,
+    boundTabId: loop.boundTabId
+  })
+  pending.set(requestId, { tabId: loop.tabId, messageId: assistantId, loop })
+  ai.setBusy(true, requestId, loop.tabId)
+  window.api.ai.chat({ requestId, messages, context: loop.context, enableTools: true })
+}
+
+/** Execute a single tool call and record its outcome, then advance the loop. */
+async function runToolCall(tabId: string, messageId: string, callId: string): Promise<void> {
+  const ai = useAIStore.getState()
+  const call = findMessage(tabId, messageId)?.toolCalls?.find((c) => c.id === callId)
+  if (!call) return
+  ai.updateToolCall(tabId, messageId, callId, { status: 'running' })
+  try {
+    const res = await executeToolCall(call.name, parseToolArgs(call.args))
+    if (res.ok) {
+      ai.updateToolCall(tabId, messageId, callId, { status: 'done', result: res.result })
+    } else {
+      ai.updateToolCall(tabId, messageId, callId, { status: 'error', error: res.error })
+    }
+  } catch (e) {
+    ai.updateToolCall(tabId, messageId, callId, {
+      status: 'error',
+      error: e instanceof Error ? e.message : String(e)
+    })
+  }
+  maybeContinueLoop(tabId, messageId)
+}
+
+/** Approve a pending (action) tool call from the UI. */
+export function approveToolCall(tabId: string, messageId: string, callId: string): void {
+  void runToolCall(tabId, messageId, callId)
+}
+
+/** Reject a pending (action) tool call from the UI. */
+export function rejectToolCall(tabId: string, messageId: string, callId: string): void {
+  useAIStore.getState().updateToolCall(tabId, messageId, callId, {
+    status: 'rejected',
+    result: 'User rejected this action.'
+  })
+  maybeContinueLoop(tabId, messageId)
+}
+
+/** When every tool call of a turn is resolved, feed results back and continue. */
+function maybeContinueLoop(tabId: string, messageId: string): void {
+  const loop = loops.get(messageId)
+  if (!loop) return
+  const calls = findMessage(tabId, messageId)?.toolCalls
+  if (!calls || calls.length === 0) return
+  if (calls.some((c) => c.status === 'pending' || c.status === 'running')) return
+
+  loops.delete(messageId)
+  for (const c of calls) {
+    const content =
+      c.status === 'rejected'
+        ? 'User rejected this action.'
+        : c.error
+          ? `Error: ${c.error}`
+          : (c.result ?? 'Done.')
+    loop.conversation.push({ role: 'tool', tool_call_id: c.id, content })
+  }
+  startTurn(loop)
+}
 
 /**
  * Register the streaming IPC listeners exactly once for the app lifetime, so
@@ -34,20 +144,70 @@ export function initAIService(): void {
     const entry = pending.get(requestId)
     if (entry) useAIStore.getState().appendReasoning(entry.tabId, entry.messageId, delta)
   })
-  window.api.ai.onDone(({ requestId }) => {
+  window.api.ai.onDone(({ requestId, content, toolCalls }) => {
     const entry = pending.get(requestId)
-    if (entry) useAIStore.getState().finishMessage(entry.tabId, entry.messageId)
     pending.delete(requestId)
-    useAIStore.getState().setBusy(false)
+    if (!entry) {
+      useAIStore.getState().setBusy(false)
+      return
+    }
+    const { tabId, messageId, loop } = entry
+    const ai = useAIStore.getState()
+    ai.finishMessage(tabId, messageId)
+
+    if (!toolCalls || toolCalls.length === 0) {
+      if (content.trim() === '') {
+        // Degenerate FIRST turn: the model produced neither a visible answer nor
+        // a tool call (common with reasoning models that "plan" only in their
+        // thoughts). Nudge it once to actually act or answer. But an empty turn
+        // AFTER tools already ran is a legitimate "nothing more to say" (e.g.
+        // right after a list_* card) — just drop the empty bubble and finish.
+        if (!loop.nudged && !loop.executedAnyTool) {
+          loop.nudged = true
+          ai.removeMessage(tabId, messageId)
+          loop.conversation.push({
+            role: 'user',
+            content:
+              'You produced no visible answer and called no tool. If you intended to perform an action (open/close a tab, create/update a config, or run a command), call the appropriate tool NOW in this response — do not only describe it in your reasoning. Otherwise, answer the user directly.'
+          })
+          startTurn(loop)
+          return
+        }
+        ai.removeMessage(tabId, messageId)
+      }
+      ai.setBusy(false)
+      return
+    }
+
+    loop.executedAnyTool = true
+
+    // Record the assistant turn (with tool calls) into the running conversation,
+    // attach the tool-call views for rendering, and execute them. Read-only
+    // tools run immediately; action tools wait for user approval. Busy stays
+    // true until the loop produces a final, tool-call-free answer.
+    loop.conversation.push({ role: 'assistant', content, tool_calls: toolCalls })
+    const views: ToolCallView[] = toolCalls.map((tc) => ({
+      id: tc.id,
+      name: tc.name,
+      args: tc.arguments,
+      status: isReadonlyTool(tc.name) ? 'running' : 'pending'
+    }))
+    ai.setToolCalls(tabId, messageId, views)
+    loops.set(messageId, loop)
+
+    for (const tc of toolCalls) {
+      if (isReadonlyTool(tc.name)) void runToolCall(tabId, messageId, tc.id)
+    }
   })
   window.api.ai.onError(({ requestId, error }) => {
     const entry = pending.get(requestId)
+    pending.delete(requestId)
     if (entry) {
       const ai = useAIStore.getState()
       ai.appendToMessage(entry.tabId, entry.messageId, `\n\n[Error] ${error}`)
       ai.finishMessage(entry.tabId, entry.messageId)
+      loops.delete(entry.messageId)
     }
-    pending.delete(requestId)
     useAIStore.getState().setBusy(false)
   })
 }
@@ -159,8 +319,6 @@ export async function sendPrompt(text: string): Promise<void> {
   history.push({ role: 'user', content: prompt })
 
   const userId = crypto.randomUUID()
-  const assistantId = crypto.randomUUID()
-  const requestId = crypto.randomUUID()
 
   if (tab.title === DEFAULT_CHAT_TAB_TITLE) {
     ai.renameTab(tabId, autoTitleFromPrompt(prompt))
@@ -168,18 +326,16 @@ export async function sendPrompt(text: string): Promise<void> {
 
   ai.updateDraft(tabId, '')
   ai.addMessage(tabId, { id: userId, role: 'user', content: prompt })
-  ai.addMessage(tabId, {
-    id: assistantId,
-    role: 'assistant',
-    content: '',
-    streaming: true,
-    boundSessionId: mentionsTerminal ? activeTerminalTab?.sessionId : undefined,
-    boundTabId: mentionsTerminal ? activeTerminalTab?.id : undefined
-  })
-  pending.set(requestId, { tabId, messageId: assistantId })
-  ai.setBusy(true, requestId, tabId)
 
-  window.api.ai.chat({ requestId, messages: history, context })
+  // Kick off the function-calling agent loop. startTurn appends the streaming
+  // assistant message, wires up the request, and sets the busy flag.
+  startTurn({
+    tabId,
+    context,
+    boundSessionId: mentionsTerminal ? activeTerminalTab?.sessionId : undefined,
+    boundTabId: mentionsTerminal ? activeTerminalTab?.id : undefined,
+    conversation: history
+  })
 }
 
 const MAX_SELECTION = 4000

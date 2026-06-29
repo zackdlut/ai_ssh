@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState } from 'react'
 import CommandCard from './CommandCard'
+import ToolCallCard from './ToolCallCard'
 import Markdown from './Markdown'
 import HtmlPreview from './HtmlPreview'
 import ThinkingBlock from './ThinkingBlock'
@@ -297,6 +298,18 @@ export default function ChatMessage({ message }: Props): JSX.Element {
                 : undefined
             )
           )
+        )}
+        {activeChatTabId && message.toolCalls && message.toolCalls.length > 0 && (
+          <div className="tool-call-list">
+            {message.toolCalls.map((call) => (
+              <ToolCallCard
+                key={call.id}
+                tabId={activeChatTabId}
+                messageId={message.id}
+                call={call}
+              />
+            ))}
+          </div>
         )}
       </div>
     </div>

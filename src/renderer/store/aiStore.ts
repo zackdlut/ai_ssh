@@ -1,5 +1,11 @@
 import { create } from 'zustand'
-import type { ChartSnapshot, CopilotChatMessage, CopilotChatState, CopilotChatTab } from '../../shared/types'
+import type {
+  ChartSnapshot,
+  CopilotChatMessage,
+  CopilotChatState,
+  CopilotChatTab,
+  ToolCallView
+} from '../../shared/types'
 
 export interface ChatMessage extends CopilotChatMessage {
   streaming?: boolean
@@ -16,6 +22,8 @@ const PANEL_DEFAULT_WIDTH = 392
 const PANEL_WIDTH_KEY = 'ai.panelWidth'
 const PANEL_OPEN_KEY = 'ai.panelOpen'
 const MAX_MESSAGES_PER_TAB = 200
+/** Cap on a persisted tool result so chat history doesn't balloon. */
+const TOOL_RESULT_PERSIST_MAX = 2000
 const PERSIST_DEBOUNCE_MS = 500
 const STREAM_PERSIST_DEBOUNCE_MS = 2000
 export const MAX_CHAT_TABS = 5
@@ -88,7 +96,11 @@ function toPersistedState(
         boundSessionId: m.boundSessionId,
         boundTabId: m.boundTabId,
         chartSnapshots: m.chartSnapshots,
-        isContextSummary: m.isContextSummary
+        isContextSummary: m.isContextSummary,
+        toolCalls: m.toolCalls?.map((tc) => ({
+          ...tc,
+          result: tc.result?.slice(0, TOOL_RESULT_PERSIST_MAX)
+        }))
       }))
     }))
   }
@@ -179,10 +191,18 @@ interface AIState {
   clearActiveTab: () => void
   renameTab: (tabId: string, title: string) => void
   addMessage: (tabId: string, msg: ChatMessage) => void
+  removeMessage: (tabId: string, id: string) => void
   replaceMessages: (tabId: string, messages: ChatMessage[]) => void
   appendToMessage: (tabId: string, id: string, delta: string) => void
   appendReasoning: (tabId: string, id: string, delta: string) => void
   finishMessage: (tabId: string, id: string) => void
+  setToolCalls: (tabId: string, messageId: string, toolCalls: ToolCallView[]) => void
+  updateToolCall: (
+    tabId: string,
+    messageId: string,
+    callId: string,
+    patch: Partial<ToolCallView>
+  ) => void
   setChartSnapshot: (tabId: string, messageId: string, key: string, snapshot: ChartSnapshot) => void
   setBusy: (busy: boolean, requestId?: string | null, tabId?: string | null) => void
   activeChatTab: () => ChatTab | undefined
@@ -330,6 +350,16 @@ export const useAIStore = create<AIState>((set, get) => ({
     })
     schedulePersist(get)
   },
+  removeMessage: (tabId, id) => {
+    set((s) => ({
+      chatTabs: s.chatTabs.map((tab) =>
+        tab.id === tabId
+          ? { ...tab, updatedAt: Date.now(), messages: tab.messages.filter((m) => m.id !== id) }
+          : tab
+      )
+    }))
+    schedulePersist(get)
+  },
   replaceMessages: (tabId, messages) => {
     set((s) => ({
       chatTabs: updateTab(s.chatTabs, tabId, {
@@ -393,6 +423,40 @@ export const useAIStore = create<AIState>((set, get) => ({
                 ? Date.now() - m.thinkingStartedAt
                 : m.thinkingMs
             return { ...m, streaming: false, thinkingMs }
+          })
+        }
+      })
+    }))
+    schedulePersist(get)
+  },
+  setToolCalls: (tabId, messageId, toolCalls) => {
+    set((s) => ({
+      chatTabs: s.chatTabs.map((tab) => {
+        if (tab.id !== tabId) return tab
+        return {
+          ...tab,
+          updatedAt: Date.now(),
+          messages: tab.messages.map((m) => (m.id === messageId ? { ...m, toolCalls } : m))
+        }
+      })
+    }))
+    schedulePersist(get)
+  },
+  updateToolCall: (tabId, messageId, callId, patch) => {
+    set((s) => ({
+      chatTabs: s.chatTabs.map((tab) => {
+        if (tab.id !== tabId) return tab
+        return {
+          ...tab,
+          updatedAt: Date.now(),
+          messages: tab.messages.map((m) => {
+            if (m.id !== messageId || !m.toolCalls) return m
+            return {
+              ...m,
+              toolCalls: m.toolCalls.map((tc) =>
+                tc.id === callId ? { ...tc, ...patch } : tc
+              )
+            }
           })
         }
       })

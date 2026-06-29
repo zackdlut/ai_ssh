@@ -81,9 +81,37 @@ export type {
 /** UI display language. */
 export type AppLocale = 'zh' | 'en'
 
+/** A single function/tool call requested by the model. */
+export interface ToolCallDTO {
+  /** Provider-assigned id, echoed back when returning the tool result. */
+  id: string
+  /** Tool (function) name. */
+  name: string
+  /** Raw JSON-encoded arguments string. */
+  arguments: string
+}
+
 export interface ChatMessageDTO {
-  role: 'system' | 'user' | 'assistant'
+  role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
+  /** For assistant turns that requested tool calls. */
+  tool_calls?: ToolCallDTO[]
+  /** For role:'tool' messages, the id of the call this result answers. */
+  tool_call_id?: string
+}
+
+export type ToolCallStatus = 'pending' | 'running' | 'done' | 'rejected' | 'error'
+
+/** A tool call attached to a Copilot assistant message (persisted + rendered). */
+export interface ToolCallView {
+  id: string
+  name: string
+  /** Raw JSON-encoded arguments string. */
+  args: string
+  status: ToolCallStatus
+  /** Captured result text fed back to the model (truncated when persisted). */
+  result?: string
+  error?: string
 }
 
 /** Persisted ECharts replay data for a chart block inside an assistant message. */
@@ -107,6 +135,8 @@ export interface CopilotChatMessage {
   chartSnapshots?: Record<string, ChartSnapshot>
   /** True when this message is a compressed summary of earlier turns. */
   isContextSummary?: boolean
+  /** Function/tool calls requested by the model in this assistant turn. */
+  toolCalls?: ToolCallView[]
 }
 
 /** One conversation topic in the Copilot side panel. */
@@ -138,6 +168,8 @@ export interface AIChatRequest {
   requestId: string
   messages: ChatMessageDTO[]
   context?: TerminalContext
+  /** Enable function/tool calling for this request. */
+  enableTools?: boolean
 }
 
 /** Summarize older Copilot turns before they exceed the context budget. */
@@ -315,6 +347,8 @@ export interface AIReasoningEvent {
 export interface AIDoneEvent {
   requestId: string
   content: string
+  /** Tool calls the model requested, when function calling was enabled. */
+  toolCalls?: ToolCallDTO[]
 }
 
 export interface AIErrorEvent {

@@ -67,8 +67,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
           requestId: req.requestId,
           delta
         } satisfies AIReasoningEvent),
-      onDone: (content) =>
-        e.sender.send('ai:done', { requestId: req.requestId, content } satisfies AIDoneEvent),
+      onDone: (content, toolCalls) =>
+        e.sender.send('ai:done', {
+          requestId: req.requestId,
+          content,
+          toolCalls
+        } satisfies AIDoneEvent),
       onError: (error) =>
         e.sender.send('ai:error', { requestId: req.requestId, error } satisfies AIErrorEvent)
     })

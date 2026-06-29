@@ -11,13 +11,16 @@ async function loadOpenAI(): Promise<OpenAIConstructor> {
   return openaiCtor
 }
 import { resolveActiveModel, resolveModel } from '../../shared/aiSettings'
+import { AI_TOOLS } from '../../shared/aiTools'
 import type {
   AISettings,
   AIChatRequest,
   AIChartSpecRequest,
   AITranslateRequest,
   AISummarizeRequest,
-  AICompressHistoryRequest
+  AICompressHistoryRequest,
+  ChatMessageDTO,
+  ToolCallDTO
 } from '../../shared/types'
 import {
   SYSTEM_PROMPT,
@@ -92,8 +95,47 @@ export interface StreamCallbacks {
   onChunk: (delta: string) => void
   /** Streamed reasoning/thinking tokens, kept separate from the answer body. */
   onReasoning?: (delta: string) => void
-  onDone: (content: string) => void
+  onDone: (content: string, toolCalls?: ToolCallDTO[]) => void
   onError: (error: string) => void
+}
+
+/**
+ * Map our wire-format chat messages (which may carry tool calls / tool results)
+ * to the OpenAI SDK message params. Assistant turns with `tool_calls` and
+ * `role:'tool'` results are reconstructed so a multi-turn function-calling
+ * conversation can be replayed to the model.
+ */
+function toSdkMessages(
+  history: ChatMessageDTO[]
+): OpenAI.Chat.ChatCompletionMessageParam[] {
+  return history.map((m) => {
+    if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
+      return {
+        role: 'assistant',
+        content: m.content || null,
+        tool_calls: m.tool_calls.map((tc) => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: { name: tc.name, arguments: tc.arguments }
+        }))
+      } as OpenAI.Chat.ChatCompletionAssistantMessageParam
+    }
+    if (m.role === 'tool') {
+      return {
+        role: 'tool',
+        tool_call_id: m.tool_call_id ?? '',
+        content: m.content
+      } as OpenAI.Chat.ChatCompletionToolMessageParam
+    }
+    return { role: m.role, content: m.content } as OpenAI.Chat.ChatCompletionMessageParam
+  })
+}
+
+/** Aggregate streamed `delta.tool_calls` fragments (indexed) into whole calls. */
+interface ToolCallAccumulator {
+  id: string
+  name: string
+  args: string
 }
 
 /** True when the text looks like it is meant to be a JSON object/array. */
@@ -233,22 +275,39 @@ export class AIProvider {
     if (contextMessage) {
       messages.push({ role: 'system', content: contextMessage })
     }
-    for (const m of req.messages) {
-      messages.push({ role: m.role, content: m.content })
+    messages.push(...toSdkMessages(req.messages))
+
+    const model = resolveActiveModel(settings)
+    const baseBody = { model, messages, stream: true as const }
+    const toolBody = {
+      ...baseBody,
+      tools: AI_TOOLS as unknown as OpenAI.Chat.ChatCompletionTool[],
+      tool_choice: 'auto' as const
     }
 
     let full = ''
+    const toolAcc = new Map<number, ToolCallAccumulator>()
     try {
-      const stream = await client.chat.completions.create(
-        {
-          model: resolveActiveModel(settings),
-          messages,
-          stream: true
-        },
-        { signal: controller.signal }
-      )
+      // Some OpenAI-compatible backends (older Ollama models, etc.) reject the
+      // `tools` parameter; fall back to a plain streaming request so the chat
+      // still works (it just won't be able to call functions).
+      let stream: Awaited<ReturnType<typeof client.chat.completions.create>>
+      try {
+        stream = await client.chat.completions.create(
+          req.enableTools ? toolBody : baseBody,
+          { signal: controller.signal }
+        )
+      } catch (e) {
+        if (req.enableTools && !controller.signal.aborted) {
+          stream = await client.chat.completions.create(baseBody, {
+            signal: controller.signal
+          })
+        } else {
+          throw e
+        }
+      }
 
-      for await (const part of stream) {
+      for await (const part of stream as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>) {
         const { content, reasoning } = splitStreamDelta(part)
         // Reasoning is streamed to a separate channel and intentionally NOT
         // added to `full`, so it never leaks into the answer or the history.
@@ -257,8 +316,26 @@ export class AIProvider {
           full += content
           cb.onChunk(content)
         }
+        const deltaCalls = part.choices[0]?.delta?.tool_calls
+        if (deltaCalls) {
+          for (const tc of deltaCalls) {
+            const idx = tc.index ?? 0
+            const acc = toolAcc.get(idx) ?? { id: '', name: '', args: '' }
+            if (tc.id) acc.id = tc.id
+            if (tc.function?.name) acc.name = tc.function.name
+            if (tc.function?.arguments) acc.args += tc.function.arguments
+            toolAcc.set(idx, acc)
+          }
+        }
       }
-      cb.onDone(full)
+      const toolCalls: ToolCallDTO[] = [...toolAcc.values()]
+        .filter((t) => t.name)
+        .map((t) => ({
+          id: t.id || `call_${Math.random().toString(36).slice(2)}`,
+          name: t.name,
+          arguments: t.args || '{}'
+        }))
+      cb.onDone(full, toolCalls.length > 0 ? toolCalls : undefined)
     } catch (e) {
       if (controller.signal.aborted) {
         cb.onDone(full)
