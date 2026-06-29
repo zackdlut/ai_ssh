@@ -41,6 +41,17 @@ export interface FileEntry {
 export type SortColumn = 'name' | 'size' | 'mtime'
 export type SortDirection = 'asc' | 'desc'
 
+function compareNames(a: FileEntry, b: FileEntry): number {
+  return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+}
+
+/** Directories show no size in the UI; treat them as 0 when sorting by size. */
+function entrySizeForSort(entry: FileEntry): number {
+  if (entry.type === 'dir') return 0
+  const size = Number(entry.size)
+  return Number.isFinite(size) ? size : 0
+}
+
 export function sortEntries(
   entries: FileEntry[],
   column: SortColumn,
@@ -57,14 +68,18 @@ export function sortEntries(
     if (column === 'name') {
       const dw = dirFirst(a, b)
       if (dw !== 0) return dw * mul
-      return mul * a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+      return mul * compareNames(a, b)
     }
     if (column === 'size') {
+      const diff = entrySizeForSort(a) - entrySizeForSort(b)
+      if (diff !== 0) return mul * diff
       const dw = dirFirst(a, b)
-      if (dw !== 0) return dw
-      return mul * (a.size - b.size)
+      if (dw !== 0) return dw * mul
+      return mul * compareNames(a, b)
     }
-    return mul * (a.mtime - b.mtime)
+    const diff = a.mtime - b.mtime
+    if (diff !== 0) return mul * diff
+    return mul * compareNames(a, b)
   })
 }
 

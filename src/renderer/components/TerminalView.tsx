@@ -5,7 +5,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import type { TerminalTab } from '../store/tabsStore'
 import { useTabsStore } from '../store/tabsStore'
-import { registerNlToggle, registerTerminal, unregisterTerminal } from '../lib/terminalRegistry'
+import { COPILOT_CONTEXT_MAX_LINES, registerNlToggle, registerTerminal, unregisterTerminal } from '../lib/terminalRegistry'
 import { askAboutSelection } from '../lib/aiService'
 import { extractCommands, isDangerous } from '../lib/commands'
 import { stripAnsi } from '../lib/streamParse'
@@ -73,6 +73,8 @@ function nlPrompt(locale: AppLocale): string {
   return `${ORANGE}(${t(locale, 'terminal.nl.prompt')})$${RESET} `
 }
 
+// Sliding window: terminal lines included as NL-mode AI context.
+const NL_CONTEXT_MAX_LINES = 100
 // Max captured output (chars) fed to the summarizer.
 const MAX_CAPTURE = 2000
 // Skip the summarize LLM call when a single command returns short, plain output.
@@ -192,7 +194,11 @@ function streamSummarize(
       request: req.request,
       runs: req.runs,
       context: req.context
-        ? { recentOutput: '', host: req.context.host, username: req.context.username }
+        ? {
+            recentOutput: serializeBuffer(term, NL_CONTEXT_MAX_LINES),
+            host: req.context.host,
+            username: req.context.username
+          }
         : undefined
     })
   })
@@ -388,7 +394,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       term.write(`\r\n${DIM}${t(loc(), 'terminal.nl.parsing')}${RESET}\r\n`)
 
       const context = {
-        recentOutput: serializeBuffer(term, 40),
+        recentOutput: serializeBuffer(term, NL_CONTEXT_MAX_LINES),
         host: tab.host,
         username: tab.username
       }
@@ -749,7 +755,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       term.write(e.data)
     })
 
-    registerTerminal(tab.id, (maxLines = 40) =>
+    registerTerminal(tab.id, (maxLines = COPILOT_CONTEXT_MAX_LINES) =>
       maxLines < 0 ? serializeFullBuffer(term) : serializeBuffer(term, maxLines)
     )
     registerNlToggle(tab.id, toggleNl)

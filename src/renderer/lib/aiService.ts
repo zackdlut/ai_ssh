@@ -1,6 +1,6 @@
 import { useAIStore, DEFAULT_CHAT_TAB_TITLE } from '../store/aiStore'
 import { useTabsStore } from '../store/tabsStore'
-import { readTerminalOutput } from './terminalRegistry'
+import { COPILOT_CONTEXT_MAX_LINES, COPILOT_TERMINAL_MENTION_MAX_LINES, readTerminalOutput } from './terminalRegistry'
 import type { ChatMessageDTO, TerminalContext } from '../../shared/types'
 
 interface PendingRequest {
@@ -106,7 +106,10 @@ export function sendPrompt(text: string): void {
 
   const context: TerminalContext | undefined = activeTerminalTab
     ? {
-        recentOutput: readTerminalOutput(activeTerminalTab.id, mentionsTerminal ? 80 : 40),
+        recentOutput: readTerminalOutput(
+          activeTerminalTab.id,
+          mentionsTerminal ? COPILOT_TERMINAL_MENTION_MAX_LINES : COPILOT_CONTEXT_MAX_LINES
+        ),
         host: activeTerminalTab.host,
         username: activeTerminalTab.username
       }

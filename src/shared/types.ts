@@ -123,7 +123,7 @@ export interface CopilotChatState {
 }
 
 export interface TerminalContext {
-  /** Recent terminal output (trimmed to the last N lines). */
+  /** Recent terminal output (sliding window of the last N lines). */
   recentOutput: string
   host?: string
   username?: string

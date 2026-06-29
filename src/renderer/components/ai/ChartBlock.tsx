@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ECharts, EChartsCoreOption, EChartsOption } from 'echarts'
 import { parseChartSpec, type ChartSpec } from '../../lib/chartSpec'
 import { createLineSplitter, extractValue, parseHumanNumber, stripAnsi } from '../../lib/streamParse'
-import { readTerminalOutput } from '../../lib/terminalRegistry'
+import { COPILOT_TERMINAL_MENTION_MAX_LINES, readTerminalOutput } from '../../lib/terminalRegistry'
 import { isDangerous } from '../../lib/commands'
 import { useThemeStore } from '../../store/themeStore'
 import { useT } from '../../lib/i18n'
@@ -359,7 +359,7 @@ export default function ChartBlock({
       fail(new Error('ai.chartSpec unavailable — restart the app to reload preload'))
       return
     }
-    const recentOutput = readTerminalOutput(boundTabId, 80)
+    const recentOutput = readTerminalOutput(boundTabId, COPILOT_TERMINAL_MENTION_MAX_LINES)
     // Don't spin forever if the request hangs (unreachable endpoint, model
     // never responds): time out and surface a retryable error.
     const timeout = setTimeout(() => fail(new Error(t('chart.genTimeout'))), CHART_GEN_TIMEOUT_MS)

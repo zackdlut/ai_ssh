@@ -26,7 +26,14 @@ export function toggleNlForTab(tabId: string): void {
   nlToggles.get(tabId)?.()
 }
 
-export function readTerminalOutput(tabId: string | null | undefined, maxLines = 40): string {
+export const COPILOT_CONTEXT_MAX_LINES = 100
+/** Sliding window when the user mentions @terminal in Copilot chat. */
+export const COPILOT_TERMINAL_MENTION_MAX_LINES = 200
+
+export function readTerminalOutput(
+  tabId: string | null | undefined,
+  maxLines = COPILOT_CONTEXT_MAX_LINES
+): string {
   if (!tabId) return ''
   const reader = readers.get(tabId)
   return reader ? reader(maxLines) : ''
