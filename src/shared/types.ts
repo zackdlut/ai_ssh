@@ -365,3 +365,38 @@ export interface AppInfo {
   license: string
   electron: string
 }
+
+/**
+ * An installed Agent Skill: a local folder containing a `SKILL.md` (YAML
+ * frontmatter with `name`/`description` + a markdown body of instructions).
+ * Only the name+description are shown to the copilot each turn; the full body
+ * is loaded on demand via the `read_skill` tool (progressive disclosure).
+ */
+export interface InstalledSkill {
+  id: string
+  name: string
+  description: string
+  /** When false, the skill is hidden from the copilot but kept on disk. */
+  enabled: boolean
+  /** Absolute path to the copied skill directory under userData/skills/<id>. */
+  dir: string
+  /** Original source folder the skill was installed from. */
+  sourcePath: string
+  /** Timestamp (ms) when the skill was installed. */
+  installedAt: number
+}
+
+/** Result of installing a skill (folder picker may be cancelled). */
+export interface SkillInstallResult {
+  skill?: InstalledSkill
+  /** The full installed-skill list after a successful install. */
+  skills?: InstalledSkill[]
+  cancelled?: boolean
+  error?: string
+}
+
+/** Result of reading a skill's full SKILL.md body. */
+export interface SkillReadResult {
+  content?: string
+  error?: string
+}

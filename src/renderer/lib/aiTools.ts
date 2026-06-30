@@ -10,6 +10,7 @@ import { useBookmarksStore } from '../store/bookmarksStore'
 import { useThemeStore } from '../store/themeStore'
 import { useLocaleStore } from '../store/localeStore'
 import { useTerminalAppearanceStore } from '../store/terminalAppearanceStore'
+import { useSkillsStore } from '../store/skillsStore'
 import { connect, connectFromConfig } from './connect'
 import { readFullTerminalOutput } from './terminalRegistry'
 import { normalizeAISettings } from '../../shared/aiSettings'
@@ -491,6 +492,14 @@ async function updateAppSettings(args: Record<string, unknown>): Promise<ToolRes
   return { ok: true, result: JSON.stringify(settings) }
 }
 
+async function readSkill(args: Record<string, unknown>): Promise<ToolResult> {
+  const name = str(args.name)
+  if (!name) return { ok: false, error: 'name is required.' }
+  const res = await window.api.skills.read(name)
+  if (res.error) return { ok: false, error: res.error }
+  return { ok: true, result: res.content || '(empty skill).' }
+}
+
 /** Parse the raw JSON arguments string a model emits for a tool call. */
 export function parseToolArgs(raw: string): Record<string, unknown> {
   if (!raw || !raw.trim()) return {}
@@ -534,6 +543,8 @@ export async function executeToolCall(
       return getAppSettings()
     case 'update_app_settings':
       return updateAppSettings(args)
+    case 'read_skill':
+      return readSkill(args)
     default:
       return { ok: false, error: `Unknown tool "${name}".` }
   }
@@ -608,4 +619,21 @@ Bookmark folders:
 ${foldersText}
 
 ${settingsLine}`
+}
+
+/**
+ * Build the per-turn skill catalog: only each enabled skill's name and
+ * description (progressive disclosure). The copilot loads a skill's full
+ * instructions on demand with the read_skill tool. Returns undefined when no
+ * skills are enabled, so no empty section is injected.
+ */
+export function buildSkillsContextMessage(): string | undefined {
+  const skills = useSkillsStore.getState().skills.filter((s) => s.enabled)
+  if (skills.length === 0) return undefined
+  const list = skills
+    .map((s) => `- ${s.name}: ${s.description || '(no description)'}`)
+    .join('\n')
+  return `Available skills (reusable instruction packs). When one clearly matches the user's task, call read_skill with its EXACT name to load the full instructions, then follow them. Do NOT invent skill names.
+
+${list}`
 }

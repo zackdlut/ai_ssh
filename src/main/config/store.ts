@@ -11,7 +11,8 @@ import type {
   AppTheme,
   BookmarkFolder,
   ConnectionConfig,
-  CopilotChatState
+  CopilotChatState,
+  InstalledSkill
 } from '../../shared/types'
 
 interface StoreSchema {
@@ -22,6 +23,7 @@ interface StoreSchema {
   connections: ConnectionConfig[]
   folders: BookmarkFolder[]
   copilotChats: CopilotChatState | null
+  skills: InstalledSkill[]
 }
 
 let _store: Store<StoreSchema> | null = null
@@ -48,7 +50,8 @@ function store(): Store<StoreSchema> {
         terminalAppearance: { ...DEFAULT_TERMINAL_APPEARANCE },
         connections: [],
         folders: [],
-        copilotChats: null
+        copilotChats: null,
+        skills: []
       }
     })
   }
@@ -161,6 +164,15 @@ export function getCopilotChats(): CopilotChatState | null {
 export function setCopilotChats(state: CopilotChatState | null): CopilotChatState | null {
   store().set('copilotChats', state)
   return getCopilotChats()
+}
+
+export function getSkills(): InstalledSkill[] {
+  return store().get('skills')
+}
+
+export function setSkills(list: InstalledSkill[]): InstalledSkill[] {
+  store().set('skills', list)
+  return getSkills()
 }
 
 export function deleteFolder(id: string): {

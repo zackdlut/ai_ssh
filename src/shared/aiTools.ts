@@ -23,7 +23,8 @@ export const READONLY_TOOLS = new Set([
   'list_ssh_configs',
   'list_open_tabs',
   'list_folders',
-  'get_app_settings'
+  'get_app_settings',
+  'read_skill'
 ])
 
 /**
@@ -277,6 +278,25 @@ export const AI_TOOLS: AIToolDefinition[] = [
           command: { type: 'string', description: 'The shell command to execute.' }
         },
         required: ['tab_id', 'command'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_skill',
+      description:
+        "Load the full step-by-step instructions of an installed skill by its exact name. The per-turn snapshot lists each available skill as a name plus a short description. When a skill clearly matches the user's task, call this FIRST to read its instructions, then follow them. Pass the exact name from the available-skills list; never invent a skill name.",
+      parameters: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'The exact skill name from the available-skills list.'
+          }
+        },
+        required: ['name'],
         additionalProperties: false
       }
     }

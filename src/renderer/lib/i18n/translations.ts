@@ -20,7 +20,7 @@ const zh = {
 
   'tabbar.connections': '连接',
   'tabbar.toggleSidebar': '切换连接侧栏',
-  'tabbar.nlMode': ' · 自然语言模式',
+  'tabbar.nlMode': ' · 智能模式',
   'tabbar.doubleClickReconnect': '重连',
   'tabbar.doubleClickClone': '克隆会话',
   'tabbar.tabTitle': '{user}@{host}{nlMode}（双击：{action}）',
@@ -33,6 +33,7 @@ const zh = {
   'tabbar.themes': '主题',
   'tabbar.terminalAppearance': '终端外观',
   'tabbar.aiSettings': 'AI 设置',
+  'tabbar.skills': '技能',
   'tabbar.language': '语言',
   'tabbar.about': '关于',
   'tabbar.aiCopilot': 'AI Copilot',
@@ -85,6 +86,15 @@ const zh = {
   'settings.ai.nlModel': '终端 AI 模式模型',
   'settings.ai.hint':
     '兼容 OpenAI、DeepSeek、本地 vLLM/Ollama 等 OpenAI 兼容端点。密钥仅保存在本地，由主进程调用。每个配置档可使用不同模型。Copilot 模型档位可在侧栏下拉切换；终端 AI 模式模型档位在此配置（默认：Fast）。',
+
+  'settings.skills.title': '技能',
+  'settings.skills.hint':
+    '技能是可复用的指令包：一个包含 SKILL.md（含 name/description 与正文步骤）的本地文件夹。安装后，Copilot 每轮只看到已启用技能的名称与描述；当某个技能与任务相关时，它会按需调用 read_skill 读取完整步骤并据此执行。',
+  'settings.skills.empty': '还没有安装任何技能。点「安装技能」选择一个包含 SKILL.md 的文件夹。',
+  'settings.skills.install': '安装技能…',
+  'settings.skills.installing': '安装中…',
+  'settings.skills.remove': '移除',
+  'settings.skills.noDescription': '（无描述）',
 
   'settings.terminal.title': '终端外观',
   'settings.terminal.textSection': '文字',
@@ -263,7 +273,7 @@ const zh = {
   'tool.settings.apiKey': 'API Key',
   'tool.settings.hasApiKey': '已配置 API Key',
   'tool.settings.copilotModelProfile': 'Copilot 模型档位',
-  'tool.settings.nlModelProfile': '终端 NL 模型档位',
+  'tool.settings.nlModelProfile': '终端 AI 模型档位',
   'tool.settings.models': '模型',
   'tool.settings.contextLengths': '上下文长度',
   'tool.settings.colorScheme': '配色方案',
@@ -279,7 +289,7 @@ const zh = {
   'tool.settings.keyMissing': '未配置',
   'tool.settings.activeModels': '生效模型',
   'tool.settings.tagCopilot': 'Copilot',
-  'tool.settings.tagNl': '终端 NL',
+  'tool.settings.tagNl': '终端 AI',
   'tool.auth.password': '密码',
   'tool.auth.key': '密钥',
   'tool.list.empty': '（无）',
@@ -366,8 +376,8 @@ const zh = {
 
   'terminal.askCopilot': '询问 Copilot',
   'terminal.nl.prompt': 'AI 模式',
-  'terminal.nl.entered': '自然语言模式已开启（输入 exit 或 F12 退出）',
-  'terminal.nl.exited': '已退出自然语言模式',
+  'terminal.nl.entered': '智能模式已开启（输入 exit 或 F12 退出）',
+  'terminal.nl.exited': '已退出智能模式',
   'terminal.nl.parsing': '正在解析…',
   'terminal.nl.parseFailed': '解析失败: {error}',
   'terminal.nl.noCommand': '未解析出可执行命令，请换种说法',
@@ -434,7 +444,7 @@ const en: Record<keyof typeof zh, string> = {
 
   'tabbar.connections': 'Connections',
   'tabbar.toggleSidebar': 'Toggle connection sidebar',
-  'tabbar.nlMode': ' · Natural language mode',
+  'tabbar.nlMode': ' · Smart mode',
   'tabbar.doubleClickReconnect': 'reconnect',
   'tabbar.doubleClickClone': 'clone session',
   'tabbar.tabTitle': '{user}@{host}{nlMode} (double-click: {action})',
@@ -447,6 +457,7 @@ const en: Record<keyof typeof zh, string> = {
   'tabbar.themes': 'Themes',
   'tabbar.terminalAppearance': 'Terminal Appearance',
   'tabbar.aiSettings': 'AI Settings',
+  'tabbar.skills': 'Skills',
   'tabbar.language': 'Language',
   'tabbar.about': 'About',
   'tabbar.aiCopilot': 'AI Copilot',
@@ -500,6 +511,15 @@ const en: Record<keyof typeof zh, string> = {
   'settings.ai.nlModel': 'Terminal AI Mode Model',
   'settings.ai.hint':
     'Works with OpenAI, DeepSeek, local vLLM/Ollama and other OpenAI-compatible endpoints. The key is stored locally and only used by the main process. Each profile can use a different model. Switch the Copilot model tier from the sidebar dropdown; configure the terminal AI mode model tier here (default: Fast).',
+
+  'settings.skills.title': 'Skills',
+  'settings.skills.hint':
+    'Skills are reusable instruction packs: a local folder with a SKILL.md (name/description frontmatter plus a body of steps). Once installed, the Copilot sees only each enabled skill\u2019s name and description every turn; when a skill matches the task it loads the full steps on demand via read_skill and follows them.',
+  'settings.skills.empty': 'No skills installed yet. Click \u201cInstall skill\u201d and pick a folder that contains a SKILL.md.',
+  'settings.skills.install': 'Install skill…',
+  'settings.skills.installing': 'Installing…',
+  'settings.skills.remove': 'Remove',
+  'settings.skills.noDescription': '(no description)',
 
   'settings.terminal.title': 'Terminal Appearance',
   'settings.terminal.textSection': 'Text',
@@ -681,7 +701,7 @@ const en: Record<keyof typeof zh, string> = {
   'tool.settings.apiKey': 'API key',
   'tool.settings.hasApiKey': 'API key configured',
   'tool.settings.copilotModelProfile': 'Copilot model profile',
-  'tool.settings.nlModelProfile': 'Terminal NL model profile',
+  'tool.settings.nlModelProfile': 'Terminal AI model profile',
   'tool.settings.models': 'Models',
   'tool.settings.contextLengths': 'Context lengths',
   'tool.settings.colorScheme': 'Color scheme',
@@ -697,7 +717,7 @@ const en: Record<keyof typeof zh, string> = {
   'tool.settings.keyMissing': 'Not set',
   'tool.settings.activeModels': 'Active models',
   'tool.settings.tagCopilot': 'Copilot',
-  'tool.settings.tagNl': 'Terminal NL',
+  'tool.settings.tagNl': 'Terminal AI',
   'tool.auth.password': 'Password',
   'tool.auth.key': 'Key',
   'tool.list.empty': '(none)',
@@ -784,8 +804,8 @@ const en: Record<keyof typeof zh, string> = {
 
   'terminal.askCopilot': 'Ask Copilot',
   'terminal.nl.prompt': 'AI Mode',
-  'terminal.nl.entered': 'Natural language mode enabled (type exit or F12 to leave)',
-  'terminal.nl.exited': 'Left natural language mode',
+  'terminal.nl.entered': 'Smart mode enabled (type exit or F12 to leave)',
+  'terminal.nl.exited': 'Left smart mode',
   'terminal.nl.parsing': 'Parsing…',
   'terminal.nl.parseFailed': 'Parse failed: {error}',
   'terminal.nl.noCommand': 'No runnable command parsed — try rephrasing',

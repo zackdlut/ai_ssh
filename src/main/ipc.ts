@@ -5,6 +5,7 @@ import { SshManager } from './ssh/manager'
 import { deleteLocal, listLocal, localHome, renameLocal } from './local/fs'
 import { AIProvider } from './ai/provider'
 import * as config from './config/store'
+import * as skills from './skills/store'
 import type {
   AIChatRequest,
   AIChartSpecRequest,
@@ -22,6 +23,8 @@ import type {
   AITranslateRequest,
   AITranslateResult,
   AISummarizeRequest,
+  SkillInstallResult,
+  SkillReadResult,
   BookmarkFolder,
   ConnectionConfig,
   ConnectOptions,
@@ -396,6 +399,34 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
   ipcMain.handle('config:setCopilotChats', (_e, state: CopilotChatState | null) =>
     config.setCopilotChats(state)
   )
+
+  // --- Skills ---
+  ipcMain.handle('skills:list', () => skills.listSkills())
+  ipcMain.handle('skills:install', async (): Promise<SkillInstallResult> => {
+    const win = getWindow()
+    const dialogOpts = { properties: ['openDirectory' as const] }
+    const result = win
+      ? await dialog.showOpenDialog(win, dialogOpts)
+      : await dialog.showOpenDialog(dialogOpts)
+    if (result.canceled || result.filePaths.length === 0) return { cancelled: true }
+    try {
+      const skill = await skills.installSkill(result.filePaths[0])
+      return { skill, skills: skills.listSkills() }
+    } catch (err) {
+      return { error: errMessage(err) }
+    }
+  })
+  ipcMain.handle('skills:remove', (_e, id: string) => skills.removeSkill(id))
+  ipcMain.handle('skills:setEnabled', (_e, id: string, enabled: boolean) =>
+    skills.setSkillEnabled(id, enabled)
+  )
+  ipcMain.handle('skills:read', async (_e, idOrName: string): Promise<SkillReadResult> => {
+    try {
+      return { content: await skills.readSkillBody(idOrName) }
+    } catch (err) {
+      return { error: errMessage(err) }
+    }
+  })
 
   return ssh
 }

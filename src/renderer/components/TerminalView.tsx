@@ -23,6 +23,7 @@ import type { AppLocale } from '../../shared/types'
 import type { CommandRun } from '../../shared/types'
 import { SHORTCUT_ASK_COPILOT, SHORTCUT_COPY } from '../lib/shortcuts'
 import ContextMenuItem from './ContextMenuItem'
+import TerminalLineGutter from './TerminalLineGutter'
 
 interface Props {
   tab: TerminalTab
@@ -206,12 +207,15 @@ function streamSummarize(
 
 export default function TerminalView({ tab, active }: Props): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
+  const layoutRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const pasteIntoTerminalRef = useRef<((clip: string) => void) | null>(null)
   const activeRef = useRef(active)
   const nlRef = useRef<NlState>({ mode: 'normal', buffer: '', cursor: 0, busy: false })
   const [menu, setMenu] = useState<MenuState | null>(null)
+  const [showLineNumbers, setShowLineNumbers] = useState(false)
+  const [termInstance, setTermInstance] = useState<Terminal | null>(null)
   const appTheme = useThemeStore((s) => s.theme)
   const colorScheme = useTerminalAppearanceStore((s) => s.colorScheme)
   const fontFamily = useTerminalAppearanceStore((s) => s.fontFamily)
@@ -299,6 +303,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       el.replaceChildren()
       term.open(el)
       termRef.current = term
+      setTermInstance(term)
       fitRef.current = fit
       fitTerminal()
       scheduleFit()
@@ -629,6 +634,12 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
         return false
       }
 
+      if (e.key === 'F11') {
+        e.preventDefault()
+        setShowLineNumbers((v) => !v)
+        return false
+      }
+
       if (e.isComposing || e.keyCode === 229) return true
 
       const mod = e.ctrlKey || e.metaKey
@@ -782,6 +793,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       }
       term.dispose()
       termRef.current = null
+      setTermInstance(null)
       fitRef.current = null
       pasteIntoTerminalRef.current = null
     }
@@ -795,6 +807,10 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       termRef.current.focus()
     }
   }, [active])
+
+  useEffect(() => {
+    if (activeRef.current) scheduleFit()
+  }, [showLineNumbers])
 
   useEffect(() => {
     const term = termRef.current
@@ -860,7 +876,20 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
         style={followAppTheme ? undefined : { background: containerBg }}
         onContextMenu={onContextMenu}
       >
-        <div ref={containerRef} className="terminal-view-surface" />
+        <div
+          ref={layoutRef}
+          className={`terminal-view-layout${showLineNumbers ? ' terminal-view-layout--line-numbers' : ''}`}
+        >
+          <TerminalLineGutter
+            term={termInstance}
+            visible={showLineNumbers}
+            fontFamily={fontFamily}
+            fontSize={fontSize}
+            lineHeight={safeLineHeight}
+            layoutRef={layoutRef}
+          />
+          <div ref={containerRef} className="terminal-view-surface" />
+        </div>
       </div>
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>

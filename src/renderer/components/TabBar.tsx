@@ -10,7 +10,7 @@ import UiIcon from './UiIcon'
 import DropdownMenuItem from './DropdownMenuItem'
 import ContextMenuItem from './ContextMenuItem'
 
-export type SettingsMenuItem = 'ai' | 'themes' | 'terminal' | 'language' | 'about'
+export type SettingsMenuItem = 'ai' | 'skills' | 'themes' | 'terminal' | 'language' | 'about'
 
 interface TabContextMenu {
   x: number
@@ -259,6 +259,15 @@ export default function TabBar({
                 }}
               >
                 {t('tabbar.aiSettings')}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                icon="copilot"
+                onClick={() => {
+                  setSettingsOpen(false)
+                  onSettingsSelect('skills')
+                }}
+              >
+                {t('tabbar.skills')}
               </DropdownMenuItem>
               <div className="toolbar-dropdown-divider" role="separator" />
               <DropdownMenuItem

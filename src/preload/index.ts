@@ -21,6 +21,9 @@ import type {
   ConnectOptions,
   CopilotChatState,
   ConnectResult,
+  InstalledSkill,
+  SkillInstallResult,
+  SkillReadResult,
   TerminalAppearanceSettings,
   SftpListResult,
   SftpOpResult,
@@ -155,6 +158,15 @@ const api = {
       ipcRenderer.invoke('config:getCopilotChats'),
     setCopilotChats: (state: CopilotChatState | null): Promise<CopilotChatState | null> =>
       ipcRenderer.invoke('config:setCopilotChats', state)
+  },
+  skills: {
+    list: (): Promise<InstalledSkill[]> => ipcRenderer.invoke('skills:list'),
+    install: (): Promise<SkillInstallResult> => ipcRenderer.invoke('skills:install'),
+    remove: (id: string): Promise<InstalledSkill[]> => ipcRenderer.invoke('skills:remove', id),
+    setEnabled: (id: string, enabled: boolean): Promise<InstalledSkill[]> =>
+      ipcRenderer.invoke('skills:setEnabled', id, enabled),
+    read: (idOrName: string): Promise<SkillReadResult> =>
+      ipcRenderer.invoke('skills:read', idOrName)
   }
 }
 

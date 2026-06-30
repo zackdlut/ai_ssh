@@ -8,7 +8,12 @@ import { buildContextMessage } from '../../shared/terminalContext'
 import { translate } from './i18n/translations'
 import { useLocaleStore } from '../store/localeStore'
 import { isDisplayTool, isReadonlyTool, requiresToolApproval } from '../../shared/aiTools'
-import { buildToolContextMessage, executeToolCall, parseToolArgs } from './aiTools'
+import {
+  buildSkillsContextMessage,
+  buildToolContextMessage,
+  executeToolCall,
+  parseToolArgs
+} from './aiTools'
 import {
   getPendingToolCalls,
   hasPendingToolCalls,
@@ -78,9 +83,11 @@ function findMessage(tabId: string, messageId: string): ChatMessage | undefined 
 function startTurn(loop: LoopState, epilogue = false): void {
   const ai = useAIStore.getState()
   const snapshot = buildToolContextMessage()
-  const messages: ChatMessageDTO[] = snapshot
-    ? [{ role: 'system', content: snapshot }, ...loop.conversation]
-    : [...loop.conversation]
+  const skillsCatalog = buildSkillsContextMessage()
+  const prefix: ChatMessageDTO[] = []
+  if (skillsCatalog) prefix.push({ role: 'system', content: skillsCatalog })
+  if (snapshot) prefix.push({ role: 'system', content: snapshot })
+  const messages: ChatMessageDTO[] = [...prefix, ...loop.conversation]
 
   const assistantId = crypto.randomUUID()
   const requestId = crypto.randomUUID()
