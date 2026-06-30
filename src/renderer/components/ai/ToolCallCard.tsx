@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { approveToolCall, rejectToolCall } from '../../lib/aiService'
+import { isDangerous } from '../../lib/commands'
 import { isDangerousTool } from '../../../shared/aiTools'
 import { useT, type TranslationKey } from '../../lib/i18n'
 import { useAIStore } from '../../store/aiStore'
@@ -499,7 +500,9 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
   const t = useT()
   const updateToolCall = useAIStore((s) => s.updateToolCall)
   const args = parseArgs(call.args)
-  const dangerous = isDangerousTool(call.name)
+  const command = call.name === 'exec_command' ? String(args.command ?? '') : null
+  const dangerous =
+    call.name === 'exec_command' ? isDangerous(command ?? '') : isDangerousTool(call.name)
   const pending = call.status === 'pending'
   const category = TOOL_CATEGORY[call.name] ?? 'read'
   const actionLabel = t(`tool.action.${call.name}` as TranslationKey)
@@ -520,7 +523,6 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
             ? t('tool.error')
             : t('tool.pending')
 
-  const command = call.name === 'exec_command' ? String(args.command ?? '') : null
   const isListTool =
     call.name === 'list_ssh_configs' ||
     call.name === 'list_open_tabs' ||

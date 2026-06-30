@@ -1,3 +1,5 @@
+import { isDangerous } from './dangerousCommands'
+
 /**
  * Function-calling tool definitions shared between the main process (passed to
  * the OpenAI-compatible Chat Completions API) and the renderer (the dispatcher
@@ -50,6 +52,20 @@ export function isDisplayTool(name: string): boolean {
 
 export function isDangerousTool(name: string): boolean {
   return DANGEROUS_TOOLS.has(name)
+}
+
+/** Whether an action tool call must wait for explicit user approval before running. */
+export function requiresToolApproval(name: string, argsJson = '{}'): boolean {
+  if (isReadonlyTool(name)) return false
+  if (name === 'exec_command') {
+    try {
+      const args = JSON.parse(argsJson) as { command?: unknown }
+      return isDangerous(String(args.command ?? ''))
+    } catch {
+      return true
+    }
+  }
+  return true
 }
 
 export const AI_TOOLS: AIToolDefinition[] = [

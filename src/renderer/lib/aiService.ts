@@ -7,7 +7,7 @@ import { selectMessagesToCompress, buildChatPayload, type BudgetMessage } from '
 import { buildContextMessage } from '../../shared/terminalContext'
 import { translate } from './i18n/translations'
 import { useLocaleStore } from '../store/localeStore'
-import { isDisplayTool, isReadonlyTool } from '../../shared/aiTools'
+import { isDisplayTool, isReadonlyTool, requiresToolApproval } from '../../shared/aiTools'
 import { buildToolContextMessage, executeToolCall, parseToolArgs } from './aiTools'
 import {
   getPendingToolCalls,
@@ -284,13 +284,13 @@ export function initAIService(): void {
       id: tc.id,
       name: tc.name,
       args: tc.arguments,
-      status: isReadonlyTool(tc.name) ? 'running' : 'pending'
+      status: requiresToolApproval(tc.name, tc.arguments) ? 'pending' : 'running'
     }))
     ai.setToolCalls(tabId, messageId, views)
     loops.set(messageId, loop)
 
     for (const tc of toolCalls) {
-      if (isReadonlyTool(tc.name)) void runToolCall(tabId, messageId, tc.id)
+      if (!requiresToolApproval(tc.name, tc.arguments)) void runToolCall(tabId, messageId, tc.id)
     }
   })
   window.api.ai.onError(({ requestId, error }) => {
