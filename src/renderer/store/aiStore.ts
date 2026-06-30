@@ -233,14 +233,13 @@ export const useAIStore = create<AIState>((set, get) => ({
   loadChatState: async () => {
     const saved = await window.api.config.getCopilotChats()
     if (!saved || saved.tabs.length === 0) return
-    const { chatTabs, activeChatTabId } = fromPersistedState(saved)
-    set({ chatTabs, activeChatTabId })
-    const needsPersist =
-      saved.tabs.some((t) => t.archived === undefined) ||
-      openChatTabs(
-        saved.tabs.map((t) => ({ ...t, archived: t.archived ?? false, messages: t.messages }))
-      ).length > MAX_CHAT_TABS
-    if (needsPersist) schedulePersist(get)
+    const { chatTabs } = fromPersistedState(saved)
+    const archivedTabs = chatTabs.map((tab) =>
+      isOpenTab(tab) ? { ...tab, archived: true } : tab
+    )
+    const newTab = createEmptyChatTab()
+    set({ chatTabs: [...archivedTabs, newTab], activeChatTabId: newTab.id })
+    schedulePersist(get)
   },
   persistChatState: () => schedulePersist(get),
   addChatTab: (title) => {
