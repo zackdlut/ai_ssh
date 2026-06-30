@@ -7,7 +7,7 @@ import { selectMessagesToCompress, buildChatPayload, type BudgetMessage } from '
 import { buildContextMessage } from '../../shared/terminalContext'
 import { translate } from './i18n/translations'
 import { useLocaleStore } from '../store/localeStore'
-import { isReadonlyTool } from '../../shared/aiTools'
+import { isDisplayTool, isReadonlyTool } from '../../shared/aiTools'
 import { buildToolContextMessage, executeToolCall, parseToolArgs } from './aiTools'
 import {
   getPendingToolCalls,
@@ -32,14 +32,27 @@ interface LoopState {
   conversation: ChatMessageDTO[]
   /** True once we've auto-nudged a degenerate (empty, no-tool-call) turn. */
   nudged?: boolean
-  /** True once any tool call has been executed within this loop. */
-  executedAnyTool?: boolean
+  /**
+   * True once a mutating (non read-only) tool has been executed within this
+   * loop. Read-only lookups (the list_ and get_ tools) do NOT count: an empty
+   * turn that follows only read-only tools usually means the model planned in
+   * its reasoning but forgot to emit the action, so it should still be nudged.
+   */
+  executedActionTool?: boolean
 }
 
 interface PendingRequest {
   tabId: string
   messageId: string
   loop: LoopState
+  /**
+   * An "epilogue" turn: the follow-up LLM turn that runs right after a turn
+   * which executed ONLY display tools (the list_ tools / get_app_settings). The
+   * rich card already answers the user, so this turn is rendered invisibly: it
+   * is materialized only if the model decides to ACT (emits another tool call);
+   * a text-only epilogue (a redundant restatement of the card) is dropped.
+   */
+  epilogue?: boolean
 }
 
 /** Maps an in-flight requestId to the assistant message being streamed. */
@@ -53,8 +66,16 @@ function findMessage(tabId: string, messageId: string): ChatMessage | undefined 
   return tab?.messages.find((m) => m.id === messageId)
 }
 
-/** Begin one LLM turn for the loop: a fresh assistant message + chat request. */
-function startTurn(loop: LoopState): void {
+/**
+ * Begin one LLM turn for the loop: a fresh assistant message + chat request.
+ *
+ * When `epilogue` is true the turn follows a display-only tool turn (its card is
+ * already the answer). We DON'T create a visible assistant message up front and
+ * we drop its streamed chunks: the turn is only materialized in `onDone` if it
+ * actually emits a tool call. This prevents the model from restating the card as
+ * prose, without any visible "text flashes in then disappears" flicker.
+ */
+function startTurn(loop: LoopState, epilogue = false): void {
   const ai = useAIStore.getState()
   const snapshot = buildToolContextMessage()
   const messages: ChatMessageDTO[] = snapshot
@@ -63,15 +84,17 @@ function startTurn(loop: LoopState): void {
 
   const assistantId = crypto.randomUUID()
   const requestId = crypto.randomUUID()
-  ai.addMessage(loop.tabId, {
-    id: assistantId,
-    role: 'assistant',
-    content: '',
-    streaming: true,
-    boundSessionId: loop.boundSessionId,
-    boundTabId: loop.boundTabId
-  })
-  pending.set(requestId, { tabId: loop.tabId, messageId: assistantId, loop })
+  if (!epilogue) {
+    ai.addMessage(loop.tabId, {
+      id: assistantId,
+      role: 'assistant',
+      content: '',
+      streaming: true,
+      boundSessionId: loop.boundSessionId,
+      boundTabId: loop.boundTabId
+    })
+  }
+  pending.set(requestId, { tabId: loop.tabId, messageId: assistantId, loop, epilogue })
   ai.setBusy(true, requestId, loop.tabId)
   window.api.ai.chat({ requestId, messages, context: loop.context, enableTools: true })
 }
@@ -81,6 +104,10 @@ async function runToolCall(tabId: string, messageId: string, callId: string): Pr
   const ai = useAIStore.getState()
   const call = findMessage(tabId, messageId)?.toolCalls?.find((c) => c.id === callId)
   if (!call) return
+  if (!isReadonlyTool(call.name)) {
+    const loop = loops.get(messageId)
+    if (loop) loop.executedActionTool = true
+  }
   ai.updateToolCall(tabId, messageId, callId, { status: 'running' })
   try {
     const res = await executeToolCall(call.name, parseToolArgs(call.args))
@@ -159,7 +186,12 @@ function maybeContinueLoop(tabId: string, messageId: string): void {
           : (c.result ?? 'Done.')
     loop.conversation.push({ role: 'tool', tool_call_id: c.id, content })
   }
-  startTurn(loop)
+
+  // If this turn ran ONLY display tools and they all succeeded, the rich cards
+  // already answer the user. Run the follow-up as an invisible "epilogue" turn
+  // so a text-only restatement of those cards is dropped instead of shown.
+  const displayOnly = calls.every((c) => isDisplayTool(c.name) && c.status === 'done')
+  startTurn(loop, displayOnly)
 }
 
 /**
@@ -172,11 +204,17 @@ export function initAIService(): void {
 
   window.api.ai.onChunk(({ requestId, delta }) => {
     const entry = pending.get(requestId)
-    if (entry) useAIStore.getState().appendToMessage(entry.tabId, entry.messageId, delta)
+    // Epilogue turns have no visible message yet; their text is dropped unless
+    // the turn turns out to emit a tool call (handled in onDone).
+    if (entry && !entry.epilogue) {
+      useAIStore.getState().appendToMessage(entry.tabId, entry.messageId, delta)
+    }
   })
   window.api.ai.onReasoning(({ requestId, delta }) => {
     const entry = pending.get(requestId)
-    if (entry) useAIStore.getState().appendReasoning(entry.tabId, entry.messageId, delta)
+    if (entry && !entry.epilogue) {
+      useAIStore.getState().appendReasoning(entry.tabId, entry.messageId, delta)
+    }
   })
   window.api.ai.onDone(({ requestId, content, toolCalls }) => {
     const entry = pending.get(requestId)
@@ -185,24 +223,32 @@ export function initAIService(): void {
       useAIStore.getState().setBusy(false)
       return
     }
-    const { tabId, messageId, loop } = entry
+    const { tabId, messageId, loop, epilogue } = entry
     const ai = useAIStore.getState()
-    ai.finishMessage(tabId, messageId)
 
     if (!toolCalls || toolCalls.length === 0) {
+      // An epilogue turn with no tool call is just a redundant restatement of
+      // the card(s) already shown — drop it entirely (nothing was rendered).
+      if (epilogue) {
+        ai.setBusy(false)
+        return
+      }
+      ai.finishMessage(tabId, messageId)
       if (content.trim() === '') {
-        // Degenerate FIRST turn: the model produced neither a visible answer nor
-        // a tool call (common with reasoning models that "plan" only in their
-        // thoughts). Nudge it once to actually act or answer. But an empty turn
-        // AFTER tools already ran is a legitimate "nothing more to say" (e.g.
-        // right after a list_* card) — just drop the empty bubble and finish.
-        if (!loop.nudged && !loop.executedAnyTool) {
+        // Degenerate turn: the model produced neither a visible answer nor a
+        // tool call (common with reasoning models that "plan" only in their
+        // thoughts). Nudge it once to actually act or answer. An empty turn
+        // AFTER a mutating action already ran is a legitimate "nothing more to
+        // say" — but an empty turn after only read-only lookups (list_*/get_*)
+        // usually means the model forgot to emit the action it just planned,
+        // so we still nudge in that case.
+        if (!loop.nudged && !loop.executedActionTool) {
           loop.nudged = true
           ai.removeMessage(tabId, messageId)
           loop.conversation.push({
             role: 'user',
             content:
-              'You produced no visible answer and called no tool. If you intended to perform an action (open/close a tab, create/update a config, or run a command), call the appropriate tool NOW in this response — do not only describe it in your reasoning. Otherwise, answer the user directly.'
+              'You produced no visible answer and called no tool. If you intended to perform an action (open/close a tab, create or update a saved config, create a folder, move a connection into a folder, run a command, or change app settings), call the appropriate tool NOW in this response — do not only describe it in your reasoning, and do not wait for me to say "continue". Use the exact ids from the per-turn snapshot. Otherwise, answer the user directly.'
           })
           startTurn(loop)
           return
@@ -213,7 +259,21 @@ export function initAIService(): void {
       return
     }
 
-    loop.executedAnyTool = true
+    // The turn emitted tool calls. An epilogue turn was rendered invisibly, so
+    // materialize its assistant message now (the model chose to act, e.g. a
+    // multi-step "show then update" flow); a normal turn was streamed live, so
+    // just finalize it.
+    if (epilogue) {
+      ai.addMessage(tabId, {
+        id: messageId,
+        role: 'assistant',
+        content,
+        boundSessionId: loop.boundSessionId,
+        boundTabId: loop.boundTabId
+      })
+    } else {
+      ai.finishMessage(tabId, messageId)
+    }
 
     // Record the assistant turn (with tool calls) into the running conversation,
     // attach the tool-call views for rendering, and execute them. Read-only
@@ -238,8 +298,18 @@ export function initAIService(): void {
     pending.delete(requestId)
     if (entry) {
       const ai = useAIStore.getState()
-      ai.appendToMessage(entry.tabId, entry.messageId, `\n\n[Error] ${error}`)
-      ai.finishMessage(entry.tabId, entry.messageId)
+      if (entry.epilogue) {
+        // No visible message exists for an epilogue turn yet — create one so the
+        // error is surfaced to the user instead of being silently swallowed.
+        ai.addMessage(entry.tabId, {
+          id: entry.messageId,
+          role: 'assistant',
+          content: `[Error] ${error}`
+        })
+      } else {
+        ai.appendToMessage(entry.tabId, entry.messageId, `\n\n[Error] ${error}`)
+        ai.finishMessage(entry.tabId, entry.messageId)
+      }
       loops.delete(entry.messageId)
     }
     useAIStore.getState().setBusy(false)

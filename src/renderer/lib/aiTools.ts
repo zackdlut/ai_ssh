@@ -190,6 +190,149 @@ async function updateSshConfig(args: Record<string, unknown>): Promise<ToolResul
   return { ok: true, result: JSON.stringify(sanitizeConfig(merged)) }
 }
 
+/** Human-readable list of available folders, used in error messages so the model can retry. */
+function folderChoices(): string {
+  const folders = useBookmarksStore.getState().folders
+  if (folders.length === 0) return '(no folders exist yet)'
+  return folders.map((f) => `${f.name} (folder_id=${f.id})`).join(', ')
+}
+
+const eqName = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase()
+
+/**
+ * Resolve a destination folder from an id and/or name. Returns the folder id
+ * (or null for the top level). When neither id nor name is given, defaults to
+ * the top level. Tolerates the model passing a name in the id field.
+ */
+function resolveFolder(
+  folderIdArg: string | undefined,
+  folderNameArg: string | undefined
+): { ok: true; folderId: string | null } | { ok: false; error: string } {
+  const folders = useBookmarksStore.getState().folders
+  if (folderIdArg) {
+    const byId = folders.find((f) => f.id === folderIdArg)
+    if (byId) return { ok: true, folderId: byId.id }
+    // The model sometimes passes a name (or an invented id) in folder_id.
+    const byName = folders.filter((f) => eqName(f.name, folderIdArg))
+    if (byName.length === 1) return { ok: true, folderId: byName[0].id }
+    return {
+      ok: false,
+      error: `No folder with id "${folderIdArg}". Available folders: ${folderChoices()}. Pass an exact folder_id, or folder_name, or call create_folder first.`
+    }
+  }
+  if (folderNameArg) {
+    const byName = folders.filter((f) => eqName(f.name, folderNameArg))
+    if (byName.length === 1) return { ok: true, folderId: byName[0].id }
+    if (byName.length === 0) {
+      return {
+        ok: false,
+        error: `No folder named "${folderNameArg}". Available folders: ${folderChoices()}. Call create_folder to create it first.`
+      }
+    }
+    return {
+      ok: false,
+      error: `Multiple folders named "${folderNameArg}". Use folder_id instead: ${byName
+        .map((f) => f.id)
+        .join(', ')}.`
+    }
+  }
+  return { ok: true, folderId: null }
+}
+
+async function createFolder(args: Record<string, unknown>): Promise<ToolResult> {
+  const name = str(args.name)
+  if (!name) return { ok: false, error: 'name is required.' }
+  const store = useBookmarksStore.getState()
+
+  const parent = resolveFolder(str(args.parent_folder_id), str(args.parent_folder_name))
+  if (!parent.ok) {
+    return {
+      ok: false,
+      error: `Invalid parent folder. ${parent.error}`
+    }
+  }
+  const parentId = parent.folderId
+
+  // Idempotent: reuse an existing folder with the same name under the same
+  // parent instead of creating a duplicate (e.g. when the model retries).
+  const existing = store.folders.find(
+    (f) => (f.parentId ?? null) === parentId && eqName(f.name, name)
+  )
+  if (existing) {
+    return {
+      ok: true,
+      result: JSON.stringify({
+        folder_id: existing.id,
+        name: existing.name,
+        parent_folder_id: existing.parentId ?? null,
+        existed: true
+      })
+    }
+  }
+
+  const before = new Set(store.folders.map((f) => f.id))
+  await store.addFolder(name, parentId)
+  const created = useBookmarksStore.getState().folders.find((f) => !before.has(f.id))
+  return {
+    ok: true,
+    result: JSON.stringify({
+      folder_id: created?.id,
+      name: created?.name ?? name,
+      parent_folder_id: created?.parentId ?? null
+    })
+  }
+}
+
+async function moveConnectionToFolder(args: Record<string, unknown>): Promise<ToolResult> {
+  const store = useBookmarksStore.getState()
+
+  const configId = str(args.config_id)
+  const connName = str(args.connection_name)
+  let conn = configId ? store.connections.find((c) => c.id === configId) : undefined
+  if (!conn && connName) {
+    const matches = store.connections.filter((c) => eqName(c.name, connName))
+    if (matches.length === 1) conn = matches[0]
+    else if (matches.length > 1) {
+      return {
+        ok: false,
+        error: `Multiple connections named "${connName}". Use config_id: ${matches
+          .map((c) => c.id)
+          .join(', ')}.`
+      }
+    }
+  }
+  if (!conn) {
+    if (!configId && !connName) {
+      return { ok: false, error: 'config_id (or connection_name) is required.' }
+    }
+    const choices =
+      store.connections.map((c) => `${c.name} (config_id=${c.id})`).join(', ') || '(none)'
+    return {
+      ok: false,
+      error: `No saved connection matching ${
+        configId ? `id "${configId}"` : `name "${connName}"`
+      }. Available connections: ${choices}.`
+    }
+  }
+
+  const dest = resolveFolder(str(args.folder_id), str(args.folder_name))
+  if (!dest.ok) return { ok: false, error: dest.error }
+
+  await store.move(conn.id, dest.folderId, null)
+  const folder = dest.folderId
+    ? useBookmarksStore.getState().folders.find((f) => f.id === dest.folderId)
+    : null
+  return {
+    ok: true,
+    result: JSON.stringify({
+      config_id: conn.id,
+      name: conn.name,
+      folder_id: dest.folderId,
+      folder_name: folder?.name ?? null
+    })
+  }
+}
+
 async function execCommand(args: Record<string, unknown>): Promise<ToolResult> {
   const tabId = str(args.tab_id)
   const command = str(args.command)
@@ -206,6 +349,15 @@ async function execCommand(args: Record<string, unknown>): Promise<ToolResult> {
 function listSshConfigs(): ToolResult {
   const configs = useBookmarksStore.getState().connections.map(sanitizeConfig)
   return { ok: true, result: JSON.stringify(configs) }
+}
+
+function listFolders(): ToolResult {
+  const folders = useBookmarksStore.getState().folders.map((f) => ({
+    folder_id: f.id,
+    name: f.name,
+    parent_folder_id: f.parentId ?? null
+  }))
+  return { ok: true, result: JSON.stringify(folders) }
 }
 
 function listOpenTabs(): ToolResult {
@@ -366,10 +518,16 @@ export async function executeToolCall(
       return createSshConfig(args)
     case 'update_ssh_config':
       return updateSshConfig(args)
+    case 'create_folder':
+      return createFolder(args)
+    case 'move_connection_to_folder':
+      return moveConnectionToFolder(args)
     case 'exec_command':
       return execCommand(args)
     case 'list_ssh_configs':
       return listSshConfigs()
+    case 'list_folders':
+      return listFolders()
     case 'list_open_tabs':
       return listOpenTabs()
     case 'get_app_settings':
@@ -389,6 +547,7 @@ export async function executeToolCall(
 export function buildToolContextMessage(): string | undefined {
   const tabs = useTabsStore.getState().tabs
   const configs = useBookmarksStore.getState().connections
+  const folders = useBookmarksStore.getState().folders
   const theme = useThemeStore.getState().theme
   const locale = useLocaleStore.getState().locale
   const terminal = useTerminalAppearanceStore.getState()
@@ -404,20 +563,36 @@ export function buildToolContextMessage(): string | undefined {
         .join('\n')
     : '(none)'
 
+  const folderName = (id?: string | null): string | undefined =>
+    id ? folders.find((f) => f.id === id)?.name : undefined
+
   const configsText = configs.length
     ? configs
-        .map(
-          (c) =>
-            `- config_id=${c.id} | ${c.name} | ${c.username}@${c.host}:${c.port}${
-              c.password ? ' | has-password' : ''
-            }${c.privateKey ? ' | has-key' : ''}`
-        )
+        .map((c) => {
+          const parent = folderName(c.parentId)
+          return `- config_id=${c.id} | ${c.name} | ${c.username}@${c.host}:${c.port}${
+            c.password ? ' | has-password' : ''
+          }${c.privateKey ? ' | has-key' : ''}${
+            parent ? ` | folder=${parent} (folder_id=${c.parentId})` : ' | folder=(top level)'
+          }`
+        })
+        .join('\n')
+    : '(none)'
+
+  const foldersText = folders.length
+    ? folders
+        .map((f) => {
+          const parent = folderName(f.parentId)
+          return `- folder_id=${f.id} | ${f.name}${
+            parent ? ` | parent=${parent} (folder_id=${f.parentId})` : ' | parent=(top level)'
+          }`
+        })
         .join('\n')
     : '(none)'
 
   const settingsLine = `App settings: theme=${theme} | locale=${locale} | terminal fontSize=${terminal.fontSize} | terminal colorScheme=${terminal.colorScheme}`
 
-  if (tabs.length === 0 && configs.length === 0) {
+  if (tabs.length === 0 && configs.length === 0 && folders.length === 0) {
     return `Current app state:\n\n${settingsLine}`
   }
 
@@ -428,6 +603,9 @@ ${tabsText}
 
 Saved connection configs:
 ${configsText}
+
+Bookmark folders:
+${foldersText}
 
 ${settingsLine}`
 }

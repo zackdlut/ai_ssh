@@ -23,7 +23,10 @@ const TOOL_CATEGORY: Record<string, ToolCategory> = {
   list_open_tabs: 'read',
   create_ssh_config: 'config',
   update_ssh_config: 'config',
+  create_folder: 'config',
+  move_connection_to_folder: 'config',
   list_ssh_configs: 'read',
+  list_folders: 'read',
   exec_command: 'command',
   get_app_settings: 'settings',
   update_app_settings: 'settings'
@@ -212,6 +215,64 @@ function ListResult({
   )
 }
 
+function FolderListResult({ result }: { result?: string }): JSX.Element | null {
+  const t = useT()
+  const items = parseList(result)
+  if (!items) return null
+  if (items.length === 0) {
+    return <div className="tool-list-empty">{t('tool.list.empty')}</div>
+  }
+  const nameById = new Map(items.map((it) => [String(it.folder_id ?? ''), String(it.name ?? '')]))
+  return (
+    <div className="tool-list">
+      {items.map((item, i) => {
+        const parentId = item.parent_folder_id ? String(item.parent_folder_id) : null
+        const parentName = parentId ? nameById.get(parentId) : undefined
+        return (
+          <div className="tool-list-row" key={i}>
+            <span className="tool-list-index">{i + 1}</span>
+            <div className="tool-list-main">
+              <span className="tool-list-title">{String(item.name ?? '—')}</span>
+              <span className="tool-list-sub">
+                {parentName ? `${t('tool.folder.parent')}: ${parentName}` : t('tool.folder.root')}
+              </span>
+            </div>
+          </div>
+        )
+      })}
+      <div className="tool-list-count">{t('tool.list.count', { count: items.length })}</div>
+    </div>
+  )
+}
+
+function FolderResultRow({
+  name,
+  obj
+}: {
+  name: string
+  obj: Record<string, unknown>
+}): JSX.Element {
+  const t = useT()
+  const title = String(obj.name ?? '—')
+  let sub: string
+  if (name === 'move_connection_to_folder') {
+    const folderName = obj.folder_name ? String(obj.folder_name) : null
+    sub = folderName ? `→ ${folderName}` : `→ ${t('tool.folder.root')}`
+  } else {
+    sub = obj.parent_folder_id ? t('tool.folder.parent') : t('tool.folder.root')
+  }
+  return (
+    <div className="tool-list">
+      <div className="tool-list-row tool-list-row--solo">
+        <div className="tool-list-main">
+          <span className="tool-list-title">{title}</span>
+          <span className="tool-list-sub">{sub}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function parseObj(raw?: string): Record<string, unknown> | null {
   if (!raw) return null
   try {
@@ -274,6 +335,11 @@ function paramLabel(t: (key: TranslationKey) => string, key: string): string {
     port: 'tool.param.port',
     name: 'tool.param.name',
     command: 'tool.param.command',
+    parent_folder_id: 'tool.param.parentFolderId',
+    parent_folder_name: 'tool.param.parentFolderId',
+    folder_id: 'tool.param.folderId',
+    folder_name: 'tool.param.folderId',
+    connection_name: 'tool.param.configId',
     all: 'tool.param.all',
     password: 'tool.param.password',
     privateKey: 'tool.param.privateKey',
@@ -386,6 +452,9 @@ function ToolResult({ name, result }: { name: string; result?: string }): JSX.El
   if (name === 'list_ssh_configs' || name === 'list_open_tabs') {
     return <ListResult name={name} result={result} />
   }
+  if (name === 'list_folders') {
+    return <FolderListResult result={result} />
+  }
   if (!result) return null
 
   if (name === 'exec_command') {
@@ -409,6 +478,10 @@ function ToolResult({ name, result }: { name: string; result?: string }): JSX.El
 
   if ((name === 'create_ssh_config' || name === 'update_ssh_config') && obj) {
     return <ConfigRow obj={obj} />
+  }
+
+  if ((name === 'create_folder' || name === 'move_connection_to_folder') && obj) {
+    return <FolderResultRow name={name} obj={obj} />
   }
 
   if ((name === 'get_app_settings' || name === 'update_app_settings') && obj) {
@@ -448,7 +521,10 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
             : t('tool.pending')
 
   const command = call.name === 'exec_command' ? String(args.command ?? '') : null
-  const isListTool = call.name === 'list_ssh_configs' || call.name === 'list_open_tabs'
+  const isListTool =
+    call.name === 'list_ssh_configs' ||
+    call.name === 'list_open_tabs' ||
+    call.name === 'list_folders'
   const isSettingsReadTool = call.name === 'get_app_settings'
   const isSettingsUpdateTool = call.name === 'update_app_settings'
   const updates =

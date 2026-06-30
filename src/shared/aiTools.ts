@@ -17,13 +17,35 @@ export interface AIToolDefinition {
 }
 
 /** Tools that only read state and are safe to run without user approval. */
-export const READONLY_TOOLS = new Set(['list_ssh_configs', 'list_open_tabs', 'get_app_settings'])
+export const READONLY_TOOLS = new Set([
+  'list_ssh_configs',
+  'list_open_tabs',
+  'list_folders',
+  'get_app_settings'
+])
+
+/**
+ * Read-only tools that fully render their result as a rich card the user asked
+ * to see (list cards / the settings card). When a turn runs only these, the
+ * card IS the answer: the agent loop must not nudge a silent follow-up turn into
+ * restating the same data as prose.
+ */
+export const DISPLAY_TOOLS = new Set([
+  'list_ssh_configs',
+  'list_open_tabs',
+  'list_folders',
+  'get_app_settings'
+])
 
 /** Action tools whose effect is destructive and deserves a stronger warning. */
 export const DANGEROUS_TOOLS = new Set(['exec_command', 'close_tab', 'close_tabs'])
 
 export function isReadonlyTool(name: string): boolean {
   return READONLY_TOOLS.has(name)
+}
+
+export function isDisplayTool(name: string): boolean {
+  return DISPLAY_TOOLS.has(name)
 }
 
 export function isDangerousTool(name: string): boolean {
@@ -46,6 +68,15 @@ export const AI_TOOLS: AIToolDefinition[] = [
       name: 'list_open_tabs',
       description:
         'List the currently open SSH terminal tabs with their tab_id, host and connection status. Use this to resolve a tab_id before closing a tab or executing a command.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_folders',
+      description:
+        'List the locally saved bookmark folders (the connection sidebar tree). Returns each folder with its folder_id, name and parent_folder_id. Use this to resolve a folder_id before creating a subfolder or moving a connection into a folder.',
       parameters: { type: 'object', properties: {}, additionalProperties: false }
     }
   },
@@ -160,6 +191,59 @@ export const AI_TOOLS: AIToolDefinition[] = [
           }
         },
         required: ['config_id', 'updates'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_folder',
+      description:
+        'Create a new bookmark folder in the connection sidebar tree (or return the existing one if a folder with the same name already exists under the same parent). Pass a display name and, optionally, parent_folder_id or parent_folder_name to nest it inside an existing folder (omit both for a top-level folder).',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Display name for the new folder.' },
+          parent_folder_id: {
+            type: 'string',
+            description: 'Id of the parent folder to nest under. Omit for a top-level folder.'
+          },
+          parent_folder_name: {
+            type: 'string',
+            description:
+              'Name of the parent folder to nest under (alternative to parent_folder_id). Omit both for a top-level folder.'
+          }
+        },
+        required: ['name'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'move_connection_to_folder',
+      description:
+        'Move a saved SSH connection into a bookmark folder (or to the top level). Identify the connection by config_id (preferred, from list_ssh_configs) or connection_name. Identify the destination by folder_id (preferred, from list_folders) or folder_name; omit both to move the connection to the top level. If you are NOT certain of the exact folder_id, pass folder_name instead of guessing an id. The destination folder must already exist — call create_folder first if it does not.',
+      parameters: {
+        type: 'object',
+        properties: {
+          config_id: { type: 'string', description: 'Id of the saved connection to move.' },
+          connection_name: {
+            type: 'string',
+            description: 'Name of the saved connection (alternative to config_id).'
+          },
+          folder_id: {
+            type: 'string',
+            description: 'Id of the destination folder. Omit (with folder_name) to move to the top level.'
+          },
+          folder_name: {
+            type: 'string',
+            description:
+              'Name of the destination folder (alternative to folder_id). Use this when unsure of the exact id. Omit both folder_id and folder_name to move to the top level.'
+          }
+        },
         additionalProperties: false
       }
     }
