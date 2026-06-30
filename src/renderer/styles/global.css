@@ -4074,6 +4074,607 @@ select:focus {
   border-color: rgba(91, 233, 208, 0.42);
 }
 
+/* ---------- Tool settings preview panel (embedded in ToolCard) ----------
+   These cards are borrowed from the wide settings modals, so everything here
+   is re-scaled to a single compact rhythm that fits the ~320px side panel:
+   8px radius, 30px control height, 11px labels, no transform hacks. */
+@keyframes tool-settings-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.tool-call-card .tool-settings-panel {
+  --ts-radius: 8px;
+  --ts-control-h: 30px;
+  margin-top: 2px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-radius: var(--radius);
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--line));
+  background:
+    radial-gradient(120% 60% at 100% 0%, color-mix(in srgb, var(--accent) 6%, transparent), transparent 70%),
+    var(--ink-900);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent),
+    0 6px 18px color-mix(in srgb, var(--bg) 50%, transparent);
+}
+
+.tool-call-card .tool-settings-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+}
+
+.tool-call-card .tool-settings-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.tool-call-card .tool-settings-panel-title::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.tool-call-card .tool-settings-panel-badge {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.tool-call-card .tool-settings-section-block {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  animation: tool-settings-reveal 0.32s ease both;
+}
+
+.tool-call-card .tool-settings-reveal-0 { animation-delay: 0ms; }
+.tool-call-card .tool-settings-reveal-1 { animation-delay: 55ms; }
+.tool-call-card .tool-settings-reveal-2 { animation-delay: 110ms; }
+
+.tool-call-card .tool-settings-section {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.tool-call-card .tool-settings-section::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--line) 90%, transparent), transparent);
+}
+
+.tool-call-card .tool-settings-section-block + .tool-settings-section-block {
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 65%, transparent);
+}
+
+/* Change indicator: faint wash on the block, accent bar on individual fields,
+   bled into the panel padding so nothing shifts horizontally. */
+.tool-call-card .tool-settings-changed {
+  position: relative;
+  border-radius: var(--ts-radius);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.tool-call-card .tool-settings-sub.tool-settings-changed,
+.tool-call-card .tool-settings-field.tool-settings-changed,
+.tool-call-card .tool-settings-panel .terminal-setting-row.tool-settings-changed {
+  padding: 6px 8px;
+  margin-left: -8px;
+  margin-right: -8px;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.tool-call-card .tool-settings-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.tool-call-card .tool-settings-field-label {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+/* --- Theme + language picker grids --- */
+.tool-call-card .tool-settings-theme-grid,
+.tool-call-card .tool-settings-language-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.tool-call-card .tool-settings-theme-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border-radius: var(--ts-radius);
+  min-height: 0;
+}
+
+.tool-call-card .tool-settings-theme-card .theme-preview {
+  min-height: 58px;
+  border-radius: 6px;
+  transform: none;
+}
+
+.tool-call-card .tool-settings-theme-card .theme-preview-body {
+  padding: 8px 10px 10px;
+  gap: 5px;
+}
+
+.tool-call-card .tool-settings-theme-card .theme-preview-tag {
+  top: 6px;
+  right: 6px;
+  padding: 2px 6px;
+  font-size: 9px;
+}
+
+.tool-call-card .tool-settings-theme-card .theme-card-copy {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 0;
+}
+
+.tool-call-card .tool-settings-theme-card .theme-card-name {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Read-mode "current" badge sits inline rather than floating in the corner. */
+.tool-call-card .tool-settings-theme-card .theme-card-check,
+.tool-call-card .tool-settings-language-card .theme-card-check {
+  position: static;
+  top: auto;
+  right: auto;
+  padding: 2px 7px;
+  font-size: 9px;
+}
+
+.tool-call-card .tool-settings-language-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: var(--ts-radius);
+}
+
+.tool-call-card .tool-settings-language-card .language-card-glyph {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.tool-call-card .tool-settings-language-card .language-card-copy {
+  gap: 3px;
+  padding-right: 0;
+  min-width: 0;
+}
+
+.tool-call-card .tool-settings-language-card .language-card-name {
+  font-size: 12px;
+}
+
+/* Long descriptions don't fit a two-column narrow layout; hide them. */
+.tool-call-card .tool-settings-language-card .language-card-desc {
+  display: none;
+}
+
+/* Static (read-mode) cards are not interactive — no hover lift. */
+.tool-call-card div.tool-settings-theme-card:hover,
+.tool-call-card div.tool-settings-language-card:hover {
+  transform: none;
+  border-color: var(--line);
+  background: var(--surface-raise);
+}
+
+/* --- Terminal preview + control rows --- */
+.tool-call-card .tool-settings-panel .terminal-preview {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--ts-radius);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
+}
+
+.tool-call-card .tool-settings-panel .terminal-preview--compact > div {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-call-card .tool-settings-panel .terminal-setting-row {
+  grid-template-columns: 84px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+}
+
+.tool-call-card .tool-settings-panel .terminal-setting-label-top {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+
+.tool-call-card .tool-settings-panel .terminal-setting-hint,
+.tool-call-card .tool-settings-panel .terminal-setting-reset {
+  display: none;
+}
+
+/* Unify every control to one height / radius / type scale. */
+.tool-call-card .tool-settings-panel .terminal-scheme-trigger,
+.tool-call-card .tool-settings-panel .terminal-font-trigger,
+.tool-call-card .tool-settings-panel select,
+.tool-call-card .tool-settings-field input,
+.tool-call-card .tool-settings-panel .terminal-stepper-input {
+  height: var(--ts-control-h);
+  font-size: 12px;
+  border-radius: 7px;
+}
+
+.tool-call-card .tool-settings-panel .terminal-scheme-trigger,
+.tool-call-card .tool-settings-panel .terminal-font-trigger {
+  padding: 0 9px;
+  gap: 8px;
+}
+
+.tool-call-card .tool-settings-panel .terminal-scheme-trigger-label,
+.tool-call-card .tool-settings-panel .terminal-font-trigger-label {
+  font-size: 12px;
+}
+
+.tool-call-card .tool-settings-panel .terminal-scheme-swatch {
+  grid-template-columns: repeat(8, 7px);
+  grid-template-rows: repeat(2, 7px);
+}
+.tool-call-card .tool-settings-panel .terminal-scheme-swatch-cell {
+  width: 7px;
+  height: 7px;
+}
+
+.tool-call-card .tool-settings-panel .terminal-stepper-btn {
+  width: 30px;
+  font-size: 15px;
+  border-radius: 7px 0 0 7px;
+}
+.tool-call-card .tool-settings-panel .terminal-stepper-btn:last-child {
+  border-radius: 0 7px 7px 0;
+}
+
+.tool-call-card .tool-settings-panel select {
+  padding: 0 9px;
+}
+
+/* --- AI segmented controls + fields --- */
+.tool-call-card .tool-settings-seg {
+  margin: 0;
+}
+
+.tool-call-card .tool-settings-seg.seg-profile button {
+  font-size: 11px;
+  padding: 6px 4px;
+}
+
+.tool-call-card .tool-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.tool-call-card .tool-settings-field label {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.tool-call-card .tool-settings-field input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 9px;
+}
+
+/* --- Read-only summary list --- */
+.tool-call-card .tool-settings-summary {
+  margin: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.tool-call-card .tool-settings-summary-row {
+  display: grid;
+  grid-template-columns: minmax(82px, 38%) 1fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: var(--surface-raise);
+}
+
+.tool-call-card .tool-settings-summary-row dt {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.tool-call-card .tool-settings-summary-row dd {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+  word-break: break-word;
+  text-align: right;
+}
+
+.tool-call-card .tool-settings-summary-row dd.mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* --- Read-only "current settings" cards (UI section) --- */
+.tool-call-card .tool-settings-current-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-call-card .tool-settings-current-card {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 8px;
+  border-radius: var(--ts-radius);
+  border: 1px solid var(--line);
+  background: var(--surface-raise);
+}
+
+.tool-call-card .tool-settings-current-card .theme-preview {
+  width: 108px;
+  flex: none;
+  min-height: 56px;
+  border-radius: 6px;
+}
+
+.tool-call-card .tool-settings-current-card--lang .language-card-glyph {
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
+  font-size: 15px;
+  flex: none;
+}
+
+.tool-call-card .tool-settings-current-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.tool-call-card .tool-settings-current-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.tool-call-card .tool-settings-current-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.tool-call-card .tool-settings-current-tag {
+  align-self: flex-start;
+  margin-top: 1px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: var(--accent);
+}
+
+/* --- AI read-only: provider + active model profiles --- */
+.tool-call-card .tool-settings-ai-read {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tool-call-card .tool-settings-provider {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tool-call-card .tool-settings-provider-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: var(--surface-raise);
+}
+
+.tool-call-card .tool-settings-provider-label {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.tool-call-card .tool-settings-provider-value {
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.tool-call-card .tool-settings-keypill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 2px 9px 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+.tool-call-card .tool-settings-keypill::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.tool-call-card .tool-settings-keypill.is-on {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.tool-call-card .tool-settings-keypill.is-on::before {
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 75%, transparent);
+}
+
+.tool-call-card .tool-settings-model-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tool-call-card .tool-settings-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tool-call-card .tool-settings-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: var(--surface-raise);
+}
+
+.tool-call-card .tool-settings-model-row.is-active {
+  box-shadow: inset 2px 0 0 var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-raise));
+}
+
+.tool-call-card .tool-settings-model-profile {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--ink-900);
+  color: var(--text-dim);
+}
+
+.tool-call-card .tool-settings-model-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-call-card .tool-settings-model-ctx {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-call-card .tool-settings-model-tags {
+  flex: none;
+  display: flex;
+  gap: 4px;
+}
+
+.tool-call-card .tool-settings-tag {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.tool-call-card .tool-settings-tag--accent {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.tool-call-card .tool-call-result-block .tool-settings-panel {
+  margin-top: 0;
+}
+
 /* ---------- Modal ---------- */
 .modal-overlay {
   position: fixed;

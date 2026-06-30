@@ -1,20 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { approveToolCall, rejectToolCall } from '../../lib/aiService'
 import { isDangerousTool } from '../../../shared/aiTools'
-import {
-  modelProfileLabel,
-  terminalFontWeightLabel,
-  terminalSchemeLabel,
-  themeMeta,
-  useT,
-  type TranslationKey
-} from '../../lib/i18n'
-import { useLocaleStore } from '../../store/localeStore'
-import type { AppLocale, AppTheme, ModelProfile } from '../../../shared/types'
-import type {
-  TerminalColorSchemeId,
-  TerminalFontWeight
-} from '../../../shared/terminalSettings'
+import { useT, type TranslationKey } from '../../lib/i18n'
+import { useAIStore } from '../../store/aiStore'
+import AppSettingsToolPanel from './AppSettingsToolPanel'
 import type { ToolCallView } from '../../../shared/types'
 
 interface Props {
@@ -233,6 +222,29 @@ function parseObj(raw?: string): Record<string, unknown> | null {
   }
 }
 
+function UpdateAppSettingsBody({
+  initialUpdates,
+  onDraftChange
+}: {
+  initialUpdates: Record<string, unknown>
+  onDraftChange: (updates: Record<string, unknown>) => void
+}): JSX.Element {
+  const [draftUpdates, setDraftUpdates] = useState(initialUpdates)
+
+  useEffect(() => {
+    setDraftUpdates(initialUpdates)
+  }, [initialUpdates])
+
+  const handleChange = (updates: Record<string, unknown>): void => {
+    setDraftUpdates(updates)
+    onDraftChange(updates)
+  }
+
+  return (
+    <AppSettingsToolPanel mode="edit" updates={draftUpdates} onUpdatesChange={handleChange} />
+  )
+}
+
 function ConfigRow({ obj }: { obj: Record<string, unknown> }): JSX.Element {
   const t = useT()
   const user = obj.username ? `${String(obj.username)}@` : ''
@@ -279,117 +291,6 @@ function formatParamValue(key: string, value: unknown): string {
   return String(value)
 }
 
-function formatSettingValue(
-  locale: AppLocale,
-  t: (key: TranslationKey, vars?: Record<string, string | number>) => string,
-  key: string,
-  value: unknown
-): string {
-  if (SECRET_KEYS.has(key)) return '••••••'
-  if (key === 'theme' && (value === 'aurora' || value === 'dawn')) {
-    return themeMeta(locale, value as AppTheme).label
-  }
-  if (key === 'locale' && (value === 'zh' || value === 'en')) {
-    return t(value === 'zh' ? 'language.zh' : 'language.en')
-  }
-  if (key === 'colorScheme' && typeof value === 'string') {
-    return terminalSchemeLabel(locale, value as TerminalColorSchemeId)
-  }
-  if (key === 'fontWeight' && typeof value === 'string') {
-    return terminalFontWeightLabel(locale, value as TerminalFontWeight)
-  }
-  if ((key === 'copilotModelProfile' || key === 'nlModelProfile') && typeof value === 'string') {
-    return modelProfileLabel(locale, value as ModelProfile)
-  }
-  if (key === 'hasApiKey') return value === true ? t('tool.settings.hasApiKey') : '—'
-  if (typeof value === 'object' && value !== null) return JSON.stringify(value)
-  return String(value)
-}
-
-function settingsLabel(t: (key: TranslationKey) => string, key: string): string {
-  const map: Record<string, TranslationKey> = {
-    theme: 'tool.settings.theme',
-    locale: 'tool.settings.locale',
-    terminal_appearance: 'tool.settings.terminal',
-    ai: 'tool.settings.ai',
-    baseURL: 'tool.settings.baseURL',
-    apiKey: 'tool.settings.apiKey',
-    hasApiKey: 'tool.settings.hasApiKey',
-    copilotModelProfile: 'tool.settings.copilotModelProfile',
-    nlModelProfile: 'tool.settings.nlModelProfile',
-    models: 'tool.settings.models',
-    contextLengths: 'tool.settings.contextLengths',
-    colorScheme: 'tool.settings.colorScheme',
-    fontFamily: 'tool.settings.fontFamily',
-    fontSize: 'tool.settings.fontSize',
-    lineHeight: 'tool.settings.lineHeight',
-    fontWeight: 'tool.settings.fontWeight'
-  }
-  return t(map[key] ?? (`tool.settings.${key}` as TranslationKey))
-}
-
-function flattenSettingsRows(
-  obj: Record<string, unknown>,
-  prefix = ''
-): { key: string; labelKey: string; value: unknown; section: 'ui' | 'terminal' | 'ai' | 'other' }[] {
-  const rows: {
-    key: string
-    labelKey: string
-    value: unknown
-    section: 'ui' | 'terminal' | 'ai' | 'other'
-  }[] = []
-  for (const [key, value] of Object.entries(obj)) {
-    if (value === undefined || value === null || value === '') continue
-    const fullKey = prefix ? `${prefix}.${key}` : key
-    if (key === 'terminal_appearance') {
-      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-        rows.push(...flattenSettingsRows(value as Record<string, unknown>, fullKey))
-      }
-      continue
-    }
-    if (key === 'ai') {
-      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-        rows.push(...flattenSettingsRows(value as Record<string, unknown>, fullKey))
-      }
-      continue
-    }
-    if (
-      (key === 'models' || key === 'contextLengths') &&
-      typeof value === 'object' &&
-      value !== null &&
-      !Array.isArray(value)
-    ) {
-      rows.push(...flattenSettingsRows(value as Record<string, unknown>, fullKey))
-      continue
-    }
-
-    let section: 'ui' | 'terminal' | 'ai' | 'other' = 'other'
-    if (key === 'theme' || key === 'locale') section = 'ui'
-    else if (
-      key === 'colorScheme' ||
-      key === 'fontFamily' ||
-      key === 'fontSize' ||
-      key === 'lineHeight' ||
-      key === 'fontWeight' ||
-      fullKey.includes('terminal_appearance')
-    ) {
-      section = 'terminal'
-    } else if (
-      fullKey.startsWith('ai.') ||
-      key === 'baseURL' ||
-      key === 'apiKey' ||
-      key === 'hasApiKey' ||
-      key === 'copilotModelProfile' ||
-      key === 'nlModelProfile'
-    ) {
-      section = 'ai'
-    }
-
-    rows.push({ key: fullKey, labelKey: key, value, section })
-  }
-  return rows
-}
-
 function DetailGrid({
   rows
 }: {
@@ -405,60 +306,6 @@ function DetailGrid({
       ))}
     </dl>
   )
-}
-
-function SettingsRows({ data }: { data: Record<string, unknown> }): JSX.Element {
-  const t = useT()
-  const locale = useLocaleStore((s) => s.locale)
-  const flat = flattenSettingsRows(data)
-  if (flat.length === 0) return <div className="tool-list-empty">{t('tool.list.empty')}</div>
-
-  const profileKeys = new Set(['default', 'fast', 'medium', 'high', 'custom'])
-  const sections: { id: 'ui' | 'terminal' | 'ai' | 'other'; label: TranslationKey }[] = [
-    { id: 'ui', label: 'tool.section.ui' },
-    { id: 'terminal', label: 'tool.section.terminal' },
-    { id: 'ai', label: 'tool.section.ai' }
-  ]
-
-  return (
-    <div className="tool-settings-groups">
-      {sections.map((section) => {
-        const rows = flat.filter((r) => r.section === section.id)
-        if (rows.length === 0) return null
-        return (
-          <div className="tool-settings-group" key={section.id}>
-            <SectionLabel>{t(section.label)}</SectionLabel>
-            <DetailGrid
-              rows={rows.map((row) => {
-                const isModelTier =
-                  profileKeys.has(row.labelKey) &&
-                  (row.key.includes('.models.') || row.key.includes('.contextLengths.'))
-                const label = isModelTier
-                  ? modelProfileLabel(locale, row.labelKey as ModelProfile)
-                  : settingsLabel(t, row.labelKey)
-                return {
-                  key: row.key,
-                  label,
-                  value: formatSettingValue(locale, t, row.labelKey, row.value),
-                  mono: row.labelKey === 'baseURL' || row.labelKey === 'fontFamily'
-                }
-              })}
-            />
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function SettingsParamRows({ updates }: { updates: Record<string, unknown> }): JSX.Element {
-  return <SettingsRows data={updates} />
-}
-
-function SettingsResult({ result }: { result?: string }): JSX.Element | null {
-  const obj = parseObj(result)
-  if (!obj) return null
-  return <SettingsRows data={obj} />
 }
 
 function expandArgs(args: Record<string, unknown>): Record<string, unknown>[] {
@@ -565,7 +412,7 @@ function ToolResult({ name, result }: { name: string; result?: string }): JSX.El
   }
 
   if ((name === 'get_app_settings' || name === 'update_app_settings') && obj) {
-    return <SettingsResult result={result} />
+    return <AppSettingsToolPanel mode="read" data={obj} />
   }
 
   if (result.length > OUTPUT_COLLAPSE_CHARS || result.split('\n').length > 1) {
@@ -577,6 +424,7 @@ function ToolResult({ name, result }: { name: string; result?: string }): JSX.El
 
 export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Element {
   const t = useT()
+  const updateToolCall = useAIStore((s) => s.updateToolCall)
   const args = parseArgs(call.args)
   const dangerous = isDangerousTool(call.name)
   const pending = call.status === 'pending'
@@ -584,6 +432,9 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
   const actionLabel = t(`tool.action.${call.name}` as TranslationKey)
   const descKey = `tool.desc.${call.name}` as TranslationKey
   const description = t(descKey)
+  const [draftSettingsUpdates, setDraftSettingsUpdates] = useState<Record<string, unknown> | null>(
+    null
+  )
 
   const statusLabel =
     call.status === 'running'
@@ -599,8 +450,9 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
   const command = call.name === 'exec_command' ? String(args.command ?? '') : null
   const isListTool = call.name === 'list_ssh_configs' || call.name === 'list_open_tabs'
   const isSettingsReadTool = call.name === 'get_app_settings'
+  const isSettingsUpdateTool = call.name === 'update_app_settings'
   const updates =
-    call.name === 'update_app_settings' && args.updates && typeof args.updates === 'object'
+    isSettingsUpdateTool && args.updates && typeof args.updates === 'object'
       ? (args.updates as Record<string, unknown>)
       : null
 
@@ -610,6 +462,19 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
     (command !== null || updates !== null || Object.keys(args).length > 0)
   const hasResult = call.status === 'done' && Boolean(call.result)
   const showDetails = hasBody || (command !== null && Object.keys(args).length > 1)
+  const isSettingsResult = call.name === 'get_app_settings' || call.name === 'update_app_settings'
+
+  const handleApprove = (): void => {
+    if (isSettingsUpdateTool) {
+      const finalUpdates = draftSettingsUpdates ?? updates
+      if (finalUpdates) {
+        updateToolCall(tabId, messageId, call.id, {
+          args: JSON.stringify({ updates: finalUpdates })
+        })
+      }
+    }
+    approveToolCall(tabId, messageId, call.id)
+  }
 
   return (
     <div
@@ -630,10 +495,13 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
         <div className="tool-call-body">
           {hasBody && !isListTool && !isSettingsReadTool && (
             <>
-              <SectionLabel>{t('tool.section.details')}</SectionLabel>
+              {!isSettingsUpdateTool && <SectionLabel>{t('tool.section.details')}</SectionLabel>}
               {command === null ? (
                 updates ? (
-                  <SettingsParamRows updates={updates} />
+                  <UpdateAppSettingsBody
+                    initialUpdates={updates}
+                    onDraftChange={setDraftSettingsUpdates}
+                  />
                 ) : (
                   <ParamRows args={args} />
                 )
@@ -658,7 +526,7 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
 
       {hasResult && (
         <div className="tool-call-result-block">
-          <SectionLabel>{t('tool.section.result')}</SectionLabel>
+          {!isSettingsResult && <SectionLabel>{t('tool.section.result')}</SectionLabel>}
           <ToolResult name={call.name} result={call.result} />
         </div>
       )}
@@ -673,7 +541,7 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
             <button
               type="button"
               className="tool-btn-approve"
-              onClick={() => approveToolCall(tabId, messageId, call.id)}
+              onClick={handleApprove}
             >
               {t('tool.approve')}
             </button>
