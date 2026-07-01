@@ -464,8 +464,12 @@ export function askAboutSelection(selection: string): void {
 
   useAIStore.getState().setPanelOpen(true)
 
-  const clipped = text.length > MAX_SELECTION ? text.slice(0, MAX_SELECTION) + '\n…(truncated)' : text
-  const prompt = `请基于当前终端的上下文，解释下面这段我在终端中选中的内容：\n\`\`\`\n${clipped}\n\`\`\``
+  const locale = useLocaleStore.getState().locale
+  const clipped =
+    text.length > MAX_SELECTION
+      ? `${text.slice(0, MAX_SELECTION)}\n${translate(locale, 'copilot.selectionTruncated')}`
+      : text
+  const prompt = translate(locale, 'copilot.selectionExplain', { selection: clipped })
   void sendPrompt(prompt)
 }
 

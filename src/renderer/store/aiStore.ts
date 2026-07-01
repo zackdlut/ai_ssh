@@ -72,14 +72,27 @@ function updateTab(tabs: ChatTab[], tabId: string, patch: Partial<ChatTab>): Cha
   return tabs.map((t) => (t.id === tabId ? { ...t, ...patch, updatedAt: Date.now() } : t))
 }
 
+function isPersistableTab(tab: ChatTab): boolean {
+  return tab.messages.length > 0
+}
+
 function toPersistedState(
   activeChatTabId: string | null,
   chatTabs: ChatTab[]
 ): CopilotChatState | null {
-  if (!activeChatTabId || chatTabs.length === 0) return null
+  const persistableTabs = chatTabs.filter(isPersistableTab)
+  if (persistableTabs.length === 0) return null
+
+  let activeTabId = activeChatTabId
+  if (!activeTabId || !persistableTabs.some((t) => t.id === activeTabId)) {
+    const open = persistableTabs.filter(isOpenTab)
+    const pool = open.length > 0 ? open : persistableTabs
+    activeTabId = [...pool].sort((a, b) => b.updatedAt - a.updatedAt)[0].id
+  }
+
   return {
-    activeTabId: activeChatTabId,
-    tabs: chatTabs.map((tab) => ({
+    activeTabId,
+    tabs: persistableTabs.map((tab) => ({
       id: tab.id,
       title: tab.title,
       draft: tab.draft,
@@ -120,11 +133,13 @@ function migratePersistedTabs(chatTabs: ChatTab[]): ChatTab[] {
 }
 
 function fromPersistedState(state: CopilotChatState): { chatTabs: ChatTab[]; activeChatTabId: string } {
-  const chatTabs: ChatTab[] = state.tabs.map((tab) => ({
-    ...tab,
-    archived: tab.archived ?? false,
-    messages: tab.messages.map((m) => ({ ...m }))
-  }))
+  const chatTabs: ChatTab[] = state.tabs
+    .filter((tab) => tab.messages.length > 0)
+    .map((tab) => ({
+      ...tab,
+      archived: tab.archived ?? false,
+      messages: tab.messages.map((m) => ({ ...m }))
+    }))
   const migrated = migratePersistedTabs(chatTabs)
   let activeChatTabId = state.activeTabId
   if (!migrated.some((t) => t.id === activeChatTabId) && migrated.length > 0) {
@@ -254,6 +269,12 @@ export const useAIStore = create<AIState>((set, get) => ({
     return tab.id
   },
   archiveChatTab: (id) => {
+    const tab = get().chatTabs.find((t) => t.id === id)
+    if (tab && !tab.archived && tab.messages.length === 0) {
+      get().deleteChatTab(id)
+      return
+    }
+
     set((s) => {
       const tab = s.chatTabs.find((t) => t.id === id)
       if (!tab || tab.archived) return s

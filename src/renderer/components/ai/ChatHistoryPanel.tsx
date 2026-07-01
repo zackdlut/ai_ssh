@@ -47,6 +47,7 @@ export default function ChatHistoryPanel({ onClose }: Props): JSX.Element {
   const sortedTabs = useMemo(() => {
     const q = query.trim().toLowerCase()
     return [...chatTabs]
+      .filter((tab) => tab.messages.length > 0)
       .filter((tab) => {
         if (!q) return true
         const title = tabLabel(tab, newChatLabel).toLowerCase()
@@ -87,7 +88,7 @@ export default function ChatHistoryPanel({ onClose }: Props): JSX.Element {
     return () => window.removeEventListener('click', reset)
   }, [confirmDeleteId])
 
-  const totalCount = chatTabs.length
+  const totalCount = chatTabs.filter((tab) => tab.messages.length > 0).length
 
   return (
     <div className="copilot-history-overlay" onClick={onClose}>

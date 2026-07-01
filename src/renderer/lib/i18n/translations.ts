@@ -236,6 +236,9 @@ const zh = {
   'copilot.scrollTabsLeft': '向左滚动话题',
   'copilot.scrollTabsRight': '向右滚动话题',
   'copilot.maxTabsTitle': '最多同时打开 {max} 个聊天',
+  'copilot.selectionExplain':
+    '请基于当前终端的上下文，解释下面这段我在终端中选中的内容：\n```\n{selection}\n```',
+  'copilot.selectionTruncated': '…（已截断）',
 
   'copilot.history.title': '聊天历史',
   'copilot.history.search': '搜索对话…',
@@ -690,6 +693,9 @@ const en: Record<keyof typeof zh, string> = {
   'copilot.scrollTabsLeft': 'Scroll topics left',
   'copilot.scrollTabsRight': 'Scroll topics right',
   'copilot.maxTabsTitle': 'Up to {max} chats at a time',
+  'copilot.selectionExplain':
+    'Based on the current terminal context, explain the following content I selected in the terminal:\n```\n{selection}\n```',
+  'copilot.selectionTruncated': '…(truncated)',
 
   'copilot.history.title': 'Chat history',
   'copilot.history.search': 'Search conversations…',
