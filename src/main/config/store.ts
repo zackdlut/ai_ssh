@@ -5,6 +5,8 @@ import {
   normalizeTerminalAppearanceSettings
 } from '../../shared/terminalSettings'
 import type { TerminalAppearanceSettings } from '../../shared/terminalSettings'
+import { DEFAULT_KEYBINDINGS, normalizeKeybindingsSettings } from '../../shared/keybindings'
+import type { KeybindingsSettings } from '../../shared/keybindings'
 import type {
   AISettings,
   AppLocale,
@@ -20,6 +22,7 @@ interface StoreSchema {
   theme: AppTheme
   locale: AppLocale
   terminalAppearance: TerminalAppearanceSettings
+  keybindings: KeybindingsSettings
   connections: ConnectionConfig[]
   folders: BookmarkFolder[]
   copilotChats: CopilotChatState | null
@@ -50,6 +53,7 @@ function store(): Store<StoreSchema> {
         theme: 'dawn',
         locale: 'zh',
         terminalAppearance: { ...DEFAULT_TERMINAL_APPEARANCE },
+        keybindings: { ...DEFAULT_KEYBINDINGS },
         connections: [],
         folders: [],
         copilotChats: null,
@@ -105,6 +109,16 @@ export function setTerminalAppearance(
   const normalized = normalizeTerminalAppearanceSettings(settings)
   store().set('terminalAppearance', normalized)
   return getTerminalAppearance()
+}
+
+export function getKeybindings(): KeybindingsSettings {
+  return normalizeKeybindingsSettings(store().get('keybindings'))
+}
+
+export function setKeybindings(settings: KeybindingsSettings): KeybindingsSettings {
+  const normalized = normalizeKeybindingsSettings(settings)
+  store().set('keybindings', normalized)
+  return getKeybindings()
 }
 
 export function getConnections(): ConnectionConfig[] {

@@ -25,6 +25,7 @@ import type {
   SkillInstallResult,
   SkillReadResult,
   TerminalAppearanceSettings,
+  KeybindingsSettings,
   SftpListResult,
   SftpOpResult,
   SftpRealpathResult,
@@ -138,6 +139,10 @@ const api = {
       ipcRenderer.invoke('config:getTerminalAppearance'),
     setTerminalAppearance: (s: TerminalAppearanceSettings): Promise<TerminalAppearanceSettings> =>
       ipcRenderer.invoke('config:setTerminalAppearance', s),
+    getKeybindings: (): Promise<KeybindingsSettings> =>
+      ipcRenderer.invoke('config:getKeybindings'),
+    setKeybindings: (s: KeybindingsSettings): Promise<KeybindingsSettings> =>
+      ipcRenderer.invoke('config:setKeybindings', s),
     getConnections: (): Promise<ConnectionConfig[]> => ipcRenderer.invoke('config:getConnections'),
     saveConnection: (c: ConnectionConfig): Promise<ConnectionConfig[]> =>
       ipcRenderer.invoke('config:saveConnection', c),

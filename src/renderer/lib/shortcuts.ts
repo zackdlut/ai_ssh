@@ -2,7 +2,8 @@
 export const SHORTCUT_COPY = 'mod+c'
 export const SHORTCUT_CUT = 'mod+x'
 export const SHORTCUT_PASTE = 'mod+v'
-export const SHORTCUT_ASK_COPILOT = 'mod+f'
+
+export { DEFAULT_KEYBINDINGS } from '../../shared/keybindings'
 
 function isMac(): boolean {
   return /Mac|iPhone|iPod|iPad/i.test(navigator.platform) || /\bMac/i.test(navigator.userAgent)

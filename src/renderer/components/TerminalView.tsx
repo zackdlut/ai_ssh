@@ -16,12 +16,14 @@ import {
 } from '../lib/terminalColorSchemes'
 import { useThemeStore } from '../store/themeStore'
 import { useTerminalAppearanceStore } from '../store/terminalAppearanceStore'
+import { useKeybindingsStore } from '../store/keybindingsStore'
 import { MIN_TERMINAL_LINE_HEIGHT, MAX_TERMINAL_LINE_HEIGHT, xtermFontWeight } from '../../shared/terminalSettings'
+import { matchesKeyEvent } from '../lib/keybindingMatch'
 import { useLocaleStore } from '../store/localeStore'
 import { t, useT } from '../lib/i18n'
 import type { AppLocale } from '../../shared/types'
 import type { CommandRun } from '../../shared/types'
-import { SHORTCUT_ASK_COPILOT, SHORTCUT_COPY } from '../lib/shortcuts'
+import { SHORTCUT_COPY, formatShortcut } from '../lib/shortcuts'
 import ContextMenuItem from './ContextMenuItem'
 import TerminalLineGutter from './TerminalLineGutter'
 import TerminalEmptyState from './TerminalEmptyState'
@@ -237,6 +239,14 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
   const fontSize = useTerminalAppearanceStore((s) => s.fontSize)
   const lineHeight = useTerminalAppearanceStore((s) => s.lineHeight)
   const fontWeight = useTerminalAppearanceStore((s) => s.fontWeight)
+  const askCopilotBinding = useKeybindingsStore((s) => s.askCopilot)
+  const toggleNlBinding = useKeybindingsStore((s) => s.toggleNlMode)
+  const toggleLineNumbersBinding = useKeybindingsStore((s) => s.toggleLineNumbers)
+  const keybindingsRef = useRef({
+    askCopilot: askCopilotBinding,
+    toggleNlMode: toggleNlBinding,
+    toggleLineNumbers: toggleLineNumbersBinding
+  })
   const safeLineHeight = Math.min(
     MAX_TERMINAL_LINE_HEIGHT,
     Math.max(MIN_TERMINAL_LINE_HEIGHT, lineHeight)
@@ -247,6 +257,11 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
   const containerBg = resolvedTheme.background ?? '#000'
 
   activeRef.current = active
+  keybindingsRef.current = {
+    askCopilot: askCopilotBinding,
+    toggleNlMode: toggleNlBinding,
+    toggleLineNumbers: toggleLineNumbersBinding
+  }
 
   const fitTerminal = (): boolean => {
     const container = containerRef.current
@@ -350,7 +365,10 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
         nl.buffer = ''
         nl.cursor = 0
         useTabsStore.getState().setNlMode(tab.id, true)
-        term.write(`\r\n${ORANGE}${t(loc(), 'terminal.nl.entered')}${RESET}`)
+        const toggleKey = formatShortcut(keybindingsRef.current.toggleNlMode)
+        term.write(
+          `\r\n${ORANGE}${t(loc(), 'terminal.nl.entered', { toggleKey })}${RESET}`
+        )
         writeNlPrompt()
       } else {
         nl.mode = 'normal'
@@ -639,17 +657,18 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
       }
     }
 
-    // F12 toggles NL mode. Returning false stops xterm from emitting the
-    // function-key escape sequence (which would otherwise hit the shell).
+    // Custom bindings for NL mode / line numbers / Ask Copilot.
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true
 
-      if (e.key === 'F12') {
+      const bindings = keybindingsRef.current
+
+      if (matchesKeyEvent(bindings.toggleNlMode, e)) {
         toggleNl()
         return false
       }
 
-      if (e.key === 'F11') {
+      if (matchesKeyEvent(bindings.toggleLineNumbers, e)) {
         e.preventDefault()
         setShowLineNumbers((v) => !v)
         return false
@@ -698,7 +717,7 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
         return false
       }
 
-      if (key === 'f') {
+      if (matchesKeyEvent(bindings.askCopilot, e)) {
         const selection = term.getSelection().trim()
         if (selection) {
           e.preventDefault()
@@ -908,7 +927,7 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
       </div>
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
-          <ContextMenuItem shortcut={SHORTCUT_ASK_COPILOT} icon="copilot" onClick={ask}>
+          <ContextMenuItem shortcut={askCopilotBinding} icon="copilot" onClick={ask}>
             {tr('terminal.askCopilot')}
           </ContextMenuItem>
           <ContextMenuItem shortcut={SHORTCUT_COPY} icon="copy" onClick={copy}>

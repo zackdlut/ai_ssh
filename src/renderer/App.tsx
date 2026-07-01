@@ -9,6 +9,7 @@ import { useBookmarksStore } from './store/bookmarksStore'
 import { useThemeStore } from './store/themeStore'
 import { useLocaleStore } from './store/localeStore'
 import { useTerminalAppearanceStore } from './store/terminalAppearanceStore'
+import { useKeybindingsStore } from './store/keybindingsStore'
 import { useSkillsStore } from './store/skillsStore'
 import { useUserRulesStore } from './store/userRulesStore'
 import { getConnSidebarStartupOpen } from './store/startupStore'
@@ -25,6 +26,7 @@ const SkillsModal = lazy(() => import('./components/ai/SkillsModal'))
 const UserRulesModal = lazy(() => import('./components/ai/UserRulesModal'))
 const ThemesModal = lazy(() => import('./components/settings/ThemesModal'))
 const TerminalAppearanceModal = lazy(() => import('./components/settings/TerminalAppearanceModal'))
+const KeyboardShortcutsModal = lazy(() => import('./components/settings/KeyboardShortcutsModal'))
 const LanguageModal = lazy(() => import('./components/settings/LanguageModal'))
 const StartupModal = lazy(() => import('./components/settings/StartupModal'))
 const AboutModal = lazy(() => import('./components/settings/AboutModal'))
@@ -42,6 +44,7 @@ export default function App(): JSX.Element {
   const loadTheme = useThemeStore((s) => s.load)
   const loadLocale = useLocaleStore((s) => s.load)
   const loadTerminalAppearance = useTerminalAppearanceStore((s) => s.load)
+  const loadKeybindings = useKeybindingsStore((s) => s.load)
   const loadSkills = useSkillsStore((s) => s.load)
   const loadUserRules = useUserRulesStore((s) => s.load)
   const [connectModal, setConnectModal] = useState<ConnectModalState | null>(null)
@@ -55,6 +58,7 @@ export default function App(): JSX.Element {
     void loadTheme()
     void loadLocale()
     void loadTerminalAppearance()
+    void loadKeybindings()
     void loadSkills()
     void loadUserRules()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -151,6 +155,11 @@ export default function App(): JSX.Element {
       {settingsPanel === 'terminal' && (
         <Suspense fallback={null}>
           <TerminalAppearanceModal onClose={() => setSettingsPanel(null)} />
+        </Suspense>
+      )}
+      {settingsPanel === 'shortcuts' && (
+        <Suspense fallback={null}>
+          <KeyboardShortcutsModal onClose={() => setSettingsPanel(null)} />
         </Suspense>
       )}
       {settingsPanel === 'language' && (

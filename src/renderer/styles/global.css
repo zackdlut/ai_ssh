@@ -7949,6 +7949,30 @@ select:focus {
   width: 100%;
 }
 
+.shortcut-recorder {
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--ink-600);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.shortcut-recorder:hover {
+  background: var(--surface-hover);
+}
+
+.shortcut-recorder.is-recording {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
 .terminal-stepper {
   display: flex;
   align-items: stretch;

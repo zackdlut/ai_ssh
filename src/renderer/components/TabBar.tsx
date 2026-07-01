@@ -16,6 +16,7 @@ export type SettingsMenuItem =
   | 'userRules'
   | 'themes'
   | 'terminal'
+  | 'shortcuts'
   | 'language'
   | 'startup'
   | 'about'
@@ -349,6 +350,15 @@ export default function TabBar({
                 }}
               >
                 {t('tabbar.terminalAppearance')}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                icon="edit"
+                onClick={() => {
+                  setSettingsOpen(false)
+                  onSettingsSelect('shortcuts')
+                }}
+              >
+                {t('tabbar.shortcuts')}
               </DropdownMenuItem>
               <DropdownMenuItem
                 icon="language"

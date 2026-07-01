@@ -78,6 +78,8 @@ export type {
   TerminalFontWeight
 } from './terminalSettings'
 
+export type { KeybindingId, KeybindingsSettings } from './keybindings'
+
 /** UI display language. */
 export type AppLocale = 'zh' | 'en'
 

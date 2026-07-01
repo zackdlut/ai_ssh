@@ -29,6 +29,7 @@ import type {
   ConnectionConfig,
   ConnectOptions,
   CopilotChatState,
+  KeybindingsSettings,
   TerminalAppearanceSettings,
   SftpListResult,
   SftpOpResult,
@@ -382,6 +383,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
   ipcMain.handle('config:getTerminalAppearance', () => config.getTerminalAppearance())
   ipcMain.handle('config:setTerminalAppearance', (_e, settings: TerminalAppearanceSettings) =>
     config.setTerminalAppearance(settings)
+  )
+  ipcMain.handle('config:getKeybindings', () => config.getKeybindings())
+  ipcMain.handle('config:setKeybindings', (_e, settings: KeybindingsSettings) =>
+    config.setKeybindings(settings)
   )
   ipcMain.handle('config:getConnections', () => config.getConnections())
   ipcMain.handle('config:saveConnection', (_e, conn: ConnectionConfig) =>
