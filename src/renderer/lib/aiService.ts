@@ -2,7 +2,7 @@ import { useAIStore, DEFAULT_CHAT_TAB_TITLE } from '../store/aiStore'
 import { useTabsStore } from '../store/tabsStore'
 import { COPILOT_CONTEXT_MAX_LINES, COPILOT_TERMINAL_MENTION_MAX_LINES, readTerminalOutput } from './terminalRegistry'
 import { normalizeAISettings, resolveActiveContextLength } from '../../shared/aiSettings'
-import { COPILOT_SYSTEM_PROMPT } from '../../shared/copilotPrompts'
+import { buildEffectiveSystemPrompt } from '../../shared/userRules'
 import { selectMessagesToCompress, buildChatPayload, type BudgetMessage } from '../../shared/contextBudget'
 import { buildContextMessage } from '../../shared/terminalContext'
 import { translate } from './i18n/translations'
@@ -20,6 +20,7 @@ import {
   parseToolApprovalInput
 } from './toolApproval'
 import type { ChatMessage } from '../store/aiStore'
+import { useUserRulesStore } from '../store/userRulesStore'
 import type { ChatMessageDTO, TerminalContext, ToolCallView } from '../../shared/types'
 
 /**
@@ -103,7 +104,8 @@ function startTurn(loop: LoopState, epilogue = false): void {
   }
   pending.set(requestId, { tabId: loop.tabId, messageId: assistantId, loop, epilogue })
   ai.setBusy(true, requestId, loop.tabId)
-  window.api.ai.chat({ requestId, messages, context: loop.context, enableTools: true })
+  const userRules = useUserRulesStore.getState().rules
+  window.api.ai.chat({ requestId, messages, context: loop.context, enableTools: true, userRules })
 }
 
 /** Execute a single tool call and record its outcome, then advance the loop. */
@@ -378,8 +380,9 @@ export async function sendPrompt(text: string): Promise<void> {
   const settings = normalizeAISettings(await window.api.config.getAISettings())
   const limit = resolveActiveContextLength(settings)
   const contextMessage = buildContextMessage(context)
+  const userRules = useUserRulesStore.getState().rules
   const budgetParams = {
-    systemPrompt: COPILOT_SYSTEM_PROMPT,
+    systemPrompt: buildEffectiveSystemPrompt(userRules),
     contextMessage,
     draft: prompt,
     limit
@@ -472,9 +475,10 @@ export function computeActiveTabBudget(params: {
   draft: string
   context?: TerminalContext
   limit: number
+  userRules?: string
 }) {
   return buildChatPayload({
-    systemPrompt: COPILOT_SYSTEM_PROMPT,
+    systemPrompt: buildEffectiveSystemPrompt(params.userRules ?? ''),
     contextMessage: buildContextMessage(params.context),
     messages: params.messages,
     draft: params.draft,

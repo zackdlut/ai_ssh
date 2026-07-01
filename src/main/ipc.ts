@@ -399,6 +399,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
   ipcMain.handle('config:setCopilotChats', (_e, state: CopilotChatState | null) =>
     config.setCopilotChats(state)
   )
+  ipcMain.handle('config:getUserRules', () => config.getUserRules())
+  ipcMain.handle('config:setUserRules', (_e, rules: string) => config.setUserRules(rules))
 
   // --- Skills ---
   ipcMain.handle('skills:list', () => skills.listSkills())

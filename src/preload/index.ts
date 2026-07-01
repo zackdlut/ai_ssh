@@ -157,7 +157,9 @@ const api = {
     getCopilotChats: (): Promise<CopilotChatState | null> =>
       ipcRenderer.invoke('config:getCopilotChats'),
     setCopilotChats: (state: CopilotChatState | null): Promise<CopilotChatState | null> =>
-      ipcRenderer.invoke('config:setCopilotChats', state)
+      ipcRenderer.invoke('config:setCopilotChats', state),
+    getUserRules: (): Promise<string> => ipcRenderer.invoke('config:getUserRules'),
+    setUserRules: (rules: string): Promise<string> => ipcRenderer.invoke('config:setUserRules', rules)
   },
   skills: {
     list: (): Promise<InstalledSkill[]> => ipcRenderer.invoke('skills:list'),

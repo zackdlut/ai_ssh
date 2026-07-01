@@ -36,6 +36,7 @@ const zh = {
   'tabbar.terminalAppearance': '终端外观',
   'tabbar.aiSettings': 'AI 设置',
   'tabbar.skills': '技能',
+  'tabbar.userRules': '用户规则',
   'tabbar.language': '语言',
   'tabbar.startup': '启动设置',
   'tabbar.about': '关于',
@@ -105,6 +106,12 @@ const zh = {
   'settings.skills.installing': '安装中…',
   'settings.skills.remove': '移除',
   'settings.skills.noDescription': '（无描述）',
+
+  'settings.userRules.title': '用户规则',
+  'settings.userRules.hint':
+    '在此编写自定义指令，会注入到 Copilot 的系统提示中，用于引导 AI 的行为（例如偏好语言、命令风格、安全约束等）。规则在每次对话轮次中生效。',
+  'settings.userRules.placeholder':
+    '例如：\n- 优先使用中文回答\n- 运行破坏性命令前必须征求确认\n- 优先使用 apt 而非 yum',
 
   'settings.terminal.title': '终端外观',
   'settings.terminal.textSection': '文字',
@@ -481,6 +488,7 @@ const en: Record<keyof typeof zh, string> = {
   'tabbar.terminalAppearance': 'Terminal Appearance',
   'tabbar.aiSettings': 'AI Settings',
   'tabbar.skills': 'Skills',
+  'tabbar.userRules': 'User Rules',
   'tabbar.language': 'Language',
   'tabbar.startup': 'Startup',
   'tabbar.about': 'About',
@@ -551,6 +559,12 @@ const en: Record<keyof typeof zh, string> = {
   'settings.skills.installing': 'Installing…',
   'settings.skills.remove': 'Remove',
   'settings.skills.noDescription': '(no description)',
+
+  'settings.userRules.title': 'User Rules',
+  'settings.userRules.hint':
+    'Write custom instructions here. They are injected into the Copilot system prompt on every turn to guide agent behavior (e.g. preferred language, command style, safety constraints).',
+  'settings.userRules.placeholder':
+    'For example:\n- Prefer Chinese replies\n- Always ask before destructive commands\n- Prefer apt over yum',
 
   'settings.terminal.title': 'Terminal Appearance',
   'settings.terminal.textSection': 'Text',

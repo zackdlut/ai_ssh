@@ -5587,6 +5587,21 @@ select:focus {
   border-radius: 10px;
 }
 
+.modal-user-rules .modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.user-rules-textarea {
+  width: 100%;
+  min-height: 240px;
+  resize: vertical;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .skills-list {
   display: flex;
   flex-direction: column;

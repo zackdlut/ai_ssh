@@ -14,6 +14,7 @@ import { useT, type TranslationKey } from '../../lib/i18n'
 import { SHORTCUT_COPY, SHORTCUT_CUT, SHORTCUT_PASTE } from '../../lib/shortcuts'
 import ContextMenuItem from '../ContextMenuItem'
 import { useLocaleStore } from '../../store/localeStore'
+import { useUserRulesStore } from '../../store/userRulesStore'
 import ChatMessage from './ChatMessage'
 import ChatTabBar from './ChatTabBar'
 import ChatHistoryPanel from './ChatHistoryPanel'
@@ -69,6 +70,7 @@ export default function SidePanel(): JSX.Element {
   const [menu, setMenu] = useState<ContextMenu | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const locale = useLocaleStore((s) => s.locale)
+  const userRules = useUserRulesStore((s) => s.rules)
   const t = useT()
 
   useEffect(() => {
@@ -103,9 +105,10 @@ export default function SidePanel(): JSX.Element {
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
       draft: input,
       context,
-      limit
+      limit,
+      userRules
     })
-  }, [messages, input, activeTab, copilotProfile, contextLengths, activeChatTabId])
+  }, [messages, input, activeTab, copilotProfile, contextLengths, activeChatTabId, userRules])
 
   const waitingToolApproval = Boolean(
     activeChatTabId && hasPendingToolCalls(activeChatTabId)

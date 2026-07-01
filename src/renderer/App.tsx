@@ -10,6 +10,7 @@ import { useThemeStore } from './store/themeStore'
 import { useLocaleStore } from './store/localeStore'
 import { useTerminalAppearanceStore } from './store/terminalAppearanceStore'
 import { useSkillsStore } from './store/skillsStore'
+import { useUserRulesStore } from './store/userRulesStore'
 import { getConnSidebarStartupOpen } from './store/startupStore'
 import { initAIService } from './lib/aiService'
 import { addEmptyTab } from './lib/connect'
@@ -21,6 +22,7 @@ const SftpPanel = lazy(() => import('./components/sftp/SftpPanel'))
 const ConnectModal = lazy(() => import('./components/connection/ConnectModal'))
 const SettingsModal = lazy(() => import('./components/ai/SettingsModal'))
 const SkillsModal = lazy(() => import('./components/ai/SkillsModal'))
+const UserRulesModal = lazy(() => import('./components/ai/UserRulesModal'))
 const ThemesModal = lazy(() => import('./components/settings/ThemesModal'))
 const TerminalAppearanceModal = lazy(() => import('./components/settings/TerminalAppearanceModal'))
 const LanguageModal = lazy(() => import('./components/settings/LanguageModal'))
@@ -41,6 +43,7 @@ export default function App(): JSX.Element {
   const loadLocale = useLocaleStore((s) => s.load)
   const loadTerminalAppearance = useTerminalAppearanceStore((s) => s.load)
   const loadSkills = useSkillsStore((s) => s.load)
+  const loadUserRules = useUserRulesStore((s) => s.load)
   const [connectModal, setConnectModal] = useState<ConnectModalState | null>(null)
   const [settingsPanel, setSettingsPanel] = useState<SettingsMenuItem | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(getConnSidebarStartupOpen)
@@ -53,6 +56,7 @@ export default function App(): JSX.Element {
     void loadLocale()
     void loadTerminalAppearance()
     void loadSkills()
+    void loadUserRules()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -132,6 +136,11 @@ export default function App(): JSX.Element {
       {settingsPanel === 'skills' && (
         <Suspense fallback={null}>
           <SkillsModal onClose={() => setSettingsPanel(null)} />
+        </Suspense>
+      )}
+      {settingsPanel === 'userRules' && (
+        <Suspense fallback={null}>
+          <UserRulesModal onClose={() => setSettingsPanel(null)} />
         </Suspense>
       )}
       {settingsPanel === 'themes' && (

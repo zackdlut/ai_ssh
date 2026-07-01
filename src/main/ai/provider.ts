@@ -30,6 +30,7 @@ import {
   HISTORY_SUMMARY_SYSTEM_PROMPT,
   buildContextMessage
 } from './prompt'
+import { buildUserRulesSystemMessage } from '../../shared/userRules'
 
 /**
  * JSON Schema for the ChartSpec, used with the provider's strict structured
@@ -271,6 +272,10 @@ export class AIProvider {
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: 'system', content: SYSTEM_PROMPT }
     ]
+    const userRulesMessage = buildUserRulesSystemMessage(req.userRules ?? '')
+    if (userRulesMessage) {
+      messages.push({ role: 'system', content: userRulesMessage })
+    }
     const contextMessage = buildContextMessage(req.context)
     if (contextMessage) {
       messages.push({ role: 'system', content: contextMessage })

@@ -13,6 +13,7 @@ import ContextMenuItem from './ContextMenuItem'
 export type SettingsMenuItem =
   | 'ai'
   | 'skills'
+  | 'userRules'
   | 'themes'
   | 'terminal'
   | 'language'
@@ -384,6 +385,15 @@ export default function TabBar({
                 }}
               >
                 {t('tabbar.skills')}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                icon="edit"
+                onClick={() => {
+                  setSettingsOpen(false)
+                  onSettingsSelect('userRules')
+                }}
+              >
+                {t('tabbar.userRules')}
               </DropdownMenuItem>
               <div className="toolbar-dropdown-divider" role="separator" />
               <DropdownMenuItem

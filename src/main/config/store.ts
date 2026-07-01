@@ -24,6 +24,8 @@ interface StoreSchema {
   folders: BookmarkFolder[]
   copilotChats: CopilotChatState | null
   skills: InstalledSkill[]
+  /** Custom instructions injected into the copilot system prompt. */
+  userRules: string
 }
 
 let _store: Store<StoreSchema> | null = null
@@ -51,7 +53,8 @@ function store(): Store<StoreSchema> {
         connections: [],
         folders: [],
         copilotChats: null,
-        skills: []
+        skills: [],
+        userRules: ''
       }
     })
   }
@@ -173,6 +176,17 @@ export function getSkills(): InstalledSkill[] {
 export function setSkills(list: InstalledSkill[]): InstalledSkill[] {
   store().set('skills', list)
   return getSkills()
+}
+
+export function getUserRules(): string {
+  const rules = store().get('userRules')
+  return typeof rules === 'string' ? rules : ''
+}
+
+export function setUserRules(rules: string): string {
+  const normalized = typeof rules === 'string' ? rules : ''
+  store().set('userRules', normalized)
+  return getUserRules()
 }
 
 export function deleteFolder(id: string): {

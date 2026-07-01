@@ -170,6 +170,8 @@ export interface AIChatRequest {
   context?: TerminalContext
   /** Enable function/tool calling for this request. */
   enableTools?: boolean
+  /** Custom user rules injected into the system prompt. */
+  userRules?: string
 }
 
 /** Summarize older Copilot turns before they exceed the context budget. */

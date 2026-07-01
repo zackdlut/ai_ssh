@@ -12,6 +12,7 @@ import { useLocaleStore } from '../store/localeStore'
 import { useTerminalAppearanceStore } from '../store/terminalAppearanceStore'
 import { useStartupStore } from '../store/startupStore'
 import { useSkillsStore } from '../store/skillsStore'
+import { useUserRulesStore } from '../store/userRulesStore'
 import { connect, connectFromConfig } from './connect'
 import { readFullTerminalOutput } from './terminalRegistry'
 import { normalizeAISettings } from '../../shared/aiSettings'
@@ -391,6 +392,7 @@ async function readAppSettings(): Promise<Record<string, unknown>> {
   const terminal = useTerminalAppearanceStore.getState()
   const startup = useStartupStore.getState()
   const ai = normalizeAISettings(await window.api.config.getAISettings())
+  const user_rules = useUserRulesStore.getState().rules
   return {
     theme,
     locale,
@@ -405,6 +407,7 @@ async function readAppSettings(): Promise<Record<string, unknown>> {
       connSidebarOpen: startup.connSidebarOpen,
       copilotOpen: startup.copilotOpen
     },
+    user_rules,
     ai: sanitizeAISettings(ai)
   }
 }
@@ -467,6 +470,13 @@ async function updateAppSettings(args: Record<string, unknown>): Promise<ToolRes
     if (typeof startupUpdates.copilotOpen === 'boolean') {
       startupStore.setCopilotOpen(startupUpdates.copilotOpen)
     }
+  }
+
+  if (updates.user_rules !== undefined) {
+    if (typeof updates.user_rules !== 'string') {
+      return { ok: false, error: 'user_rules must be a string.' }
+    }
+    await useUserRulesStore.getState().setRules(updates.user_rules)
   }
 
   if (updates.ai !== undefined) {
