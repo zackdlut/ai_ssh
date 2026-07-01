@@ -3,6 +3,8 @@ import {
   useAIStore,
   DEFAULT_CHAT_TAB_TITLE,
   MAX_CHAT_TABS,
+  CHAT_HISTORY_7_DAYS_MS,
+  CHAT_HISTORY_30_DAYS_MS,
   type ChatTab
 } from '../../store/aiStore'
 import { useT } from '../../lib/i18n'
@@ -10,6 +12,8 @@ import { useT } from '../../lib/i18n'
 interface Props {
   onClose: () => void
 }
+
+type BulkPurgeAction = 'all' | '7d' | '30d'
 
 function tabLabel(tab: ChatTab, newChatLabel: string): string {
   return tab.title === DEFAULT_CHAT_TAB_TITLE ? newChatLabel : tab.title
@@ -37,9 +41,18 @@ function formatRelativeTime(ts: number, t: ReturnType<typeof useT>): string {
 }
 
 export default function ChatHistoryPanel({ onClose }: Props): JSX.Element {
-  const { chatTabs, activeChatTabId, restoreChatTab, deleteChatTab, setNotice } = useAIStore()
+  const {
+    chatTabs,
+    activeChatTabId,
+    restoreChatTab,
+    deleteChatTab,
+    deleteAllChatHistory,
+    deleteChatHistoryOlderThan,
+    setNotice
+  } = useAIStore()
   const [query, setQuery] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [confirmBulkAction, setConfirmBulkAction] = useState<BulkPurgeAction | null>(null)
   const t = useT()
 
   const newChatLabel = t('copilot.newChat')
@@ -68,6 +81,7 @@ export default function ChatHistoryPanel({ onClose }: Props): JSX.Element {
 
   const handleDelete = (e: React.MouseEvent, tab: ChatTab): void => {
     e.stopPropagation()
+    setConfirmBulkAction(null)
     if (confirmDeleteId !== tab.id) {
       setConfirmDeleteId(tab.id)
       return
@@ -76,19 +90,63 @@ export default function ChatHistoryPanel({ onClose }: Props): JSX.Element {
     setConfirmDeleteId(null)
   }
 
+  const handleBulkPurge = (action: BulkPurgeAction): void => {
+    setConfirmDeleteId(null)
+    if (confirmBulkAction !== action) {
+      setConfirmBulkAction(action)
+      return
+    }
+
+    let removed = 0
+    if (action === 'all') {
+      removed = deleteAllChatHistory()
+    } else if (action === '7d') {
+      removed = deleteChatHistoryOlderThan(CHAT_HISTORY_7_DAYS_MS)
+    } else {
+      removed = deleteChatHistoryOlderThan(CHAT_HISTORY_30_DAYS_MS)
+    }
+
+    setConfirmBulkAction(null)
+    setNotice(
+      removed > 0
+        ? t('copilot.history.bulkRemoved', { count: removed })
+        : t('copilot.history.bulkNothing')
+    )
+  }
+
   useEffect(() => {
-    if (!confirmDeleteId) return
+    if (!confirmDeleteId && !confirmBulkAction) return
     const reset = (e: MouseEvent): void => {
       const target = e.target
       if (!(target instanceof Element)) return
       if (target.closest('.copilot-history-delete')) return
+      if (target.closest('.copilot-history-bulk-btn')) return
       setConfirmDeleteId(null)
+      setConfirmBulkAction(null)
     }
     window.addEventListener('click', reset)
     return () => window.removeEventListener('click', reset)
-  }, [confirmDeleteId])
+  }, [confirmDeleteId, confirmBulkAction])
 
   const totalCount = chatTabs.filter((tab) => tab.messages.length > 0).length
+
+  const bulkActions: { id: BulkPurgeAction; label: string; confirm: string }[] = [
+    {
+      id: '7d',
+      label: t('copilot.history.bulkOlder7d'),
+      confirm: t('copilot.history.bulkConfirm7d')
+    },
+    {
+      id: '30d',
+      label: t('copilot.history.bulkOlder30d'),
+      confirm: t('copilot.history.bulkConfirm30d')
+    },
+    {
+      id: 'all',
+      label: t('copilot.history.bulkRemoveAll'),
+      confirm: t('copilot.history.bulkConfirmAll')
+    }
+  ]
 
   return (
     <div className="copilot-history-overlay" onClick={onClose}>
@@ -185,6 +243,25 @@ export default function ChatHistoryPanel({ onClose }: Props): JSX.Element {
               )
             })
           )}
+        </div>
+
+        <div className="copilot-history-bulk">
+          <span className="copilot-history-bulk-label">{t('copilot.history.bulkLabel')}</span>
+          <div className="copilot-history-bulk-actions">
+            {bulkActions.map((action) => {
+              const confirming = confirmBulkAction === action.id
+              return (
+                <button
+                  key={action.id}
+                  type="button"
+                  className={`copilot-history-bulk-btn ${confirming ? 'confirming' : ''} ${action.id === 'all' ? 'danger' : ''}`}
+                  onClick={() => handleBulkPurge(action.id)}
+                >
+                  {confirming ? action.confirm : action.label}
+                </button>
+              )
+            })}
+          </div>
         </div>
       </div>
     </div>

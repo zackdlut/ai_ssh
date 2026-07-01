@@ -1,4 +1,8 @@
+import { app } from 'electron'
 import Store from 'electron-store'
+import { existsSync } from 'fs'
+import { join } from 'path'
+import { readCopilotChats, writeCopilotChats } from './copilotChatsStore'
 import { DEFAULT_MODELS, DEFAULT_CONTEXT_LENGTHS, cloneModels, cloneContextLengths, normalizeAISettings } from '../../shared/aiSettings'
 import {
   DEFAULT_TERMINAL_APPEARANCE,
@@ -25,13 +29,34 @@ interface StoreSchema {
   keybindings: KeybindingsSettings
   connections: ConnectionConfig[]
   folders: BookmarkFolder[]
-  copilotChats: CopilotChatState | null
   skills: InstalledSkill[]
   /** Custom instructions injected into the copilot system prompt. */
   userRules: string
 }
 
 let _store: Store<StoreSchema> | null = null
+let _copilotChatsMigrated = false
+
+const COPILOT_CHATS_FILE = 'copilotChats.json'
+
+/**
+ * Move legacy `copilotChats` data from config.json into copilotChats.json.
+ */
+function migrateCopilotChatsFromConfig(s: Store<StoreSchema>): void {
+  if (_copilotChatsMigrated) return
+  _copilotChatsMigrated = true
+
+  const chatsPath = join(app.getPath('userData'), COPILOT_CHATS_FILE)
+  const legacy = (s.store as { copilotChats?: CopilotChatState | null }).copilotChats
+
+  if (!existsSync(chatsPath) && legacy) {
+    writeCopilotChats(legacy)
+  }
+
+  if ('copilotChats' in s.store) {
+    s.delete('copilotChats' as never)
+  }
+}
 
 /**
  * Lazily create the store so it is only instantiated after the Electron app is
@@ -56,11 +81,11 @@ function store(): Store<StoreSchema> {
         keybindings: { ...DEFAULT_KEYBINDINGS },
         connections: [],
         folders: [],
-        copilotChats: null,
         skills: [],
         userRules: ''
       }
     })
+    migrateCopilotChatsFromConfig(_store)
   }
   return _store
 }
@@ -175,12 +200,14 @@ export function setFolders(list: BookmarkFolder[]): BookmarkFolder[] {
  * (parentId = null) instead of being destroyed.
  */
 export function getCopilotChats(): CopilotChatState | null {
-  return store().get('copilotChats')
+  store()
+  return readCopilotChats()
 }
 
 export function setCopilotChats(state: CopilotChatState | null): CopilotChatState | null {
-  store().set('copilotChats', state)
-  return getCopilotChats()
+  store()
+  writeCopilotChats(state)
+  return readCopilotChats()
 }
 
 export function getSkills(): InstalledSkill[] {

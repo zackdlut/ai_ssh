@@ -27,6 +27,9 @@ const PERSIST_DEBOUNCE_MS = 500
 const STREAM_PERSIST_DEBOUNCE_MS = 2000
 export const MAX_CHAT_TABS = 5
 
+export const CHAT_HISTORY_7_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+export const CHAT_HISTORY_30_DAYS_MS = 30 * 24 * 60 * 60 * 1000
+
 export const DEFAULT_CHAT_TAB_TITLE = '__copilot_new_chat__'
 
 export const clampPanelWidth = (w: number): number =>
@@ -74,6 +77,38 @@ function updateTab(tabs: ChatTab[], tabId: string, patch: Partial<ChatTab>): Cha
 
 function isPersistableTab(tab: ChatTab): boolean {
   return tab.messages.length > 0
+}
+
+function purgeChatTabs(
+  chatTabs: ChatTab[],
+  activeChatTabId: string | null,
+  shouldRemove: (tab: ChatTab) => boolean
+): { chatTabs: ChatTab[]; activeChatTabId: string; removed: number } {
+  const removeIds = new Set(chatTabs.filter(shouldRemove).map((t) => t.id))
+  if (removeIds.size === 0) {
+    return {
+      chatTabs,
+      activeChatTabId: activeChatTabId ?? chatTabs[0]?.id ?? createEmptyChatTab().id,
+      removed: 0
+    }
+  }
+
+  let remaining = chatTabs.filter((t) => !removeIds.has(t.id))
+  const removed = removeIds.size
+
+  if (remaining.length === 0 || openChatTabs(remaining).length === 0) {
+    const newTab = createEmptyChatTab()
+    remaining = [...remaining, newTab]
+    return { chatTabs: remaining, activeChatTabId: newTab.id, removed }
+  }
+
+  let nextActive = activeChatTabId
+  if (!nextActive || removeIds.has(nextActive)) {
+    const open = openChatTabs(remaining)
+    nextActive = open[open.length - 1]?.id ?? remaining[0].id
+  }
+
+  return { chatTabs: remaining, activeChatTabId: nextActive!, removed }
 }
 
 function toPersistedState(
@@ -196,6 +231,8 @@ interface AIState {
   archiveChatTab: (id: string) => void
   restoreChatTab: (id: string) => boolean
   deleteChatTab: (id: string) => void
+  deleteAllChatHistory: () => number
+  deleteChatHistoryOlderThan: (maxAgeMs: number) => number
   setActiveChatTab: (id: string) => void
   updateDraft: (tabId: string, draft: string) => void
   clearActiveTab: () => void
@@ -332,6 +369,31 @@ export const useAIStore = create<AIState>((set, get) => ({
       return { chatTabs, activeChatTabId }
     })
     schedulePersist(get)
+  },
+  deleteAllChatHistory: () => {
+    const removed = get().chatTabs.filter(isPersistableTab).length
+    if (removed === 0) return 0
+
+    const newTab = createEmptyChatTab()
+    set({ chatTabs: [newTab], activeChatTabId: newTab.id })
+    schedulePersist(get)
+    return removed
+  },
+  deleteChatHistoryOlderThan: (maxAgeMs) => {
+    const cutoff = Date.now() - maxAgeMs
+    let removed = 0
+    set((s) => {
+      const result = purgeChatTabs(
+        s.chatTabs,
+        s.activeChatTabId,
+        (tab) => isPersistableTab(tab) && tab.updatedAt < cutoff
+      )
+      removed = result.removed
+      if (removed === 0) return s
+      return { chatTabs: result.chatTabs, activeChatTabId: result.activeChatTabId }
+    })
+    if (removed > 0) schedulePersist(get)
+    return removed
   },
   setActiveChatTab: (id) => {
     set({ activeChatTabId: id })
