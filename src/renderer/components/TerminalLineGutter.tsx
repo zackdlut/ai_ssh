@@ -44,19 +44,17 @@ export default function TerminalLineGutter({
     const update = (): void => {
       const buffer = term.buffer.active
       const count = term.rows
-      const viewportTop = buffer.viewportY
-      const cursorLine = buffer.baseY + buffer.cursorY
 
       const lines: GutterLine[] = Array.from({ length: count }, (_, i) => {
-        const num = viewportTop + i + 1
+        const num = i + 1
         return {
           num,
-          isCurrent: viewportTop + i === cursorLine,
+          isCurrent: i === buffer.cursorY,
           isMajor: num % 5 === 0
         }
       })
 
-      const maxNum = lines[lines.length - 1]?.num ?? 1
+      const maxNum = count || 1
       const digits = String(maxNum).length
       const screen = term.element?.querySelector('.xterm-screen')
       const cellWidth = screen && term.cols > 0 ? screen.clientWidth / term.cols : fontSize * 0.62

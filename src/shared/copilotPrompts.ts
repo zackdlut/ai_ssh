@@ -61,11 +61,14 @@ Diagrams (mermaid):
 - The mermaid block must contain ONLY the diagram. NEVER put prose, sentences, headings, or Markdown tables inside the mermaid block — describe such things in normal text OUTSIDE the block.
 - The FIRST line MUST be a valid diagram declaration with EXACT casing, chosen ONLY from this canonical set — never invent or misspell a keyword (e.g. NOT "sequencediagram" or "sequenceDigram"): graph LR, graph TD, flowchart LR, flowchart TD, sequenceDiagram, classDiagram, stateDiagram-v2, erDiagram, pie, gantt.
 - NEVER mix syntax from two diagram types in one block (e.g. do not put sequenceDiagram arrows inside a flowchart).
-- Keep every delimiter pair balanced and closed: ( ), [ ], { }. Example: B[Strict gate] not B[Strict gate.
+- Keep every delimiter pair balanced and closed on each line: ( ), [ ], { }, and ". Example: B["Strict gate"] not B[Strict gate; never leave trailing ]] or a dangling quote.
 - Every quote must be closed; never leave a dangling double quote. Example: participant U as "User" not participant U as "User.
-- ALWAYS wrap label/node text in double quotes when it contains spaces or any of these characters: ( ) [ ] { } : ; < > / # = & |. This includes mindmap and node text. Examples: A["Echo Request (seq=1)"] not A[Echo Request (seq=1)]; use "lock method" not lock()method.
+- ALWAYS wrap label/node text in double quotes when it contains spaces or any of these characters: ( ) [ ] { } : ; < > / # = & |. This includes mindmap and node text. Examples: A["Echo Request (seq=1)"] not A[Echo Request (seq=1)]; P1["/dev/mapper/vg00-root (根分区): 6.8G"] not P1[/dev/mapper/vg00-root (根分区): 6.8G].
+- For file paths, disk-usage trees, or any label containing / ( ) : = %, do NOT use the parallelogram /.../ shape — its slash delimiters collide with path slashes. Use a quoted rectangle [...] instead.
+- NEVER invent metadata or key-value syntax after a node or class. Valid class attachment is ONLY :::classname with nothing after it — NEVER :::data[used=..., total=...], ::data[key=value], or any bracket block appended after :::class. Mermaid has no [metadata] blocks. Put all stats inside the quoted label, using <br/> for a second line: P1["/dev/mapper/vg00-root (根分区): 6.8G<br/>used=5347, total=8602, 83%"]:::data
+- Class attachment uses exactly THREE colons: :::data not ::data. Only attach :::class if you also declare it with classDef in the same diagram; otherwise omit it.
 - Keep node ids simple (e.g. A, B, node_1) and reference each subgraph/node by a bare id (e.g. B --> Results), never with empty brackets like Results[""].
-- For line breaks inside a label use <br/>. NEVER use a literal \\n. Do NOT put other raw HTML (such as <ul>, <li>, <b>) inside labels.
-- Only attach a ::: class to a node if you also declare that class with classDef in the same diagram; otherwise omit it.
+- For line breaks inside a label use <br/>. NEVER use a literal \\n. Do NOT put other raw HTML (such as <ul>, <li>, <b>) or HTML entities (such as &#9;) inside labels — use a normal space or <br/>.
+- Use ASCII punctuation inside labels (comma , not Chinese ，). Percent signs and equals signs are fine inside quoted labels.
 - Do NOT put { } inside %% comments; mermaid may treat it as a directive and fail.
 - Keep diagrams small; prefer "graph TD" / "graph LR" or "sequenceDiagram".`
