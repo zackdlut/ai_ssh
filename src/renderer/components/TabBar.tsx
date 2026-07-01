@@ -238,29 +238,35 @@ export default function TabBar({
         >
           <span className={`status-dot ${tab.nlMode ? 'nl' : tab.status}`} />
           {tab.id === activeTabId && <span className="tab-underline" aria-hidden />}
-          {renamingId === tab.id ? (
-            <input
-              className="tab-title-input"
-              value={renameValue}
-              autoFocus
-              onFocus={(e) => e.currentTarget.select()}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onClick={(e) => e.stopPropagation()}
-              onDoubleClick={(e) => e.stopPropagation()}
-              onBlur={commitRename}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  commitRename()
-                } else if (e.key === 'Escape') {
-                  e.preventDefault()
-                  cancelRename()
-                }
-              }}
-            />
-          ) : (
-            <span className="tab-title">{tabLabel(tab)}</span>
-          )}
+          <span className="tab-label">
+            <span
+              className="tab-title"
+              aria-hidden={renamingId === tab.id}
+            >
+              {tabLabel(tab)}
+            </span>
+            {renamingId === tab.id ? (
+              <input
+                className="tab-title-input"
+                value={renameValue}
+                autoFocus
+                onFocus={(e) => e.currentTarget.select()}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+                onBlur={commitRename}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    commitRename()
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault()
+                    cancelRename()
+                  }
+                }}
+              />
+            ) : null}
+          </span>
           <button
             className="close-btn"
             onClick={(e) => handleClose(e, tab)}

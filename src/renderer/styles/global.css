@@ -956,6 +956,7 @@ select:focus {
 /* Active tab: an opaque folder that visually merges into the tab strip, with
    concave arc corners flaring outward at the bottom (Chrome-style connection). */
 .tab.active {
+  --tab-arc: 20px;
   --tab-fill: color-mix(in srgb, var(--bg-elevated) 84%, var(--signal) 16%);
   background: var(--tab-fill);
   color: var(--text);
@@ -974,19 +975,27 @@ select:focus {
   content: '';
   position: absolute;
   bottom: -1px;
-  width: 13px;
-  height: 13px;
+  width: var(--tab-arc);
+  height: var(--tab-arc);
   pointer-events: none;
 }
 
 .tab.active::before {
-  left: -13px;
-  background: radial-gradient(circle at top left, transparent 13px, var(--tab-fill) 13.5px);
+  left: calc(-1 * var(--tab-arc));
+  background: radial-gradient(
+    circle at top left,
+    transparent var(--tab-arc),
+    var(--tab-fill) calc(var(--tab-arc) + 0.5px)
+  );
 }
 
 .tab.active::after {
-  right: -13px;
-  background: radial-gradient(circle at top right, transparent 13px, var(--tab-fill) 13.5px);
+  right: calc(-1 * var(--tab-arc));
+  background: radial-gradient(
+    circle at top right,
+    transparent var(--tab-arc),
+    var(--tab-fill) calc(var(--tab-arc) + 0.5px)
+  );
 }
 
 /* Unified active underline (marker-aware accent), rendered as a child so the
@@ -1033,9 +1042,22 @@ select:focus {
   border-color: transparent;
 }
 
-.tab .tab-title-input {
+.tab .tab-label {
+  position: relative;
   min-width: 0;
-  flex: 1;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.tab .tab-title-input {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
   border: 1px solid var(--accent-border);
   border-radius: 4px;
   background: var(--control-bg);
@@ -1047,10 +1069,15 @@ select:focus {
 }
 
 .tab .tab-title {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
+}
+
+.tab .tab-title[aria-hidden='true'] {
+  visibility: hidden;
 }
 
 .tab .status-dot {
