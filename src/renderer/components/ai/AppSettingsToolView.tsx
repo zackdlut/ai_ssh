@@ -62,6 +62,30 @@ function formatContextTokens(n: number): string {
   return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)
 }
 
+function ReadonlyProfileSeg({
+  locale,
+  value
+}: {
+  locale: AppLocale
+  value: ModelProfile
+}): JSX.Element {
+  return (
+    <div className="seg seg-profile tool-settings-seg tool-settings-seg--readonly" aria-readonly>
+      {MODEL_PROFILES.map((profile) => (
+        <button
+          key={profile.id}
+          type="button"
+          tabIndex={-1}
+          className={value === profile.id ? 'active' : ''}
+          aria-pressed={value === profile.id}
+        >
+          {modelProfileLabel(locale, profile.id)}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function sectionClass(changed: boolean, index: number): string {
   const base = `tool-settings-section-block tool-settings-reveal-${index}`
   return changed ? `${base} tool-settings-changed` : base
@@ -497,6 +521,15 @@ export default function AppSettingsToolView({
             </>
           ) : (
             <div className="tool-settings-ai-read">
+              <div className="tool-settings-sub">
+                <span className="tool-settings-field-label">{t('tool.settings.copilotModelProfile')}</span>
+                <ReadonlyProfileSeg locale={locale} value={ai.copilotModelProfile} />
+              </div>
+              <div className="tool-settings-sub">
+                <span className="tool-settings-field-label">{t('tool.settings.nlModelProfile')}</span>
+                <ReadonlyProfileSeg locale={locale} value={ai.nlModelProfile} />
+              </div>
+
               <div className="tool-settings-provider">
                 <div className="tool-settings-provider-row">
                   <span className="tool-settings-provider-label">{t('tool.settings.baseURL')}</span>
@@ -549,7 +582,9 @@ export default function AppSettingsToolView({
                               </span>
                             )}
                             {isNl && (
-                              <span className="tool-settings-tag">{t('tool.settings.tagNl')}</span>
+                              <span className="tool-settings-tag tool-settings-tag--accent">
+                                {t('tool.settings.tagNl')}
+                              </span>
                             )}
                           </span>
                         )}

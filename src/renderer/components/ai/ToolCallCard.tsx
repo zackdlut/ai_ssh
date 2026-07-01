@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { approveToolCall, rejectToolCall } from '../../lib/aiService'
 import { isDangerous } from '../../lib/commands'
 import { isDangerousTool } from '../../../shared/aiTools'
@@ -511,6 +511,7 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
   const [draftSettingsUpdates, setDraftSettingsUpdates] = useState<Record<string, unknown> | null>(
     null
   )
+  const cardRef = useRef<HTMLDivElement>(null)
 
   const statusLabel =
     call.status === 'running'
@@ -542,6 +543,27 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
   const showDetails = hasBody || (command !== null && Object.keys(args).length > 1)
   const isSettingsResult = call.name === 'get_app_settings' || call.name === 'update_app_settings'
 
+  useEffect(() => {
+    if (!pending) return
+    const el = cardRef.current
+    if (!el) return
+
+    const revealIfClipped = (): void => {
+      const list = el.closest('.chat-list')
+      if (!list) return
+      const cardRect = el.getBoundingClientRect()
+      const listRect = list.getBoundingClientRect()
+      if (cardRect.bottom > listRect.bottom - 10) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'end' })
+      }
+    }
+
+    revealIfClipped()
+    const observer = new ResizeObserver(revealIfClipped)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [pending])
+
   const handleApprove = (): void => {
     if (isSettingsUpdateTool) {
       const finalUpdates = draftSettingsUpdates ?? updates
@@ -556,6 +578,7 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
 
   return (
     <div
+      ref={cardRef}
       className={`command-card tool-call-card tool-cat-${category} ${dangerous ? 'danger' : ''} status-${call.status}`}
     >
       <div className="tool-call-head">

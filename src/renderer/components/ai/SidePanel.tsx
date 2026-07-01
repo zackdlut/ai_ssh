@@ -359,7 +359,11 @@ export default function SidePanel(): JSX.Element {
 
       <ChatTabBar onOpenHistory={() => setHistoryOpen(true)} />
 
-      <div className="chat-list" ref={listRef} onContextMenu={onChatContextMenu}>
+      <div
+        className={`chat-list${waitingToolApproval ? ' chat-list--approval' : ''}`}
+        ref={listRef}
+        onContextMenu={onChatContextMenu}
+      >
         {messages.length === 0 ? (
           <div className="chat-empty">
             {t('copilot.emptyLead')}

@@ -1613,6 +1613,10 @@ select:focus {
   gap: 18px;
 }
 
+.chat-list--approval {
+  scroll-padding-bottom: 16px;
+}
+
 .chat-msg {
   display: flex;
   flex-direction: column;
@@ -3682,6 +3686,10 @@ select:focus {
 }
 
 .tool-call-card.status-pending {
+  display: flex;
+  flex-direction: column;
+  max-height: min(68vh, 540px);
+  overflow: hidden;
   border-color: color-mix(in srgb, var(--tool-accent) 45%, var(--line-strong));
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--tool-accent) 12%, transparent),
@@ -3825,6 +3833,31 @@ select:focus {
   padding: 4px 14px 10px 16px;
 }
 
+/* Tall previews (e.g. app settings) scroll inside the card; approval stays pinned. */
+.tool-call-card.status-pending .tool-call-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.tool-call-card.status-pending .tool-call-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.tool-call-card.status-pending .tool-call-body::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 999px;
+}
+
+.tool-call-card.status-pending .danger-banner {
+  flex: none;
+}
+
 .tool-call-card .tool-section-label {
   font-size: 10.5px;
   font-weight: 650;
@@ -3951,6 +3984,13 @@ select:focus {
   padding: 12px 14px 12px 16px;
   border-top: 1px solid var(--line);
   background: linear-gradient(180deg, rgba(255, 206, 106, 0.06), rgba(255, 255, 255, 0.02));
+}
+
+.tool-call-card.status-pending .tool-approval-panel {
+  flex: none;
+  margin-top: auto;
+  z-index: 1;
+  box-shadow: 0 -10px 20px -12px color-mix(in srgb, var(--bg) 80%, transparent);
 }
 
 .tool-call-card .tool-approval-copy {
@@ -4533,6 +4573,18 @@ select:focus {
 .tool-call-card .tool-settings-seg.seg-profile button {
   font-size: 11px;
   padding: 6px 4px;
+}
+
+.tool-call-card .tool-settings-seg--readonly {
+  pointer-events: none;
+}
+
+.tool-call-card .tool-settings-seg--readonly button {
+  cursor: default;
+}
+
+.tool-call-card .tool-settings-seg--readonly button:not(.active) {
+  color: var(--text-faint);
 }
 
 .tool-call-card .tool-settings-field {
