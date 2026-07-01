@@ -59,10 +59,6 @@ export default function TerminalPreview({
               <span style={{ color: theme.blue }}>projects</span>
             </div>
             <div>
-              <span style={{ color: fg }}>grep </span>
-              <span style={{ color: theme.yellow }}>&quot;err&quot;</span>
-            </div>
-            <div>
               <span style={{ color: theme.red }}>ERR</span>
               <span style={{ color: fg }}>: refused</span>
             </div>

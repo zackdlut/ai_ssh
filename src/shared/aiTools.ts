@@ -306,7 +306,7 @@ export const AI_TOOLS: AIToolDefinition[] = [
     function: {
       name: 'get_app_settings',
       description:
-        'Read the current application settings: UI theme, language, terminal appearance, and AI configuration (apiKey is not returned; only hasApiKey). Call this when unsure of current values before updating.',
+        'Read the current application settings: UI theme, language, terminal appearance, startup panel preferences, and AI configuration (apiKey is not returned; only hasApiKey). Call this when unsure of current values before updating.',
       parameters: { type: 'object', properties: {}, additionalProperties: false }
     }
   },
@@ -315,7 +315,7 @@ export const AI_TOOLS: AIToolDefinition[] = [
     function: {
       name: 'update_app_settings',
       description:
-        'Update application settings. Pass an updates object with only the fields to change. Supports theme (aurora/dawn), locale (zh/en), terminal_appearance (colorScheme, fontFamily, fontSize, lineHeight, fontWeight), and ai (baseURL, apiKey, copilotModelProfile, nlModelProfile, models, contextLengths). Batch multiple categories in one call when the user asks for several changes.',
+        'Update application settings. Pass an updates object with only the fields to change. Supports theme (aurora/dawn), locale (zh/en), terminal_appearance (colorScheme, fontFamily, fontSize, lineHeight, fontWeight), startup (connSidebarOpen, copilotOpen — whether each side panel opens on app launch), and ai (baseURL, apiKey, copilotModelProfile, nlModelProfile, models, contextLengths). Batch multiple categories in one call when the user asks for several changes.',
       parameters: {
         type: 'object',
         properties: {
@@ -332,6 +332,21 @@ export const AI_TOOLS: AIToolDefinition[] = [
                 type: 'string',
                 enum: ['zh', 'en'],
                 description: 'UI display language.'
+              },
+              startup: {
+                type: 'object',
+                description: 'Which side panels open automatically on app launch.',
+                properties: {
+                  connSidebarOpen: {
+                    type: 'boolean',
+                    description: 'Open the left connection sidebar on startup.'
+                  },
+                  copilotOpen: {
+                    type: 'boolean',
+                    description: 'Open the right AI Copilot chat sidebar on startup.'
+                  }
+                },
+                additionalProperties: false
               },
               terminal_appearance: {
                 type: 'object',

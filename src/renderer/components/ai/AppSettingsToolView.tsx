@@ -24,10 +24,13 @@ import {
   aiFieldChanged,
   aiNestedFieldChanged,
   hasAiUpdates,
+  hasStartupUpdates,
   hasTerminalUpdates,
   hasUiUpdates,
+  startupFieldChanged,
   terminalFieldChanged,
-  type AppSettingsSnapshot
+  type AppSettingsSnapshot,
+  type StartupSettings
 } from '../../lib/appSettingsMerge'
 import {
   TERMINAL_FONT_WEIGHTS,
@@ -88,6 +91,20 @@ function ReadonlyProfileSeg({
   )
 }
 
+/**
+ * A tiny window title bar (traffic-light dots) that frames the terminal preview
+ * so it reads as a mini window, matching the theme preview and startup diagram.
+ */
+function TerminalChrome(): JSX.Element {
+  return (
+    <div className="tool-settings-terminal-chrome" aria-hidden>
+      <span className="tool-settings-terminal-dot" />
+      <span className="tool-settings-terminal-dot" />
+      <span className="tool-settings-terminal-dot" />
+    </div>
+  )
+}
+
 function TerminalField({
   label,
   changed,
@@ -108,6 +125,113 @@ function TerminalField({
 function terminalFontLabel(locale: AppLocale, fontFamily: string): string {
   const preset = matchTerminalFontPreset(fontFamily)
   return preset ? terminalFontPresetLabel(locale, preset) : primaryFontName(fontFamily)
+}
+
+/**
+ * A miniature app-window schematic that doubles as the startup-panel toggles.
+ * The left slab is the connection sidebar (a tiny list), the right slab is the
+ * Copilot chat (tiny bubbles); toggling lights the panel up in the accent color
+ * or collapses it, mirroring what the user will see on next launch.
+ */
+function StartupLayoutDiagram({
+  connOpen,
+  copilotOpen,
+  editable,
+  changedConn,
+  changedCopilot,
+  connLabel,
+  copilotLabel,
+  onText,
+  offText,
+  onToggleConn,
+  onToggleCopilot
+}: {
+  connOpen: boolean
+  copilotOpen: boolean
+  editable: boolean
+  changedConn: boolean
+  changedCopilot: boolean
+  connLabel: string
+  copilotLabel: string
+  onText: string
+  offText: string
+  onToggleConn: () => void
+  onToggleCopilot: () => void
+}): JSX.Element {
+  const Slab = editable ? 'button' : 'div'
+
+  const leftSlab = (
+    <Slab
+      type={editable ? 'button' : undefined}
+      className={`startup-slab startup-slab--left ${connOpen ? 'is-on' : 'is-off'}${
+        changedConn ? ' is-changed' : ''
+      }`}
+      onClick={editable ? onToggleConn : undefined}
+      aria-pressed={editable ? connOpen : undefined}
+      aria-label={editable ? `${connLabel} · ${connOpen ? onText : offText}` : undefined}
+      title={editable ? connLabel : undefined}
+    >
+      <span className="startup-rows" aria-hidden>
+        <i />
+        <i />
+        <i />
+        <i />
+      </span>
+    </Slab>
+  )
+
+  const rightSlab = (
+    <Slab
+      type={editable ? 'button' : undefined}
+      className={`startup-slab startup-slab--right ${copilotOpen ? 'is-on' : 'is-off'}${
+        changedCopilot ? ' is-changed' : ''
+      }`}
+      onClick={editable ? onToggleCopilot : undefined}
+      aria-pressed={editable ? copilotOpen : undefined}
+      aria-label={editable ? `${copilotLabel} · ${copilotOpen ? onText : offText}` : undefined}
+      title={editable ? copilotLabel : undefined}
+    >
+      <span className="startup-bubbles" aria-hidden>
+        <i />
+        <i />
+        <i />
+      </span>
+    </Slab>
+  )
+
+  return (
+    <div className={`startup-diagram${editable ? ' is-editable' : ''}`}>
+      <div className="startup-window">
+        <div className="startup-window-bar" aria-hidden>
+          <span className="startup-window-dot" />
+          <span className="startup-window-dot" />
+          <span className="startup-window-dot" />
+        </div>
+        <div className="startup-window-body">
+          {leftSlab}
+          <div className="startup-window-main" aria-hidden>
+            <span className="startup-term-prompt">~ $</span>
+            <span className="startup-term-caret" />
+          </div>
+          {rightSlab}
+        </div>
+      </div>
+      <div className="startup-captions">
+        <div className={`startup-caption${changedConn ? ' is-changed' : ''}`}>
+          <span className="startup-caption-name">{connLabel}</span>
+          <span className={`startup-pill${connOpen ? ' is-on' : ''}`}>
+            {connOpen ? onText : offText}
+          </span>
+        </div>
+        <div className={`startup-caption${changedCopilot ? ' is-changed' : ''}`}>
+          <span className="startup-caption-name">{copilotLabel}</span>
+          <span className={`startup-pill${copilotOpen ? ' is-on' : ''}`}>
+            {copilotOpen ? onText : offText}
+          </span>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function sectionClass(changed: boolean, index: number): string {
@@ -133,6 +257,20 @@ function patchTerminalUpdates(
   return {
     ...updates,
     terminal_appearance: { ...current, ...patch }
+  }
+}
+
+function patchStartupUpdates(
+  updates: Record<string, unknown>,
+  patch: Partial<StartupSettings>
+): Record<string, unknown> {
+  const current =
+    updates.startup && typeof updates.startup === 'object'
+      ? (updates.startup as Record<string, unknown>)
+      : {}
+  return {
+    ...updates,
+    startup: { ...current, ...patch }
   }
 }
 
@@ -178,6 +316,7 @@ export default function AppSettingsToolView({
 
   const showUi = mode === 'read' || hasUiUpdates(updates)
   const showTerminal = mode === 'read' || hasTerminalUpdates(updates)
+  const showStartup = mode === 'read' || hasStartupUpdates(updates)
   const showAi = mode === 'read' || hasAiUpdates(updates)
 
   const previewTheme = snapshot.theme
@@ -302,6 +441,7 @@ export default function AppSettingsToolView({
             <div className="tool-settings-terminal-block">
               <div className="tool-settings-sub tool-settings-terminal-preview-sub">
                 <div className="tool-settings-terminal-preview-frame tool-settings-terminal-preview-frame--wide">
+                  <TerminalChrome />
                   <TerminalPreview
                     theme={resolvedTerminalTheme}
                     fontFamily={terminal.fontFamily}
@@ -386,6 +526,7 @@ export default function AppSettingsToolView({
           ) : (
             <div className="tool-settings-current-card tool-settings-current-card--terminal">
               <div className="tool-settings-terminal-preview-frame tool-settings-terminal-preview-frame--card">
+                <TerminalChrome />
                 <TerminalPreview
                   theme={resolvedTerminalTheme}
                   fontFamily={terminal.fontFamily}
@@ -433,6 +574,35 @@ export default function AppSettingsToolView({
               </div>
             </div>
           )}
+        </section>
+      )}
+
+      {showStartup && (
+        <section className={sectionClass(hasStartupUpdates(updates), sectionIndex++)}>
+          <h3 className="tool-settings-section">{t('tool.section.startup')}</h3>
+          <StartupLayoutDiagram
+            connOpen={snapshot.startup.connSidebarOpen}
+            copilotOpen={snapshot.startup.copilotOpen}
+            editable={editable}
+            changedConn={startupFieldChanged(updates, 'connSidebarOpen')}
+            changedCopilot={startupFieldChanged(updates, 'copilotOpen')}
+            connLabel={t('startup.connSidebar')}
+            copilotLabel={t('startup.copilot')}
+            onText={t('startup.on')}
+            offText={t('startup.off')}
+            onToggleConn={() =>
+              change(
+                patchStartupUpdates(updates, {
+                  connSidebarOpen: !snapshot.startup.connSidebarOpen
+                })
+              )
+            }
+            onToggleCopilot={() =>
+              change(
+                patchStartupUpdates(updates, { copilotOpen: !snapshot.startup.copilotOpen })
+              )
+            }
+          />
         </section>
       )}
 
@@ -650,6 +820,10 @@ export default function AppSettingsToolView({
             </div>
           )}
         </section>
+      )}
+
+      {editable && !showUi && !showTerminal && !showStartup && !showAi && (
+        <div className="tool-settings-empty">{t('tool.settings.noChanges')}</div>
       )}
     </div>
   )

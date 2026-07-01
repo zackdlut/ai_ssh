@@ -4,7 +4,8 @@ import type { ConnectOptions, SshStatus } from '../../shared/types'
 export interface TerminalTab {
   id: string
   title: string
-  sessionId: string
+  /** Absent until an SSH session is opened (idle tab). */
+  sessionId?: string
   status: SshStatus
   host: string
   port: number
@@ -35,6 +36,7 @@ interface TabsState {
   renameTab: (id: string, title: string) => void
   setTabColor: (id: string, color?: string) => void
   reorderTab: (fromId: string, toId: string) => void
+  patchTab: (id: string, patch: Partial<TerminalTab>) => void
   activeTab: () => TerminalTab | undefined
 }
 
@@ -111,5 +113,9 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       tabs.splice(to, 0, moved)
       return { tabs }
     }),
+  patchTab: (id, patch) =>
+    set((s) => ({
+      tabs: s.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t))
+    })),
   activeTab: () => get().tabs.find((t) => t.id === get().activeTabId)
 }))

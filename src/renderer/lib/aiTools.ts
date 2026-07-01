@@ -10,6 +10,7 @@ import { useBookmarksStore } from '../store/bookmarksStore'
 import { useThemeStore } from '../store/themeStore'
 import { useLocaleStore } from '../store/localeStore'
 import { useTerminalAppearanceStore } from '../store/terminalAppearanceStore'
+import { useStartupStore } from '../store/startupStore'
 import { useSkillsStore } from '../store/skillsStore'
 import { connect, connectFromConfig } from './connect'
 import { readFullTerminalOutput } from './terminalRegistry'
@@ -128,7 +129,7 @@ function closeTab(args: Record<string, unknown>): ToolResult {
   if (!tabId) return { ok: false, error: 'tab_id is required.' }
   const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId)
   if (!tab) return { ok: false, error: `No open tab with id "${tabId}".` }
-  window.api.ssh.close(tab.sessionId)
+  if (tab.sessionId) window.api.ssh.close(tab.sessionId)
   useTabsStore.getState().removeTab(tabId)
   return { ok: true, result: `Closed tab "${tab.title}".` }
 }
@@ -141,7 +142,7 @@ function closeTabs(args: Record<string, unknown>): ToolResult {
   if (targets.length === 0) return { ok: false, error: 'No matching tabs to close.' }
   const titles = targets.map((t) => t.title)
   for (const t of targets) {
-    window.api.ssh.close(t.sessionId)
+    if (t.sessionId) window.api.ssh.close(t.sessionId)
     useTabsStore.getState().removeTab(t.id)
   }
   return { ok: true, result: `Closed ${targets.length} tab(s): ${titles.join(', ')}.` }
@@ -343,7 +344,7 @@ async function execCommand(args: Record<string, unknown>): Promise<ToolResult> {
   if (tab.status !== 'connected') {
     return { ok: false, error: `Tab "${tabId}" is not connected (status: ${tab.status}).` }
   }
-  const output = await execAndCapture(tab.id, tab.sessionId, command)
+  const output = await execAndCapture(tab.id, tab.sessionId!, command)
   return { ok: true, result: output || 'Command sent (no output captured).' }
 }
 
@@ -388,6 +389,7 @@ async function readAppSettings(): Promise<Record<string, unknown>> {
   const theme = useThemeStore.getState().theme
   const locale = useLocaleStore.getState().locale
   const terminal = useTerminalAppearanceStore.getState()
+  const startup = useStartupStore.getState()
   const ai = normalizeAISettings(await window.api.config.getAISettings())
   return {
     theme,
@@ -398,6 +400,10 @@ async function readAppSettings(): Promise<Record<string, unknown>> {
       fontSize: terminal.fontSize,
       lineHeight: terminal.lineHeight,
       fontWeight: terminal.fontWeight
+    },
+    startup: {
+      connSidebarOpen: startup.connSidebarOpen,
+      copilotOpen: startup.copilotOpen
     },
     ai: sanitizeAISettings(ai)
   }
@@ -447,6 +453,20 @@ async function updateAppSettings(args: Record<string, unknown>): Promise<ToolRes
     await useTerminalAppearanceStore
       .getState()
       .set(updates.terminal_appearance as Partial<TerminalAppearanceSettings>)
+  }
+
+  if (updates.startup !== undefined) {
+    if (!updates.startup || typeof updates.startup !== 'object') {
+      return { ok: false, error: 'startup must be an object.' }
+    }
+    const startupUpdates = updates.startup as Record<string, unknown>
+    const startupStore = useStartupStore.getState()
+    if (typeof startupUpdates.connSidebarOpen === 'boolean') {
+      startupStore.setConnSidebarOpen(startupUpdates.connSidebarOpen)
+    }
+    if (typeof startupUpdates.copilotOpen === 'boolean') {
+      startupStore.setCopilotOpen(startupUpdates.copilotOpen)
+    }
   }
 
   if (updates.ai !== undefined) {
@@ -562,6 +582,7 @@ export function buildToolContextMessage(): string | undefined {
   const theme = useThemeStore.getState().theme
   const locale = useLocaleStore.getState().locale
   const terminal = useTerminalAppearanceStore.getState()
+  const startup = useStartupStore.getState()
 
   const tabsText = tabs.length
     ? tabs
@@ -601,7 +622,7 @@ export function buildToolContextMessage(): string | undefined {
         .join('\n')
     : '(none)'
 
-  const settingsLine = `App settings: theme=${theme} | locale=${locale} | terminal fontSize=${terminal.fontSize} | terminal colorScheme=${terminal.colorScheme}`
+  const settingsLine = `App settings: theme=${theme} | locale=${locale} | terminal fontSize=${terminal.fontSize} | terminal colorScheme=${terminal.colorScheme} | startup connSidebarOpen=${startup.connSidebarOpen} | startup copilotOpen=${startup.copilotOpen}`
 
   if (tabs.length === 0 && configs.length === 0 && folders.length === 0) {
     return `Current app state:\n\n${settingsLine}`

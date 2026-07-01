@@ -6,6 +6,7 @@ import type {
   CopilotChatTab,
   ToolCallView
 } from '../../shared/types'
+import { getCopilotStartupOpen } from './startupStore'
 
 export interface ChatMessage extends CopilotChatMessage {
   streaming?: boolean
@@ -37,8 +38,7 @@ function loadPanelWidth(): number {
 }
 
 function loadPanelOpen(): boolean {
-  const raw = localStorage.getItem(PANEL_OPEN_KEY)
-  return raw === null ? true : raw === 'true'
+  return getCopilotStartupOpen()
 }
 
 function savePanelOpen(open: boolean): void {

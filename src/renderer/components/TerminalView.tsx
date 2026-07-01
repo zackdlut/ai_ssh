@@ -24,10 +24,12 @@ import type { CommandRun } from '../../shared/types'
 import { SHORTCUT_ASK_COPILOT, SHORTCUT_COPY } from '../lib/shortcuts'
 import ContextMenuItem from './ContextMenuItem'
 import TerminalLineGutter from './TerminalLineGutter'
+import TerminalEmptyState from './TerminalEmptyState'
 
 interface Props {
   tab: TerminalTab
   active: boolean
+  onNewConnection: () => void
 }
 
 interface MenuState {
@@ -205,7 +207,20 @@ function streamSummarize(
   })
 }
 
-export default function TerminalView({ tab, active }: Props): JSX.Element {
+export default function TerminalView({ tab, active, onNewConnection }: Props): JSX.Element {
+  if (tab.status === 'idle') {
+    return (
+      <div className={`terminal-view-host${active ? ' is-active' : ''}`}>
+        <TerminalEmptyState tabId={tab.id} onNewConnection={onNewConnection} />
+      </div>
+    )
+  }
+
+  return <ConnectedTerminalView tab={tab} active={active} />
+}
+
+function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>): JSX.Element {
+  const sessionId = tab.sessionId!
   const containerRef = useRef<HTMLDivElement>(null)
   const layoutRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -242,7 +257,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
     try {
       fit.fit()
       if (term.cols > 0 && term.rows > 0) {
-        window.api.ssh.resize(tab.sessionId, term.cols, term.rows)
+        window.api.ssh.resize(sessionId, term.cols, term.rows)
         return true
       }
     } catch {
@@ -308,7 +323,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       fitTerminal()
       scheduleFit()
       if (term.cols > 0 && term.rows > 0) {
-        window.api.ssh.resize(tab.sessionId, term.cols, term.rows)
+        window.api.ssh.resize(sessionId, term.cols, term.rows)
       }
       term.focus()
     }
@@ -345,7 +360,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
         useTabsStore.getState().setNlMode(tab.id, false)
         term.write(`\r\n${DIM}${t(loc(), 'terminal.nl.exited')}${RESET}`)
         // Redraw the real shell prompt for normal mode.
-        window.api.ssh.write(tab.sessionId, '\n')
+        window.api.ssh.write(sessionId, '\n')
       }
     }
 
@@ -391,7 +406,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
           }
         }
         nl.capture = cap
-        window.api.ssh.write(tab.sessionId, cmd + '\n')
+        window.api.ssh.write(sessionId, cmd + '\n')
       })
 
     const runNL = async (text: string): Promise<void> => {
@@ -701,7 +716,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       if (nl.mode === 'nl') {
         nlInsertPasteText(clip)
       } else {
-        window.api.ssh.write(tab.sessionId, clip)
+        window.api.ssh.write(sessionId, clip)
       }
     }
     pasteIntoTerminalRef.current = pasteIntoTerminal
@@ -727,7 +742,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
     const onDataDisposable = term.onData((data) => {
       const nl = nlRef.current
       if (nl.mode === 'normal') {
-        window.api.ssh.write(tab.sessionId, data)
+        window.api.ssh.write(sessionId, data)
         return
       }
       if (nl.confirmResolver) {
@@ -737,18 +752,18 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       if (nl.busy) {
         // Let Ctrl+C interrupt a running/stuck command so capture can finish
         // after output goes idle and input isn't locked forever.
-        if (data.includes('\x03')) window.api.ssh.write(tab.sessionId, '\x03')
+        if (data.includes('\x03')) window.api.ssh.write(sessionId, '\x03')
         return
       }
       handleNlInput(data)
     })
 
     const onResizeDisposable = term.onResize(({ cols, rows }) => {
-      window.api.ssh.resize(tab.sessionId, cols, rows)
+      window.api.ssh.resize(sessionId, cols, rows)
     })
 
     const dataUnsub = window.api.ssh.onData((e) => {
-      if (e.sessionId !== tab.sessionId) return
+      if (e.sessionId !== sessionId) return
 
       const nl = nlRef.current
       const cap = nl.capture
@@ -798,7 +813,7 @@ export default function TerminalView({ tab, active }: Props): JSX.Element {
       pasteIntoTerminalRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.id, tab.sessionId])
+  }, [tab.id, sessionId])
 
   // Refit and focus whenever this tab becomes the active one.
   useEffect(() => {

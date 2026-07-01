@@ -10,7 +10,14 @@ import UiIcon from './UiIcon'
 import DropdownMenuItem from './DropdownMenuItem'
 import ContextMenuItem from './ContextMenuItem'
 
-export type SettingsMenuItem = 'ai' | 'skills' | 'themes' | 'terminal' | 'language' | 'about'
+export type SettingsMenuItem =
+  | 'ai'
+  | 'skills'
+  | 'themes'
+  | 'terminal'
+  | 'language'
+  | 'startup'
+  | 'about'
 
 interface TabContextMenu {
   x: number
@@ -43,14 +50,14 @@ function tabLabel(tab: TerminalTab): string {
 interface Props {
   sidebarOpen: boolean
   onToggleSidebar: () => void
-  onNewConnection: () => void
+  onNewTab: () => void
   onSettingsSelect: (item: SettingsMenuItem) => void
 }
 
 export default function TabBar({
   sidebarOpen,
   onToggleSidebar,
-  onNewConnection,
+  onNewTab,
   onSettingsSelect
 }: Props): JSX.Element {
   const { tabs, activeTabId, setActive, removeTab, removeTabs, renameTab, setTabColor, reorderTab } =
@@ -121,7 +128,7 @@ export default function TabBar({
   }
 
   const closeTab = (tab: TerminalTab): void => {
-    window.api.ssh.close(tab.sessionId)
+    if (tab.sessionId) window.api.ssh.close(tab.sessionId)
     removeTab(tab.id)
   }
 
@@ -133,13 +140,17 @@ export default function TabBar({
   const closeOthers = (tab: TerminalTab): void => {
     setMenu(null)
     const others = tabs.filter((tt) => tt.id !== tab.id)
-    others.forEach((tt) => window.api.ssh.close(tt.sessionId))
+    others.forEach((tt) => {
+      if (tt.sessionId) window.api.ssh.close(tt.sessionId)
+    })
     removeTabs(others.map((tt) => tt.id))
   }
 
   const closeAll = (): void => {
     setMenu(null)
-    tabs.forEach((tt) => window.api.ssh.close(tt.sessionId))
+    tabs.forEach((tt) => {
+      if (tt.sessionId) window.api.ssh.close(tt.sessionId)
+    })
     removeTabs(tabs.map((tt) => tt.id))
   }
 
@@ -212,12 +223,16 @@ export default function TabBar({
           }}
           onDoubleClick={() => startRename(tab)}
           style={tab.color ? ({ '--tab-color': tab.color } as React.CSSProperties) : undefined}
-          title={t('tabbar.tabTitle', {
-            user: tab.username,
-            host: tab.host,
-            nlMode: tab.nlMode ? t('tabbar.nlMode') : '',
-            action: t('tabbar.doubleClickRename')
-          })}
+          title={
+            tab.status === 'idle'
+              ? tabLabel(tab)
+              : t('tabbar.tabTitle', {
+                  user: tab.username,
+                  host: tab.host,
+                  nlMode: tab.nlMode ? t('tabbar.nlMode') : '',
+                  action: t('tabbar.doubleClickRename')
+                })
+          }
         >
           <span className={`status-dot ${tab.nlMode ? 'nl' : tab.status}`} />
           {tab.id === activeTabId && <span className="tab-underline" aria-hidden />}
@@ -254,7 +269,7 @@ export default function TabBar({
         </div>
       ))}
       <div className="tab-add-wrap">
-        <button className="tab-add" onClick={onNewConnection} title={t('tabbar.newConnection')}>
+        <button className="tab-add" onClick={onNewTab} title={t('tabbar.newTab')}>
           <UiIcon name="plus" className="tab-add-glyph" />
         </button>
         <button
@@ -342,6 +357,15 @@ export default function TabBar({
                 }}
               >
                 {t('tabbar.language')}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                icon="settings"
+                onClick={() => {
+                  setSettingsOpen(false)
+                  onSettingsSelect('startup')
+                }}
+              >
+                {t('tabbar.startup')}
               </DropdownMenuItem>
               <DropdownMenuItem
                 icon="ai"

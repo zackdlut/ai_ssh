@@ -17,7 +17,7 @@ export default function CommandCard({ command }: Props): JSX.Element {
   const dangerous = isDangerous(value)
 
   const run = (): void => {
-    if (!activeTab) {
+    if (!activeTab?.sessionId || activeTab.status !== 'connected') {
       window.alert(t('cmd.noTerminal'))
       return
     }

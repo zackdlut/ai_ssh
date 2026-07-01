@@ -11,11 +11,37 @@ function loc() {
 export interface ConnectArgs {
   opts: ConnectOptions
   title: string
+  /** Reuse this tab when it is idle; otherwise reuse the active idle tab. */
+  tabId?: string
 }
 
 function genTabId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
   return `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+function findIdleTabToReuse(tabId?: string): TerminalTab | undefined {
+  const store = useTabsStore.getState()
+  if (tabId) {
+    const tab = store.tabs.find((t) => t.id === tabId)
+    return tab?.status === 'idle' ? tab : undefined
+  }
+  const active = store.tabs.find((t) => t.id === store.activeTabId)
+  return active?.status === 'idle' ? active : undefined
+}
+
+/** Create a new tab with no SSH session yet. */
+export function addEmptyTab(): string {
+  const id = genTabId()
+  useTabsStore.getState().addTab({
+    id,
+    title: t(loc(), 'tabbar.newTab'),
+    status: 'idle',
+    host: '',
+    port: 22,
+    username: ''
+  })
+  return id
 }
 
 function resolveConnectOpts(tab: TerminalTab): ConnectOptions | undefined {
@@ -39,27 +65,50 @@ function resolveConnectOpts(tab: TerminalTab): ConnectOptions | undefined {
  * Open an SSH session for the given options and register a terminal tab.
  * Returns an error string on failure, or undefined on success.
  */
-export async function connect({ opts, title }: ConnectArgs): Promise<string | undefined> {
+export async function connect({ opts, title, tabId }: ConnectArgs): Promise<string | undefined> {
+  const store = useTabsStore.getState()
+  const reuseIdleTab = findIdleTabToReuse(tabId)
+
+  if (reuseIdleTab) {
+    store.setStatusById(reuseIdleTab.id, 'connecting')
+  }
+
   const result = await window.api.ssh.connect(opts)
   if (result.error || !result.sessionId) {
-    return result.error ?? t(loc(), 'connect.failed')
+    const message = result.error ?? t(loc(), 'connect.failed')
+    if (reuseIdleTab) {
+      store.setStatusById(reuseIdleTab.id, 'idle', message)
+    }
+    return message
   }
   const port = opts.port || 22
-  useTabsStore.getState().addTab({
-    id: genTabId(),
+  const tabData = {
     sessionId: result.sessionId,
     title,
-    status: 'connected',
+    status: 'connected' as const,
     host: opts.host,
     port,
     username: opts.username,
-    connectOpts: opts
-  })
+    connectOpts: opts,
+    message: undefined
+  }
+  if (reuseIdleTab) {
+    store.patchTab(reuseIdleTab.id, tabData)
+    store.setActive(reuseIdleTab.id)
+  } else {
+    store.addTab({
+      id: genTabId(),
+      ...tabData
+    })
+  }
   return undefined
 }
 
 /** Connect using a saved connection config. */
-export async function connectFromConfig(c: ConnectionConfig): Promise<string | undefined> {
+export async function connectFromConfig(
+  c: ConnectionConfig,
+  tabId?: string
+): Promise<string | undefined> {
   const err = await connect({
     opts: {
       host: c.host,
@@ -69,7 +118,8 @@ export async function connectFromConfig(c: ConnectionConfig): Promise<string | u
       privateKey: c.privateKey,
       passphrase: c.passphrase
     },
-    title: c.name || `${c.username}@${c.host}`
+    title: c.name || `${c.username}@${c.host}`,
+    tabId
   })
   if (!err) {
     void useBookmarksStore.getState().upsertConnection({
@@ -93,7 +143,9 @@ export async function reconnectTab(tabId: string): Promise<string | undefined> {
     return t(loc(), 'connect.noCredentialsReconnect')
   }
 
-  window.api.ssh.close(tab.sessionId)
+  if (tab.sessionId) {
+    window.api.ssh.close(tab.sessionId)
+  }
   store.setStatusById(tabId, 'connecting')
 
   const result = await window.api.ssh.connect(opts)

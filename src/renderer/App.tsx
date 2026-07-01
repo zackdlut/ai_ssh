@@ -10,7 +10,9 @@ import { useThemeStore } from './store/themeStore'
 import { useLocaleStore } from './store/localeStore'
 import { useTerminalAppearanceStore } from './store/terminalAppearanceStore'
 import { useSkillsStore } from './store/skillsStore'
+import { getConnSidebarStartupOpen } from './store/startupStore'
 import { initAIService } from './lib/aiService'
+import { addEmptyTab } from './lib/connect'
 import type { ConnectionConfig } from '../shared/types'
 
 const TerminalView = lazy(() => import('./components/TerminalView'))
@@ -22,6 +24,7 @@ const SkillsModal = lazy(() => import('./components/ai/SkillsModal'))
 const ThemesModal = lazy(() => import('./components/settings/ThemesModal'))
 const TerminalAppearanceModal = lazy(() => import('./components/settings/TerminalAppearanceModal'))
 const LanguageModal = lazy(() => import('./components/settings/LanguageModal'))
+const StartupModal = lazy(() => import('./components/settings/StartupModal'))
 const AboutModal = lazy(() => import('./components/settings/AboutModal'))
 
 interface ConnectModalState {
@@ -40,7 +43,7 @@ export default function App(): JSX.Element {
   const loadSkills = useSkillsStore((s) => s.load)
   const [connectModal, setConnectModal] = useState<ConnectModalState | null>(null)
   const [settingsPanel, setSettingsPanel] = useState<SettingsMenuItem | null>(null)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(getConnSidebarStartupOpen)
 
   useEffect(() => {
     initAIService()
@@ -71,7 +74,7 @@ export default function App(): JSX.Element {
       <TabBar
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
-        onNewConnection={() => openNewConnection(null)}
+        onNewTab={() => addEmptyTab()}
         onSettingsSelect={(item) => setSettingsPanel(item)}
       />
       <div className="app-body">
@@ -89,7 +92,12 @@ export default function App(): JSX.Element {
             ) : (
               <Suspense fallback={null}>
                 {tabs.map((tab) => (
-                  <TerminalView key={tab.id} tab={tab} active={tab.id === activeTabId} />
+                  <TerminalView
+                    key={tab.id}
+                    tab={tab}
+                    active={tab.id === activeTabId}
+                    onNewConnection={() => openNewConnection(null)}
+                  />
                 ))}
               </Suspense>
             )}
@@ -139,6 +147,11 @@ export default function App(): JSX.Element {
       {settingsPanel === 'language' && (
         <Suspense fallback={null}>
           <LanguageModal onClose={() => setSettingsPanel(null)} />
+        </Suspense>
+      )}
+      {settingsPanel === 'startup' && (
+        <Suspense fallback={null}>
+          <StartupModal onClose={() => setSettingsPanel(null)} />
         </Suspense>
       )}
       {settingsPanel === 'about' && (

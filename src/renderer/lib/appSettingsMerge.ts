@@ -8,10 +8,16 @@ import {
   type TerminalFontWeight
 } from '../../shared/terminalSettings'
 
+export interface StartupSettings {
+  connSidebarOpen: boolean
+  copilotOpen: boolean
+}
+
 export interface AppSettingsSnapshot {
   theme: AppTheme
   locale: AppLocale
   terminal_appearance: TerminalAppearanceSettings
+  startup: StartupSettings
   ai: {
     baseURL: string
     hasApiKey: boolean
@@ -37,6 +43,17 @@ function isModelProfile(v: unknown): v is ModelProfile {
 function parseTerminalAppearance(raw: unknown): TerminalAppearanceSettings {
   if (!raw || typeof raw !== 'object') return { ...DEFAULT_TERMINAL_APPEARANCE }
   return normalizeTerminalAppearanceSettings(raw as Partial<TerminalAppearanceSettings>)
+}
+
+const DEFAULT_STARTUP: StartupSettings = { connSidebarOpen: false, copilotOpen: true }
+
+function parseStartup(raw: unknown): StartupSettings {
+  const result = { ...DEFAULT_STARTUP }
+  if (!raw || typeof raw !== 'object') return result
+  const input = raw as Record<string, unknown>
+  if (typeof input.connSidebarOpen === 'boolean') result.connSidebarOpen = input.connSidebarOpen
+  if (typeof input.copilotOpen === 'boolean') result.copilotOpen = input.copilotOpen
+  return result
 }
 
 function parseAiSnapshot(raw: unknown, fallback?: AISettings): AppSettingsSnapshot['ai'] {
@@ -81,6 +98,7 @@ export function parseAppSettingsSnapshot(
     theme,
     locale,
     terminal_appearance: parseTerminalAppearance(raw.terminal_appearance),
+    startup: parseStartup(raw.startup),
     ai: parseAiSnapshot(raw.ai, aiFallback)
   }
 }
@@ -90,10 +108,12 @@ export async function buildCurrentAppSettingsSnapshot(): Promise<AppSettingsSnap
   const { useThemeStore } = await import('../store/themeStore')
   const { useLocaleStore } = await import('../store/localeStore')
   const { useTerminalAppearanceStore } = await import('../store/terminalAppearanceStore')
+  const { useStartupStore } = await import('../store/startupStore')
 
   const theme = useThemeStore.getState().theme
   const locale = useLocaleStore.getState().locale
   const terminal = useTerminalAppearanceStore.getState()
+  const startup = useStartupStore.getState()
   const ai = normalizeAISettings(await window.api.config.getAISettings())
 
   return {
@@ -105,6 +125,10 @@ export async function buildCurrentAppSettingsSnapshot(): Promise<AppSettingsSnap
       fontSize: terminal.fontSize,
       lineHeight: terminal.lineHeight,
       fontWeight: terminal.fontWeight
+    },
+    startup: {
+      connSidebarOpen: startup.connSidebarOpen,
+      copilotOpen: startup.copilotOpen
     },
     ai: {
       baseURL: ai.baseURL,
@@ -126,6 +150,7 @@ export function mergeAppSettingsUpdates(
     theme: baseline.theme,
     locale: baseline.locale,
     terminal_appearance: { ...baseline.terminal_appearance },
+    startup: { ...baseline.startup },
     ai: {
       ...baseline.ai,
       models: { ...baseline.ai.models },
@@ -135,6 +160,12 @@ export function mergeAppSettingsUpdates(
 
   if (isAppTheme(updates.theme)) next.theme = updates.theme
   if (isAppLocale(updates.locale)) next.locale = updates.locale
+
+  if (updates.startup && typeof updates.startup === 'object') {
+    const s = updates.startup as Record<string, unknown>
+    if (typeof s.connSidebarOpen === 'boolean') next.startup.connSidebarOpen = s.connSidebarOpen
+    if (typeof s.copilotOpen === 'boolean') next.startup.copilotOpen = s.copilotOpen
+  }
 
   if (updates.terminal_appearance && typeof updates.terminal_appearance === 'object') {
     const ta = updates.terminal_appearance as Record<string, unknown>
@@ -176,6 +207,19 @@ export function hasUiUpdates(updates: Record<string, unknown>): boolean {
 
 export function hasTerminalUpdates(updates: Record<string, unknown>): boolean {
   return updates.terminal_appearance !== undefined
+}
+
+export function hasStartupUpdates(updates: Record<string, unknown>): boolean {
+  return updates.startup !== undefined
+}
+
+export function startupFieldChanged(
+  updates: Record<string, unknown>,
+  field: keyof StartupSettings
+): boolean {
+  const s = updates.startup
+  if (!s || typeof s !== 'object') return false
+  return (s as Record<string, unknown>)[field] !== undefined
 }
 
 export function hasAiUpdates(updates: Record<string, unknown>): boolean {

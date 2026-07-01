@@ -41,7 +41,7 @@ export interface ConnectResult {
   error?: string
 }
 
-export type SshStatus = 'connecting' | 'connected' | 'closed' | 'error'
+export type SshStatus = 'idle' | 'connecting' | 'connected' | 'closed' | 'error'
 
 export interface SshStatusEvent {
   sessionId: string
