@@ -4091,11 +4091,86 @@ select:focus {
   border-top: none;
 }
 
+/* --- Saved-connections list: quiet card rows, one accent badge + one tag --- */
+.tool-call-card .tool-list--connections {
+  gap: 6px;
+  padding: 2px;
+}
+
+.tool-call-card .tool-list--connections .tool-list-row {
+  align-items: center;
+  gap: 12px;
+  padding: 9px 11px;
+  border-top: none;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  background: var(--surface-raise);
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease;
+}
+
+.tool-call-card .tool-list--connections .tool-list-row:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-raise));
+}
+
+.tool-call-card .tool-list--connections .tool-list-index {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  background:
+    linear-gradient(150deg, color-mix(in srgb, var(--accent) 16%, transparent), transparent 75%),
+    var(--ink-900);
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.tool-call-card .tool-list--connections .tool-list-main {
+  gap: 3px;
+}
+
+/* Host reads as a quiet mono subtitle — no box, keeps the row calm. */
+.tool-call-card .tool-list--connections .tool-list-sub {
+  max-width: 100%;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-call-card .tool-tag--auth {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.tool-call-card .tool-tag--auth::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
 .tool-call-card .tool-list-main {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  text-align: left;
 }
 
 .tool-call-card .tool-list-title {
@@ -4486,82 +4561,187 @@ select:focus {
   background: var(--surface-raise);
 }
 
-/* --- Terminal preview + control rows --- */
-.tool-call-card .tool-settings-panel .terminal-preview {
-  margin: 0;
-  padding: 10px 12px;
-  border-radius: var(--ts-radius);
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
+/* --- Terminal appearance (aligned with UI current-cards + AI field stacks) --- */
+.tool-call-card .tool-settings-terminal-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.tool-call-card .tool-settings-panel .terminal-preview--compact > div {
+.tool-call-card .tool-settings-terminal-preview-sub {
+  gap: 0;
+}
+
+.tool-call-card .tool-settings-terminal-preview-frame {
+  flex: none;
+  overflow: hidden;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--ink-900);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent),
+    0 4px 14px -8px color-mix(in srgb, var(--bg) 55%, transparent);
+}
+
+/* Terminal read-only card mirrors the theme card: preview left, copy right. */
+.tool-call-card .tool-settings-current-card--terminal {
+  align-items: stretch;
+}
+
+.tool-call-card .tool-settings-current-card--terminal .tool-settings-terminal-preview-frame,
+.tool-call-card .tool-settings-terminal-preview-frame--card {
+  width: 108px;
+  flex: none;
+  min-height: 56px;
+}
+
+.tool-call-card .tool-settings-terminal-preview-frame--card .terminal-preview {
+  padding: 7px 9px;
+  font-size: 10px !important;
+  line-height: 1.3 !important;
+}
+
+.tool-call-card .tool-settings-terminal-preview-frame--card .terminal-preview--micro > div {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.tool-call-card .tool-settings-panel .terminal-setting-row {
-  grid-template-columns: 84px minmax(0, 1fr);
+.tool-call-card .tool-settings-current-card--terminal .tool-settings-current-copy {
+  flex: 1;
+  gap: 5px;
+  justify-content: center;
+}
+
+.tool-call-card .tool-settings-terminal-scheme {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 0;
+  gap: 7px;
+  min-width: 0;
+}
+
+.tool-call-card .tool-settings-terminal-scheme-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-call-card .tool-settings-terminal-scheme .terminal-scheme-swatch {
+  flex: none;
+  grid-template-columns: repeat(8, 6px);
+  grid-template-rows: repeat(2, 6px);
+  gap: 1px;
+}
+
+.tool-call-card .tool-settings-terminal-scheme .terminal-scheme-swatch-cell {
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+}
+
+.tool-call-card .tool-settings-terminal-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 1px;
+}
+
+/* Match the COPILOT / 终端 AI accent tag buttons. */
+.tool-call-card .tool-settings-terminal-tag {
+  max-width: 100%;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Editable-mode wide preview keeps a taller full-width frame. */
+.tool-call-card .tool-settings-terminal-preview-frame--wide {
+  width: 100%;
+  min-height: 74px;
+}
+
+.tool-call-card .tool-settings-terminal-preview-frame .terminal-preview {
   margin: 0;
-  background: none;
+  padding: 8px 10px;
   border: none;
+  border-radius: 0;
+  min-height: 100%;
+  box-shadow: none;
+  background: transparent;
 }
 
-.tool-call-card .tool-settings-panel .terminal-setting-label-top {
-  font-size: 11.5px;
-  font-weight: 500;
-  color: var(--text-dim);
+.tool-call-card .tool-settings-terminal-preview-frame--wide .terminal-preview {
+  padding: 10px 12px;
 }
 
-.tool-call-card .tool-settings-panel .terminal-setting-hint,
-.tool-call-card .tool-settings-panel .terminal-setting-reset {
-  display: none;
+.tool-call-card .tool-settings-terminal-preview-frame .terminal-preview--compact > div {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Unify every control to one height / radius / type scale. */
-.tool-call-card .tool-settings-panel .terminal-scheme-trigger,
-.tool-call-card .tool-settings-panel .terminal-font-trigger,
-.tool-call-card .tool-settings-panel select,
-.tool-call-card .tool-settings-field input,
-.tool-call-card .tool-settings-panel .terminal-stepper-input {
+.tool-call-card .tool-settings-terminal-block .terminal-scheme-dropdown,
+.tool-call-card .tool-settings-terminal-block .terminal-font-dropdown {
+  width: 100%;
+}
+
+.tool-call-card .tool-settings-terminal-block .terminal-scheme-trigger,
+.tool-call-card .tool-settings-terminal-block .terminal-font-trigger,
+.tool-call-card .tool-settings-terminal-block select,
+.tool-call-card .tool-settings-terminal-block .terminal-stepper-input {
+  width: 100%;
+  box-sizing: border-box;
   height: var(--ts-control-h);
   font-size: 12px;
   border-radius: 7px;
 }
 
-.tool-call-card .tool-settings-panel .terminal-scheme-trigger,
-.tool-call-card .tool-settings-panel .terminal-font-trigger {
+.tool-call-card .tool-settings-terminal-block .terminal-scheme-trigger,
+.tool-call-card .tool-settings-terminal-block .terminal-font-trigger {
   padding: 0 9px;
   gap: 8px;
 }
 
-.tool-call-card .tool-settings-panel .terminal-scheme-trigger-label,
-.tool-call-card .tool-settings-panel .terminal-font-trigger-label {
+.tool-call-card .tool-settings-terminal-block .terminal-scheme-trigger-label,
+.tool-call-card .tool-settings-terminal-block .terminal-font-trigger-label {
   font-size: 12px;
 }
 
-.tool-call-card .tool-settings-panel .terminal-scheme-swatch {
+.tool-call-card .tool-settings-terminal-block .terminal-scheme-swatch {
   grid-template-columns: repeat(8, 7px);
   grid-template-rows: repeat(2, 7px);
 }
-.tool-call-card .tool-settings-panel .terminal-scheme-swatch-cell {
+
+.tool-call-card .tool-settings-terminal-block .terminal-scheme-swatch-cell {
   width: 7px;
   height: 7px;
 }
 
-.tool-call-card .tool-settings-panel .terminal-stepper-btn {
+.tool-call-card .tool-settings-terminal-block .terminal-stepper-input {
+  flex: 1;
+}
+
+.tool-call-card .tool-settings-terminal-block .terminal-stepper-btn {
   width: 30px;
   font-size: 15px;
   border-radius: 7px 0 0 7px;
 }
-.tool-call-card .tool-settings-panel .terminal-stepper-btn:last-child {
+
+.tool-call-card .tool-settings-terminal-block .terminal-stepper-btn:last-child {
   border-radius: 0 7px 7px 0;
 }
 
-.tool-call-card .tool-settings-panel select {
+.tool-call-card .tool-settings-terminal-block select {
   padding: 0 9px;
 }
 
@@ -4602,6 +4782,9 @@ select:focus {
 .tool-call-card .tool-settings-field input {
   width: 100%;
   box-sizing: border-box;
+  height: var(--ts-control-h);
+  font-size: 12px;
+  border-radius: 7px;
   padding: 0 9px;
 }
 

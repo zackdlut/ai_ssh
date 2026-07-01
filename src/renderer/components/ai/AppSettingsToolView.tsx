@@ -1,22 +1,24 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { MODEL_PROFILES } from '../../../shared/aiSettings'
 import { THEME_OPTIONS } from '../../lib/themes'
-import { resolveTerminalTheme } from '../../lib/terminalColorSchemes'
+import { resolveTerminalTheme, terminalSwatchColors } from '../../lib/terminalColorSchemes'
 import {
   modelProfileLabel,
+  terminalFontPresetLabel,
   terminalFontWeightLabel,
   terminalSchemeLabel,
   themeMeta,
   useT
 } from '../../lib/i18n'
+import { matchTerminalFontPreset, primaryFontName } from '../../lib/terminalFonts'
 import { useLocaleStore } from '../../store/localeStore'
 import {
   ThemePreview,
   TerminalPreview,
+  ColorSwatch,
   ColorSchemeDropdown,
   FontFamilyPicker,
-  StepperNumberInput,
-  SettingRow
+  StepperNumberInput
 } from '../settings/shared'
 import {
   aiFieldChanged,
@@ -84,6 +86,28 @@ function ReadonlyProfileSeg({
       ))}
     </div>
   )
+}
+
+function TerminalField({
+  label,
+  changed,
+  children
+}: {
+  label: string
+  changed: boolean
+  children: ReactNode
+}): JSX.Element {
+  return (
+    <div className={`tool-settings-sub${changed ? ' tool-settings-changed' : ''}`}>
+      <span className="tool-settings-field-label">{label}</span>
+      {children}
+    </div>
+  )
+}
+
+function terminalFontLabel(locale: AppLocale, fontFamily: string): string {
+  const preset = matchTerminalFontPreset(fontFamily)
+  return preset ? terminalFontPresetLabel(locale, preset) : primaryFontName(fontFamily)
 }
 
 function sectionClass(changed: boolean, index: number): string {
@@ -274,18 +298,22 @@ export default function AppSettingsToolView({
         >
           <h3 className="tool-settings-section">{t('tool.section.terminal')}</h3>
 
-          <TerminalPreview
-            theme={resolvedTerminalTheme}
-            fontFamily={terminal.fontFamily}
-            fontSize={previewFontSize}
-            lineHeight={terminal.lineHeight}
-            fontWeight={terminal.fontWeight}
-            compact
-          />
-
           {editable ? (
-            <>
-              <SettingRow
+            <div className="tool-settings-terminal-block">
+              <div className="tool-settings-sub tool-settings-terminal-preview-sub">
+                <div className="tool-settings-terminal-preview-frame tool-settings-terminal-preview-frame--wide">
+                  <TerminalPreview
+                    theme={resolvedTerminalTheme}
+                    fontFamily={terminal.fontFamily}
+                    fontSize={previewFontSize}
+                    lineHeight={terminal.lineHeight}
+                    fontWeight={terminal.fontWeight}
+                    compact
+                  />
+                </div>
+              </div>
+
+              <TerminalField
                 label={t('tool.settings.colorScheme')}
                 changed={terminalFieldChanged(updates, 'colorScheme')}
               >
@@ -295,8 +323,8 @@ export default function AppSettingsToolView({
                     change(patchTerminalUpdates(updates, { colorScheme }))
                   }
                 />
-              </SettingRow>
-              <SettingRow
+              </TerminalField>
+              <TerminalField
                 label={t('tool.settings.fontFamily')}
                 changed={terminalFieldChanged(updates, 'fontFamily')}
               >
@@ -306,8 +334,8 @@ export default function AppSettingsToolView({
                     change(patchTerminalUpdates(updates, { fontFamily }))
                   }
                 />
-              </SettingRow>
-              <SettingRow
+              </TerminalField>
+              <TerminalField
                 label={t('tool.settings.fontSize')}
                 changed={terminalFieldChanged(updates, 'fontSize')}
               >
@@ -319,8 +347,8 @@ export default function AppSettingsToolView({
                   decimals={0}
                   onChange={(fontSize) => change(patchTerminalUpdates(updates, { fontSize }))}
                 />
-              </SettingRow>
-              <SettingRow
+              </TerminalField>
+              <TerminalField
                 label={t('tool.settings.lineHeight')}
                 changed={terminalFieldChanged(updates, 'lineHeight')}
               >
@@ -332,8 +360,8 @@ export default function AppSettingsToolView({
                   decimals={2}
                   onChange={(lineHeight) => change(patchTerminalUpdates(updates, { lineHeight }))}
                 />
-              </SettingRow>
-              <SettingRow
+              </TerminalField>
+              <TerminalField
                 label={t('tool.settings.fontWeight')}
                 changed={terminalFieldChanged(updates, 'fontWeight')}
               >
@@ -353,31 +381,57 @@ export default function AppSettingsToolView({
                     </option>
                   ))}
                 </select>
-              </SettingRow>
-            </>
+              </TerminalField>
+            </div>
           ) : (
-            <dl className="tool-settings-summary">
-              <div className="tool-settings-summary-row">
-                <dt>{t('tool.settings.colorScheme')}</dt>
-                <dd>{terminalSchemeLabel(locale, terminal.colorScheme)}</dd>
+            <div className="tool-settings-current-card tool-settings-current-card--terminal">
+              <div className="tool-settings-terminal-preview-frame tool-settings-terminal-preview-frame--card">
+                <TerminalPreview
+                  theme={resolvedTerminalTheme}
+                  fontFamily={terminal.fontFamily}
+                  fontSize={previewFontSize}
+                  lineHeight={terminal.lineHeight}
+                  fontWeight={terminal.fontWeight}
+                  compact
+                  micro
+                />
               </div>
-              <div className="tool-settings-summary-row">
-                <dt>{t('tool.settings.fontFamily')}</dt>
-                <dd className="mono">{terminal.fontFamily}</dd>
+              <div className="tool-settings-current-copy">
+                <span className="tool-settings-current-label">{t('tool.settings.colorScheme')}</span>
+                <span className="tool-settings-current-value tool-settings-terminal-scheme">
+                  <ColorSwatch colors={terminalSwatchColors(resolvedTerminalTheme)} />
+                  <span className="tool-settings-terminal-scheme-name">
+                    {terminalSchemeLabel(locale, terminal.colorScheme)}
+                  </span>
+                </span>
+                <div className="tool-settings-terminal-tags">
+                  <span
+                    className="tool-settings-terminal-tag"
+                    title={`${t('tool.settings.fontFamily')}: ${terminalFontLabel(locale, terminal.fontFamily)}`}
+                  >
+                    {terminalFontLabel(locale, terminal.fontFamily)}
+                  </span>
+                  <span
+                    className="tool-settings-terminal-tag"
+                    title={`${t('tool.settings.fontSize')}: ${terminal.fontSize}px`}
+                  >
+                    {terminal.fontSize}px
+                  </span>
+                  <span
+                    className="tool-settings-terminal-tag"
+                    title={`${t('tool.settings.lineHeight')}: ${terminal.lineHeight}`}
+                  >
+                    {t('tool.settings.lineHeight')} {terminal.lineHeight}
+                  </span>
+                  <span
+                    className="tool-settings-terminal-tag"
+                    title={`${t('tool.settings.fontWeight')}: ${terminalFontWeightLabel(locale, terminal.fontWeight)}`}
+                  >
+                    {terminalFontWeightLabel(locale, terminal.fontWeight)}
+                  </span>
+                </div>
               </div>
-              <div className="tool-settings-summary-row">
-                <dt>{t('tool.settings.fontSize')}</dt>
-                <dd>{terminal.fontSize}px</dd>
-              </div>
-              <div className="tool-settings-summary-row">
-                <dt>{t('tool.settings.lineHeight')}</dt>
-                <dd>{terminal.lineHeight}</dd>
-              </div>
-              <div className="tool-settings-summary-row">
-                <dt>{t('tool.settings.fontWeight')}</dt>
-                <dd>{terminalFontWeightLabel(locale, terminal.fontWeight)}</dd>
-              </div>
-            </dl>
+            </div>
           )}
         </section>
       )}

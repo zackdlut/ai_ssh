@@ -17,7 +17,8 @@ export default function TerminalPreview({
   fontSize,
   lineHeight,
   fontWeight,
-  compact = false
+  compact = false,
+  micro = false
 }: {
   theme: ITheme
   fontFamily: string
@@ -26,6 +27,8 @@ export default function TerminalPreview({
   fontWeight: TerminalFontWeight
   /** Tighter padding + shorter sample lines for embedding in narrow surfaces. */
   compact?: boolean
+  /** Shortest sample lines for narrow card previews (~280px). */
+  micro?: boolean
 }): JSX.Element {
   const fg = theme.foreground ?? '#ccc'
   const style = {
@@ -39,31 +42,64 @@ export default function TerminalPreview({
 
   if (compact) {
     return (
-      <div className="terminal-preview terminal-preview--compact" style={style}>
-        <div>
-          <span style={{ color: theme.blue }}>user</span>
-          <span style={{ color: fg }}>$ </span>
-          <span style={{ color: fg }}>ls -la</span>
-        </div>
-        <div>
-          <span style={{ color: theme.green }}>drwxr-xr-x</span>
-          <span style={{ color: fg }}> </span>
-          <span style={{ color: theme.blue }}>projects</span>
-        </div>
-        <div>
-          <span style={{ color: fg }}>grep </span>
-          <span style={{ color: theme.yellow }}>&quot;error&quot;</span>
-          <span style={{ color: fg }}> log</span>
-        </div>
-        <div>
-          <span style={{ color: theme.red }}>ERROR</span>
-          <span style={{ color: fg }}>: refused</span>
-        </div>
-        <div className="terminal-preview-prompt">
-          <span style={{ color: theme.blue }}>user</span>
-          <span style={{ color: fg }}>$ </span>
-          <span className="terminal-preview-cursor" style={{ background: theme.cursor }} />
-        </div>
+      <div
+        className={`terminal-preview terminal-preview--compact${micro ? ' terminal-preview--micro' : ''}`}
+        style={style}
+      >
+        {micro ? (
+          <>
+            <div>
+              <span style={{ color: theme.blue }}>user</span>
+              <span style={{ color: fg }}>$ </span>
+              <span style={{ color: fg }}>ls</span>
+            </div>
+            <div>
+              <span style={{ color: theme.green }}>drwx</span>
+              <span style={{ color: fg }}> </span>
+              <span style={{ color: theme.blue }}>projects</span>
+            </div>
+            <div>
+              <span style={{ color: fg }}>grep </span>
+              <span style={{ color: theme.yellow }}>&quot;err&quot;</span>
+            </div>
+            <div>
+              <span style={{ color: theme.red }}>ERR</span>
+              <span style={{ color: fg }}>: refused</span>
+            </div>
+            <div className="terminal-preview-prompt">
+              <span style={{ color: theme.blue }}>user</span>
+              <span style={{ color: fg }}>$ </span>
+              <span className="terminal-preview-cursor" style={{ background: theme.cursor }} />
+            </div>
+          </>
+        ) : (
+          <>
+            <div>
+              <span style={{ color: theme.blue }}>user</span>
+              <span style={{ color: fg }}>$ </span>
+              <span style={{ color: fg }}>ls -la</span>
+            </div>
+            <div>
+              <span style={{ color: theme.green }}>drwxr-xr-x</span>
+              <span style={{ color: fg }}> </span>
+              <span style={{ color: theme.blue }}>projects</span>
+            </div>
+            <div>
+              <span style={{ color: fg }}>grep </span>
+              <span style={{ color: theme.yellow }}>&quot;error&quot;</span>
+              <span style={{ color: fg }}> log</span>
+            </div>
+            <div>
+              <span style={{ color: theme.red }}>ERROR</span>
+              <span style={{ color: fg }}>: refused</span>
+            </div>
+            <div className="terminal-preview-prompt">
+              <span style={{ color: theme.blue }}>user</span>
+              <span style={{ color: fg }}>$ </span>
+              <span className="terminal-preview-cursor" style={{ background: theme.cursor }} />
+            </div>
+          </>
+        )}
       </div>
     )
   }

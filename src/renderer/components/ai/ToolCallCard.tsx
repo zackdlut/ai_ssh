@@ -180,27 +180,31 @@ function ListResult({
     return <div className="tool-list-empty">{t('tool.list.empty')}</div>
   }
 
+  const isConfig = name === 'list_ssh_configs'
   return (
-    <div className="tool-list">
+    <div className={`tool-list${isConfig ? ' tool-list--connections' : ''}`}>
       {items.map((item, i) => {
-        const isConfig = name === 'list_ssh_configs'
         const title = String(item.name ?? item.title ?? item.host ?? '—')
-        const user = item.username ? `${String(item.username)}@` : ''
-        const sub = `${user}${String(item.host ?? '')}:${String(item.port ?? 22)}`
+        const host = String(item.host ?? '')
+        const user = item.username ? String(item.username) : ''
+        const port = String(item.port ?? 22)
+        const sub = `${user ? `${user}@` : ''}${host}:${port}`
         const status = typeof item.status === 'string' ? item.status : undefined
         return (
           <div className="tool-list-row" key={i}>
             <span className="tool-list-index">{i + 1}</span>
             <div className="tool-list-main">
               <span className="tool-list-title">{title}</span>
-              <span className="tool-list-sub">{sub}</span>
+              <span className="tool-list-sub" title={sub}>
+                {sub}
+              </span>
             </div>
             <div className="tool-list-tags">
               {isConfig && item.hasPassword === true && (
-                <span className="tool-tag">{t('tool.auth.password')}</span>
+                <span className="tool-tag tool-tag--auth">{t('tool.auth.password')}</span>
               )}
               {isConfig && item.hasPrivateKey === true && (
-                <span className="tool-tag">{t('tool.auth.key')}</span>
+                <span className="tool-tag tool-tag--auth">{t('tool.auth.key')}</span>
               )}
               {status && (
                 <span className={`tool-tag status-${TAB_STATUS_TONE[status] ?? 'muted'}`}>
