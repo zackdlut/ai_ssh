@@ -18,11 +18,26 @@ interface TabContextMenu {
   tab: TerminalTab
 }
 
+const TAB_COLORS = [
+  '#ff6b6b',
+  '#ff9d3c',
+  '#ffd93d',
+  '#51cf66',
+  '#4dabf7',
+  '#b197fc',
+  '#f783ac',
+  '#adb5bd'
+]
+
 function defaultLogName(tab: TerminalTab): string {
   const now = new Date()
   const pad = (n: number): string => String(n).padStart(2, '0')
   const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
   return `${tab.username}@${tab.host}-${stamp}.log`
+}
+
+function tabLabel(tab: TerminalTab): string {
+  return tab.customTitle ?? tab.title
 }
 
 interface Props {
@@ -38,7 +53,8 @@ export default function TabBar({
   onNewConnection,
   onSettingsSelect
 }: Props): JSX.Element {
-  const { tabs, activeTabId, setActive, removeTab } = useTabsStore()
+  const { tabs, activeTabId, setActive, removeTab, removeTabs, renameTab, setTabColor, reorderTab } =
+    useTabsStore()
   const { panelOpen, togglePanel } = useAIStore()
   const sftpOpen = useSftpStore((s) => s.panelOpen)
   const toggleSftp = useSftpStore((s) => s.togglePanel)
@@ -49,6 +65,10 @@ export default function TabBar({
   const [recentOpen, setRecentOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [menu, setMenu] = useState<TabContextMenu | null>(null)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
 
   const recent = recentOpen ? getRecentConnections(5) : []
 
@@ -100,10 +120,42 @@ export default function TabBar({
     if (res.error) window.alert(t('tabbar.saveOutputFailed', { error: res.error }))
   }
 
-  const handleClose = (e: React.MouseEvent, id: string, sessionId: string): void => {
+  const closeTab = (tab: TerminalTab): void => {
+    window.api.ssh.close(tab.sessionId)
+    removeTab(tab.id)
+  }
+
+  const handleClose = (e: React.MouseEvent, tab: TerminalTab): void => {
     e.stopPropagation()
-    window.api.ssh.close(sessionId)
-    removeTab(id)
+    closeTab(tab)
+  }
+
+  const closeOthers = (tab: TerminalTab): void => {
+    setMenu(null)
+    const others = tabs.filter((tt) => tt.id !== tab.id)
+    others.forEach((tt) => window.api.ssh.close(tt.sessionId))
+    removeTabs(others.map((tt) => tt.id))
+  }
+
+  const closeAll = (): void => {
+    setMenu(null)
+    tabs.forEach((tt) => window.api.ssh.close(tt.sessionId))
+    removeTabs(tabs.map((tt) => tt.id))
+  }
+
+  const startRename = (tab: TerminalTab): void => {
+    setMenu(null)
+    setRenamingId(tab.id)
+    setRenameValue(tabLabel(tab))
+  }
+
+  const commitRename = (): void => {
+    if (renamingId) renameTab(renamingId, renameValue)
+    setRenamingId(null)
+  }
+
+  const cancelRename = (): void => {
+    setRenamingId(null)
   }
 
   return (
@@ -125,36 +177,76 @@ export default function TabBar({
       {tabs.map((tab) => (
         <div
           key={tab.id}
-          className={`tab ${tab.id === activeTabId ? 'active' : ''}`}
+          className={`tab ${tab.id === activeTabId ? 'active' : ''} ${
+            dragOverId === tab.id && dragId && dragId !== tab.id ? 'drag-over' : ''
+          } ${dragId === tab.id ? 'dragging' : ''} ${tab.color ? 'has-color' : ''}`}
+          draggable={renamingId !== tab.id}
+          onDragStart={(e) => {
+            setDragId(tab.id)
+            e.dataTransfer.effectAllowed = 'move'
+          }}
+          onDragOver={(e) => {
+            if (!dragId || dragId === tab.id) return
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'move'
+            if (dragOverId !== tab.id) setDragOverId(tab.id)
+          }}
+          onDragLeave={() => {
+            if (dragOverId === tab.id) setDragOverId(null)
+          }}
+          onDrop={(e) => {
+            e.preventDefault()
+            if (dragId && dragId !== tab.id) reorderTab(dragId, tab.id)
+            setDragId(null)
+            setDragOverId(null)
+          }}
+          onDragEnd={() => {
+            setDragId(null)
+            setDragOverId(null)
+          }}
           onClick={() => setActive(tab.id)}
           onContextMenu={(e) => {
             e.preventDefault()
             e.stopPropagation()
             setMenu({ x: e.clientX, y: e.clientY, tab })
           }}
-          onDoubleClick={() => {
-            setActive(tab.id)
-            if (tab.status === 'closed' || tab.status === 'error') {
-              void reconnectTab(tab.id)
-            } else if (tab.status === 'connected') {
-              void cloneTab(tab.id)
-            }
-          }}
+          onDoubleClick={() => startRename(tab)}
+          style={tab.color ? ({ '--tab-color': tab.color } as React.CSSProperties) : undefined}
           title={t('tabbar.tabTitle', {
             user: tab.username,
             host: tab.host,
             nlMode: tab.nlMode ? t('tabbar.nlMode') : '',
-            action:
-              tab.status === 'closed' || tab.status === 'error'
-                ? t('tabbar.doubleClickReconnect')
-                : t('tabbar.doubleClickClone')
+            action: t('tabbar.doubleClickRename')
           })}
         >
           <span className={`status-dot ${tab.nlMode ? 'nl' : tab.status}`} />
-          <span className="tab-title">{tab.title}</span>
+          {tab.id === activeTabId && <span className="tab-underline" aria-hidden />}
+          {renamingId === tab.id ? (
+            <input
+              className="tab-title-input"
+              value={renameValue}
+              autoFocus
+              onFocus={(e) => e.currentTarget.select()}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  commitRename()
+                } else if (e.key === 'Escape') {
+                  e.preventDefault()
+                  cancelRename()
+                }
+              }}
+            />
+          ) : (
+            <span className="tab-title">{tabLabel(tab)}</span>
+          )}
           <button
             className="close-btn"
-            onClick={(e) => handleClose(e, tab.id, tab.sessionId)}
+            onClick={(e) => handleClose(e, tab)}
             title={t('tabbar.closeTab')}
           >
             ×
@@ -305,9 +397,85 @@ export default function TabBar({
       </div>
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
+          {(menu.tab.status === 'closed' || menu.tab.status === 'error') && (
+            <>
+              <ContextMenuItem
+                icon="connect"
+                onClick={() => {
+                  const tab = menu.tab
+                  setMenu(null)
+                  setActive(tab.id)
+                  void reconnectTab(tab.id)
+                }}
+              >
+                {t('tabbar.reconnect')}
+              </ContextMenuItem>
+              <div className="context-menu-divider" role="separator" />
+            </>
+          )}
+          <ContextMenuItem icon="rename" onClick={() => startRename(menu.tab)}>
+            {t('tabbar.rename')}
+          </ContextMenuItem>
+          <div className="context-menu-colors" onClick={(e) => e.stopPropagation()}>
+            <span className="context-menu-colors-label">{t('tabbar.setColor')}</span>
+            <div className="context-menu-swatches">
+              {TAB_COLORS.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  className={`color-swatch ${menu.tab.color === c ? 'active' : ''}`}
+                  style={{ background: c }}
+                  title={c}
+                  onClick={() => {
+                    setTabColor(menu.tab.id, c)
+                    setMenu(null)
+                  }}
+                />
+              ))}
+              <button
+                type="button"
+                className={`color-swatch color-swatch-none ${!menu.tab.color ? 'active' : ''}`}
+                title={t('tabbar.colorNone')}
+                onClick={() => {
+                  setTabColor(menu.tab.id, undefined)
+                  setMenu(null)
+                }}
+              />
+            </div>
+          </div>
+          <div className="context-menu-divider" role="separator" />
+          <ContextMenuItem
+            icon="copy"
+            disabled={menu.tab.status !== 'connected'}
+            onClick={() => {
+              const tab = menu.tab
+              setMenu(null)
+              void cloneTab(tab.id)
+            }}
+          >
+            {t('tabbar.duplicate')}
+          </ContextMenuItem>
           <ContextMenuItem icon="save" onClick={() => void saveTabOutput(menu.tab)}>
             {t('tabbar.saveOutput')}
           </ContextMenuItem>
+          <div className="context-menu-divider" role="separator" />
+          <ContextMenuItem
+            icon="delete"
+            onClick={() => {
+              const tab = menu.tab
+              setMenu(null)
+              closeTab(tab)
+            }}
+          >
+            {t('tabbar.closeTab')}
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={tabs.length <= 1}
+            onClick={() => closeOthers(menu.tab)}
+          >
+            {t('tabbar.closeOthers')}
+          </ContextMenuItem>
+          <ContextMenuItem onClick={closeAll}>{t('tabbar.closeAll')}</ContextMenuItem>
         </div>
       )}
     </div>
