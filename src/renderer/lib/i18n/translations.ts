@@ -512,7 +512,7 @@ const en: Record<keyof typeof zh, string> = {
   'tabbar.recentEmpty': 'No recent connections',
   'tabbar.settings': 'Settings',
   'tabbar.themes': 'Themes',
-  'tabbar.terminalAppearance': 'Terminal Appearance',
+  'tabbar.terminalAppearance': 'Terminal View',
   'tabbar.shortcuts': 'Shortcuts',
   'tabbar.aiSettings': 'AI Settings',
   'tabbar.skills': 'Skills',
@@ -598,7 +598,7 @@ const en: Record<keyof typeof zh, string> = {
   'settings.userRules.placeholder':
     'For example:\n- Prefer Chinese replies\n- Always ask before destructive commands\n- Prefer apt over yum',
 
-  'settings.terminal.title': 'Terminal Appearance',
+  'settings.terminal.title': 'Terminal View',
   'settings.terminal.textSection': 'Text',
   'settings.terminal.colorScheme': 'Color scheme',
   'settings.terminal.colorSchemeHint': 'Choose the terminal ANSI palette. "Follow app theme" syncs with the UI theme.',
@@ -803,7 +803,7 @@ const en: Record<keyof typeof zh, string> = {
   'tool.action.update_app_settings': 'Update app settings',
   'tool.settings.theme': 'Theme',
   'tool.settings.locale': 'Language',
-  'tool.settings.terminal': 'Terminal appearance',
+  'tool.settings.terminal': 'Terminal view',
   'tool.settings.ai': 'AI settings',
   'tool.settings.baseURL': 'API base URL',
   'tool.settings.apiKey': 'API key',

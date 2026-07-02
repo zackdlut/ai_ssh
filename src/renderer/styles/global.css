@@ -1365,6 +1365,7 @@ select:focus {
   top: calc(100% + 6px);
   right: 0;
   z-index: 200;
+  width: max-content;
   min-width: 196px;
   background: var(--ink-600);
   border: 1px solid var(--line-strong);
@@ -1408,7 +1409,7 @@ select:focus {
 }
 .menu-item-label {
   flex: 1;
-  min-width: 0;
+  white-space: nowrap;
 }
 
 .toolbar-dropdown-divider {
