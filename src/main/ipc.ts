@@ -2,6 +2,7 @@ import { app, ipcMain, dialog, type BrowserWindow } from 'electron'
 import { writeFile } from 'fs/promises'
 import { basename } from 'path'
 import { SshManager } from './ssh/manager'
+import { WslManager } from './wsl/manager'
 import { deleteLocal, listLocal, localHome, renameLocal } from './local/fs'
 import { AIProvider } from './ai/provider'
 import * as config from './config/store'
@@ -28,6 +29,7 @@ import type {
   BookmarkFolder,
   ConnectionConfig,
   ConnectOptions,
+  WslConnectOptions,
   CopilotChatState,
   KeybindingsSettings,
   TerminalAppearanceSettings,
@@ -49,17 +51,36 @@ function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
+export interface IpcManagers {
+  ssh: SshManager
+  wsl: WslManager
+  disposeAll: () => void
+}
+
+export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers {
   const ssh = new SshManager(getWindow)
+  const wsl = new WslManager(getWindow)
   const ai = new AIProvider(() => config.getAISettings())
 
   // --- SSH ---
   ipcMain.handle('ssh:connect', (_e, opts: ConnectOptions) => ssh.connect(opts))
-  ipcMain.on('ssh:write', (_e, sessionId: string, data: string) => ssh.write(sessionId, data))
-  ipcMain.on('ssh:resize', (_e, sessionId: string, cols: number, rows: number) =>
-    ssh.resize(sessionId, cols, rows)
-  )
-  ipcMain.on('ssh:close', (_e, sessionId: string) => ssh.close(sessionId))
+  // write/resize/close are shared across SSH and WSL sessions; route by owner.
+  ipcMain.on('ssh:write', (_e, sessionId: string, data: string) => {
+    if (wsl.has(sessionId)) wsl.write(sessionId, data)
+    else ssh.write(sessionId, data)
+  })
+  ipcMain.on('ssh:resize', (_e, sessionId: string, cols: number, rows: number) => {
+    if (wsl.has(sessionId)) wsl.resize(sessionId, cols, rows)
+    else ssh.resize(sessionId, cols, rows)
+  })
+  ipcMain.on('ssh:close', (_e, sessionId: string) => {
+    if (wsl.has(sessionId)) wsl.close(sessionId)
+    else ssh.close(sessionId)
+  })
+
+  // --- WSL (local pseudo-terminal) ---
+  ipcMain.handle('wsl:list', () => wsl.listDistros())
+  ipcMain.handle('wsl:connect', (_e, opts: WslConnectOptions) => wsl.connect(opts))
 
   // --- AI (streaming) ---
   ipcMain.on('ai:chat', (e, req: AIChatRequest) => {
@@ -435,5 +456,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): SshManager {
     }
   })
 
-  return ssh
+  return {
+    ssh,
+    wsl,
+    disposeAll: () => {
+      ssh.disposeAll()
+      wsl.disposeAll()
+    }
+  }
 }

@@ -41,6 +41,19 @@ export interface ConnectResult {
   error?: string
 }
 
+/** A WSL distribution installed on the local Windows machine. */
+export interface WslDistro {
+  name: string
+}
+
+/** Options for opening a local WSL pseudo-terminal session. */
+export interface WslConnectOptions {
+  /** Distribution to launch; omit to use the default distro. */
+  distro?: string
+  /** Optional user to launch the shell as (`wsl -u <user>`). */
+  user?: string
+}
+
 export type SshStatus = 'idle' | 'connecting' | 'connected' | 'closed' | 'error'
 
 export interface SshStatusEvent {

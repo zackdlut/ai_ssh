@@ -104,6 +104,51 @@ export async function connect({ opts, title, tabId }: ConnectArgs): Promise<stri
   return undefined
 }
 
+/**
+ * Open a local WSL pseudo-terminal session and register a terminal tab.
+ * Returns an error string on failure, or undefined on success.
+ */
+export async function connectWsl(distro?: string): Promise<string | undefined> {
+  const store = useTabsStore.getState()
+  const reuseIdleTab = findIdleTabToReuse()
+  const title = distro || 'WSL'
+
+  if (reuseIdleTab) {
+    store.setStatusById(reuseIdleTab.id, 'connecting')
+  }
+
+  const result = await window.api.wsl.connect({ distro })
+  if (result.error || !result.sessionId) {
+    const message = result.error ?? t(loc(), 'connect.failed')
+    if (reuseIdleTab) {
+      store.setStatusById(reuseIdleTab.id, 'idle', message)
+    }
+    return message
+  }
+
+  const tabData = {
+    sessionId: result.sessionId,
+    title,
+    kind: 'wsl' as const,
+    wslDistro: distro,
+    status: 'connected' as const,
+    host: '',
+    port: 0,
+    username: '',
+    message: undefined
+  }
+  if (reuseIdleTab) {
+    store.patchTab(reuseIdleTab.id, tabData)
+    store.setActive(reuseIdleTab.id)
+  } else {
+    store.addTab({
+      id: genTabId(),
+      ...tabData
+    })
+  }
+  return undefined
+}
+
 /** Connect using a saved connection config. */
 export async function connectFromConfig(
   c: ConnectionConfig,
@@ -138,6 +183,19 @@ export async function reconnectTab(tabId: string): Promise<string | undefined> {
   if (!tab) return t(loc(), 'connect.tabNotFound')
   if (tab.status === 'connecting') return undefined
 
+  if (tab.kind === 'wsl') {
+    if (tab.sessionId) window.api.ssh.close(tab.sessionId)
+    store.setStatusById(tabId, 'connecting')
+    const result = await window.api.wsl.connect({ distro: tab.wslDistro })
+    if (result.error || !result.sessionId) {
+      const message = result.error ?? t(loc(), 'connect.reconnectFailed')
+      store.setStatusById(tabId, 'error', message)
+      return message
+    }
+    store.updateSession(tabId, result.sessionId, 'connected')
+    return undefined
+  }
+
   const opts = resolveConnectOpts(tab)
   if (!opts) {
     return t(loc(), 'connect.noCredentialsReconnect')
@@ -168,6 +226,10 @@ export async function reconnectTab(tabId: string): Promise<string | undefined> {
 export async function cloneTab(tabId: string): Promise<string | undefined> {
   const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId)
   if (!tab || tab.status !== 'connected') return undefined
+
+  if (tab.kind === 'wsl') {
+    return connectWsl(tab.wslDistro)
+  }
 
   const opts = resolveConnectOpts(tab)
   if (!opts) {

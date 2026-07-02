@@ -4,6 +4,10 @@ import type { ConnectOptions, SshStatus } from '../../shared/types'
 export interface TerminalTab {
   id: string
   title: string
+  /** Session backend: remote SSH (default) or a local WSL pseudo-terminal. */
+  kind?: 'ssh' | 'wsl'
+  /** WSL distribution name for `kind: 'wsl'` tabs (used for reconnect/title). */
+  wslDistro?: string
   /** Absent until an SSH session is opened (idle tab). */
   sessionId?: string
   status: SshStatus

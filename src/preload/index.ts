@@ -38,7 +38,9 @@ import type {
   PickDirectoryResult,
   SaveFileResult,
   SshDataEvent,
-  SshStatusEvent
+  SshStatusEvent,
+  WslConnectOptions,
+  WslDistro
 } from '../shared/types'
 
 type Unsubscribe = () => void
@@ -63,6 +65,11 @@ const api = {
     close: (sessionId: string): void => ipcRenderer.send('ssh:close', sessionId),
     onData: (cb: (e: SshDataEvent) => void): Unsubscribe => on('ssh:data', cb),
     onStatus: (cb: (e: SshStatusEvent) => void): Unsubscribe => on('ssh:status', cb)
+  },
+  wsl: {
+    list: (): Promise<WslDistro[]> => ipcRenderer.invoke('wsl:list'),
+    connect: (opts: WslConnectOptions): Promise<ConnectResult> =>
+      ipcRenderer.invoke('wsl:connect', opts)
   },
   local: {
     home: (): Promise<LocalHomeResult> => ipcRenderer.invoke('local:home'),

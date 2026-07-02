@@ -3,12 +3,13 @@ import { useTabsStore, type TerminalTab } from '../store/tabsStore'
 import { useAIStore } from '../store/aiStore'
 import { useSftpStore } from '../store/sftpStore'
 import { useBookmarksStore } from '../store/bookmarksStore'
-import { cloneTab, connectFromConfig, reconnectTab } from '../lib/connect'
+import { cloneTab, connectFromConfig, connectWsl, reconnectTab } from '../lib/connect'
 import { readFullTerminalOutput } from '../lib/terminalRegistry'
 import { useT } from '../lib/i18n'
 import UiIcon from './UiIcon'
 import DropdownMenuItem from './DropdownMenuItem'
 import ContextMenuItem from './ContextMenuItem'
+import type { WslDistro } from '../../shared/types'
 
 export type SettingsMenuItem =
   | 'ai'
@@ -67,12 +68,15 @@ export default function TabBar({
   const { panelOpen, togglePanel } = useAIStore()
   const sftpOpen = useSftpStore((s) => s.panelOpen)
   const toggleSftp = useSftpStore((s) => s.togglePanel)
+  const setSftpOpen = useSftpStore((s) => s.setPanelOpen)
   // Subscribe to connections so the recent list refreshes as usage changes.
   const connections = useBookmarksStore((s) => s.connections)
   const getRecentConnections = useBookmarksStore((s) => s.getRecentConnections)
   const t = useT()
   const [recentOpen, setRecentOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [wslDistros, setWslDistros] = useState<WslDistro[]>([])
+  const [wslMenuOpen, setWslMenuOpen] = useState(false)
   const [menu, setMenu] = useState<TabContextMenu | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -80,6 +84,48 @@ export default function TabBar({
   const [dragOverId, setDragOverId] = useState<string | null>(null)
 
   const recent = recentOpen ? getRecentConnections(5) : []
+  const activeIsWsl = tabs.find((tt) => tt.id === activeTabId)?.kind === 'wsl'
+
+  // SFTP relies on the SSH channel; close the panel when a WSL tab is active.
+  useEffect(() => {
+    if (activeIsWsl && sftpOpen) setSftpOpen(false)
+  }, [activeIsWsl, sftpOpen, setSftpOpen])
+
+  // Probe installed WSL distributions once; empty on non-Windows so the button
+  // stays hidden there.
+  useEffect(() => {
+    let cancelled = false
+    void window.api.wsl.list().then((list) => {
+      if (!cancelled) setWslDistros(list)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!wslMenuOpen) return
+    const close = (): void => setWslMenuOpen(false)
+    window.addEventListener('click', close)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [wslMenuOpen])
+
+  const openWsl = (distro?: string): void => {
+    setWslMenuOpen(false)
+    void connectWsl(distro)
+  }
+
+  const handleWslClick = (): void => {
+    if (wslDistros.length <= 1) {
+      openWsl(wslDistros[0]?.name)
+    } else {
+      setWslMenuOpen((v) => !v)
+    }
+  }
 
   useEffect(() => {
     if (!recentOpen) return
@@ -322,6 +368,49 @@ export default function TabBar({
           </div>
         )}
       </div>
+      {wslDistros.length > 0 && (
+        <div className="tab-add-wrap wsl-launch-wrap">
+          <button
+            className={`toolbar-btn tab-wsl-btn ${wslMenuOpen ? 'active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              handleWslClick()
+            }}
+            title={t('tabbar.openWsl')}
+          >
+            <UiIcon name="terminal" />
+            <span>WSL</span>
+            {wslDistros.length > 1 && (
+              <UiIcon
+                name="caret-down"
+                className={`tab-add-caret-glyph ${wslMenuOpen ? 'open' : ''}`}
+                size="sm"
+              />
+            )}
+          </button>
+          {wslMenuOpen && wslDistros.length > 1 && (
+            <div className="recent-menu" onClick={(e) => e.stopPropagation()}>
+              <div className="recent-menu-title">
+                <UiIcon name="terminal" size="sm" className="menu-item-icon" />
+                {t('tabbar.openWsl')}
+              </div>
+              {wslDistros.map((d) => (
+                <button
+                  key={d.name}
+                  className="recent-menu-item"
+                  onClick={() => openWsl(d.name)}
+                  title={d.name}
+                >
+                  <UiIcon name="terminal" className="menu-item-icon" />
+                  <span className="recent-item-body">
+                    <span className="recent-item-name">{d.name}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <div className="tabbar-spacer" />
       <div className="tabbar-actions">
         <div className="tabbar-action-slot toolbar-menu-wrap">
@@ -438,7 +527,8 @@ export default function TabBar({
           <button
             className={`toolbar-btn tabbar-action-btn ${sftpOpen ? 'active' : ''}`}
             onClick={toggleSftp}
-            title={t('tabbar.toggleSftp')}
+            disabled={activeIsWsl}
+            title={activeIsWsl ? t('tabbar.sftpWslUnsupported') : t('tabbar.toggleSftp')}
           >
             <UiIcon name="sftp" />
             <span>{t('tabbar.sftp')}</span>

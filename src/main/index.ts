@@ -1,13 +1,13 @@
 import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'path'
-import type { SshManager } from './ssh/manager'
+import type { IpcManagers } from './ipc'
 
 // A terminal app needs no GPU acceleration; disabling it avoids GPU process
 // crashes in headless / VM / WSL environments.
 app.disableHardwareAcceleration()
 
 let mainWindow: BrowserWindow | null = null
-let sshManager: SshManager | null = null
+let ipcManagers: IpcManagers | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -49,7 +49,7 @@ app.whenReady().then(() => {
   createWindow()
 
   void import('./ipc').then(({ registerIpc }) => {
-    sshManager = registerIpc(() => mainWindow)
+    ipcManagers = registerIpc(() => mainWindow)
   })
 
   app.on('activate', () => {
@@ -57,7 +57,7 @@ app.whenReady().then(() => {
   })
 })
 
-app.on('before-quit', () => sshManager?.disposeAll())
+app.on('before-quit', () => ipcManagers?.disposeAll())
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
