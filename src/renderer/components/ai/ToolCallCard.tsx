@@ -30,7 +30,8 @@ const TOOL_CATEGORY: Record<string, ToolCategory> = {
   list_folders: 'read',
   exec_command: 'command',
   get_app_settings: 'settings',
-  update_app_settings: 'settings'
+  update_app_settings: 'settings',
+  read_skill: 'read'
 }
 
 function parseArgs(raw: string): Record<string, unknown> {
@@ -462,7 +463,7 @@ function ToolResult({ name, result }: { name: string; result?: string }): JSX.El
   }
   if (!result) return null
 
-  if (name === 'exec_command') {
+  if (name === 'exec_command' || name === 'read_skill') {
     return <LongTextOutput text={result} />
   }
 

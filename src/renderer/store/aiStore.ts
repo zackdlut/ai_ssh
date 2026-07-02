@@ -7,6 +7,9 @@ import type {
   ToolCallView
 } from '../../shared/types'
 import { getCopilotStartupOpen } from './startupStore'
+import { useLocaleStore } from './localeStore'
+import { translate } from '../lib/i18n/translations'
+import { clearTaskMemory } from '../lib/taskMemory'
 
 export interface ChatMessage extends CopilotChatMessage {
   streaming?: boolean
@@ -167,13 +170,36 @@ function migratePersistedTabs(chatTabs: ChatTab[]): ChatTab[] {
   )
 }
 
+/**
+ * The agent loop that drives tool-call approval/execution lives only in memory
+ * (aiService's `loops` map) and is lost on reload. A persisted tool call still
+ * in `pending`/`running` can therefore never be resumed, so land it as an error
+ * instead of leaving a card stuck awaiting an approval that would go nowhere.
+ */
+function sanitizeReloadedToolCalls(toolCalls?: ToolCallView[]): ToolCallView[] | undefined {
+  if (!toolCalls || toolCalls.length === 0) return toolCalls
+  let changed = false
+  const next = toolCalls.map((tc) => {
+    if (tc.status === 'pending' || tc.status === 'running') {
+      changed = true
+      return {
+        ...tc,
+        status: 'error' as const,
+        error: translate(useLocaleStore.getState().locale, 'tool.interruptedReload')
+      }
+    }
+    return tc
+  })
+  return changed ? next : toolCalls
+}
+
 function fromPersistedState(state: CopilotChatState): { chatTabs: ChatTab[]; activeChatTabId: string } {
   const chatTabs: ChatTab[] = state.tabs
     .filter((tab) => tab.messages.length > 0)
     .map((tab) => ({
       ...tab,
       archived: tab.archived ?? false,
-      messages: tab.messages.map((m) => ({ ...m }))
+      messages: tab.messages.map((m) => ({ ...m, toolCalls: sanitizeReloadedToolCalls(m.toolCalls) }))
     }))
   const migrated = migratePersistedTabs(chatTabs)
   let activeChatTabId = state.activeTabId
@@ -351,6 +377,7 @@ export const useAIStore = create<AIState>((set, get) => ({
     return true
   },
   deleteChatTab: (id) => {
+    clearTaskMemory(id)
     set((s) => {
       const tab = s.chatTabs.find((t) => t.id === id)
       if (!tab) return s
@@ -406,6 +433,7 @@ export const useAIStore = create<AIState>((set, get) => ({
   clearActiveTab: () => {
     const activeId = get().activeChatTabId
     if (!activeId) return
+    clearTaskMemory(activeId)
     set((s) => ({
       chatTabs: updateTab(s.chatTabs, activeId, { messages: [], draft: '' })
     }))

@@ -14,7 +14,9 @@ import { useStartupStore } from '../store/startupStore'
 import { useSkillsStore } from '../store/skillsStore'
 import { useUserRulesStore } from '../store/userRulesStore'
 import { connect, connectFromConfig } from './connect'
-import { readFullTerminalOutput } from './terminalRegistry'
+import { runCapturedCommand } from './execCapture'
+import { getTabObservation, setTabObservation } from './terminalObservation'
+import { verifyCommand } from '../../shared/verify'
 import { normalizeAISettings } from '../../shared/aiSettings'
 import type { TerminalAppearanceSettings } from '../../shared/terminalSettings'
 import type {
@@ -57,27 +59,6 @@ function str(v: unknown): string | undefined {
 function num(v: unknown): number | undefined {
   const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN
   return Number.isFinite(n) ? n : undefined
-}
-
-const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
-
-/**
- * Best-effort capture of a command's output: snapshot the terminal buffer,
- * send the command, wait briefly, then return the newly appended tail. This is
- * not a precise capture (no sentinel markers), but enough for the model to
- * reason about the result.
- */
-async function execAndCapture(
-  tabId: string,
-  sessionId: string,
-  command: string
-): Promise<string> {
-  const before = readFullTerminalOutput(tabId)
-  window.api.ssh.write(sessionId, command.replace(/\s+$/, '') + '\n')
-  await delay(1500)
-  const after = readFullTerminalOutput(tabId)
-  const added = after.startsWith(before) ? after.slice(before.length) : after
-  return added.trim()
 }
 
 /** The ids of the open terminal tabs, used to detect a newly opened tab. */
@@ -342,11 +323,50 @@ async function execCommand(args: Record<string, unknown>): Promise<ToolResult> {
   if (!tabId || !command) return { ok: false, error: 'tab_id and command are required.' }
   const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId)
   if (!tab) return { ok: false, error: `No open tab with id "${tabId}".` }
-  if (tab.status !== 'connected') {
+  if (tab.status !== 'connected' || !tab.sessionId) {
     return { ok: false, error: `Tab "${tabId}" is not connected (status: ${tab.status}).` }
   }
-  const output = await execAndCapture(tab.id, tab.sessionId!, command)
-  return { ok: true, result: output || 'Command sent (no output captured).' }
+
+  const cap = await runCapturedCommand(tab.sessionId, command)
+
+  // A dropped session mid-command is a recoverable transient failure: surface it
+  // as an error (not a "successful" empty result) so the loop can reconnect or
+  // ask the user, instead of the model assuming the command succeeded.
+  if (cap.disconnected) {
+    return {
+      ok: false,
+      error: `SSH session for tab "${tabId}" disconnected while running the command. The command may not have completed; reconnect the tab and retry if needed.`
+    }
+  }
+
+  // Record the observed environment so later turns' snapshot can show it without
+  // re-running pwd (Observe: structured cwd + last command + exit code).
+  setTabObservation(tab.id, {
+    cwd: cap.cwd ?? undefined,
+    lastCommand: command,
+    lastExitCode: cap.exitCode,
+    at: Date.now()
+  })
+
+  // Verify layer: turn the exit code + output into an explicit signal so the
+  // model does not have to guess success/failure from raw text.
+  const verdict = verifyCommand(cap.output, cap.exitCode)
+
+  const lines: string[] = []
+  lines.push(`status: ${verdict.status}`)
+  lines.push(`exit_code: ${cap.exitCode === null ? 'unknown' : cap.exitCode}`)
+  if (cap.cwd) lines.push(`cwd: ${cap.cwd}`)
+  if (verdict.hint) {
+    lines.push(`verify: ${verdict.hint}${verdict.retryable ? ' (transient — a retry may help)' : ''}`)
+  }
+  if (cap.timedOut) {
+    lines.push(
+      'note: capture timed out before the command signalled completion; output may be partial or the command may still be running.'
+    )
+  }
+  lines.push('output:')
+  lines.push(cap.output || '(no output captured)')
+  return { ok: true, result: lines.join('\n') }
 }
 
 function listSshConfigs(): ToolResult {
@@ -594,14 +614,24 @@ export function buildToolContextMessage(): string | undefined {
   const terminal = useTerminalAppearanceStore.getState()
   const startup = useStartupStore.getState()
 
+  const activeTabId = useTabsStore.getState().activeTabId
   const tabsText = tabs.length
     ? tabs
-        .map(
-          (t) =>
-            `- tab_id=${t.id} | ${t.username}@${t.host}:${t.port} | ${t.status}${
-              t.id === useTabsStore.getState().activeTabId ? ' | active' : ''
-            }`
-        )
+        .map((t) => {
+          const obs = getTabObservation(t.id)
+          const cwd = obs?.cwd ? ` | cwd=${obs.cwd}` : ''
+          const last =
+            obs?.lastCommand !== undefined
+              ? ` | last=\`${obs.lastCommand}\`${
+                  obs.lastExitCode === null || obs.lastExitCode === undefined
+                    ? ''
+                    : ` (exit ${obs.lastExitCode})`
+                }`
+              : ''
+          return `- tab_id=${t.id} | ${t.username}@${t.host}:${t.port} | ${t.status}${
+            t.id === activeTabId ? ' | active' : ''
+          }${cwd}${last}`
+        })
         .join('\n')
     : '(none)'
 

@@ -1,6 +1,7 @@
-import { isReadonlyTool } from '../../shared/aiTools'
+import { isDangerousTool, isReadonlyTool } from '../../shared/aiTools'
 import type { ToolCallView } from '../../shared/types'
 import { useAIStore } from '../store/aiStore'
+import { isDangerous } from './commands'
 
 export interface PendingToolCallRef {
   messageId: string
@@ -94,4 +95,24 @@ export function getPendingToolCalls(tabId: string): PendingToolCallRef[] {
 
 export function hasPendingToolCalls(tabId: string): boolean {
   return getPendingToolCalls(tabId).length > 0
+}
+
+/**
+ * True when any pending (awaiting-approval) tool call is destructive: a
+ * flagged dangerous tool (close_tab/close_tabs) or an exec_command whose
+ * command looks destructive. Used to force such actions through the explicit
+ * card buttons instead of a loose chat phrase like "ok" / "可以".
+ */
+export function hasDangerousPending(tabId: string): boolean {
+  return getPendingToolCalls(tabId).some(({ call }) => {
+    if (call.name === 'exec_command') {
+      try {
+        const args = JSON.parse(call.args || '{}') as { command?: unknown }
+        return isDangerous(String(args.command ?? ''))
+      } catch {
+        return true
+      }
+    }
+    return isDangerousTool(call.name)
+  })
 }

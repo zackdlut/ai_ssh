@@ -94,6 +94,16 @@ const CHART_SPEC_JSON_SCHEMA = {
   }
 } as const
 
+/**
+ * Abort a streaming chat if no data arrives for this long — either no first
+ * byte (the endpoint accepted the connection but the model wedged during
+ * prefill, which some quantized local models do on certain long/complex
+ * prompts) or a mid-stream stall. Without this the renderer stays "busy"
+ * forever. Generous so a slow local model's first token (model load + prefill)
+ * is not cut off; the timer resets on every chunk.
+ */
+const CHAT_STREAM_STALL_MS = 120000
+
 export interface StreamCallbacks {
   onChunk: (delta: string) => void
   /** Streamed reasoning/thinking tokens, kept separate from the answer body. */
@@ -343,8 +353,21 @@ export class AIProvider {
     let full = ''
     let reasoningFull = ''
     let chunkCount = 0
+    // Idle-stall watchdog: abort the request when no data has arrived for
+    // CHAT_STREAM_STALL_MS. `timedOut` distinguishes this from a user cancel so
+    // the catch reports a clear timeout error instead of a silent completion.
+    let stallTimer: ReturnType<typeof setTimeout> | null = null
+    let timedOut = false
+    const armStall = (): void => {
+      if (stallTimer) clearTimeout(stallTimer)
+      stallTimer = setTimeout(() => {
+        timedOut = true
+        controller.abort()
+      }, CHAT_STREAM_STALL_MS)
+    }
     const toolAcc = new Map<number, ToolCallAccumulator>()
     try {
+      armStall()
       // Some OpenAI-compatible backends (older Ollama models, etc.) reject the
       // `tools` parameter; fall back to a plain streaming request so the chat
       // still works (it just won't be able to call functions).
@@ -365,6 +388,7 @@ export class AIProvider {
       }
 
       for await (const part of stream as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>) {
+        armStall()
         chunkCount++
         const { content, reasoning } = splitStreamDelta(part)
         // Reasoning is streamed to a separate channel and intentionally NOT
@@ -405,7 +429,20 @@ export class AIProvider {
       }, Date.now() - started)
       cb.onDone(full, toolCalls.length > 0 ? toolCalls : undefined)
     } catch (e) {
-      if (controller.signal.aborted) {
+      if (timedOut) {
+        // Watchdog fired: the model produced nothing for CHAT_STREAM_STALL_MS.
+        // Surface a clear error (and clear busy) rather than hanging forever.
+        logLlmError(req.requestId, 'chat.timeout', {
+          content: full,
+          chunkCount,
+          stallMs: CHAT_STREAM_STALL_MS
+        }, Date.now() - started)
+        cb.onError(
+          `Model response timed out (no output for ${Math.round(
+            CHAT_STREAM_STALL_MS / 1000
+          )}s). The endpoint or model may be stalled — try again, simplify the request, or start a new chat.`
+        )
+      } else if (controller.signal.aborted) {
         logLlmResponse(req.requestId, 'chat.aborted', {
           content: full,
           reasoning: reasoningFull || undefined,
@@ -422,6 +459,7 @@ export class AIProvider {
         cb.onError(e instanceof Error ? e.message : String(e))
       }
     } finally {
+      if (stallTimer) clearTimeout(stallTimer)
       this.controllers.delete(req.requestId)
     }
   }

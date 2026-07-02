@@ -233,6 +233,13 @@ const zh = {
   'copilot.noTerminal': '无活动终端',
   'copilot.stop': '停止',
   'copilot.send': '发送',
+  'copilot.emptyReply': '未能生成回应，请换种方式描述你的需求。',
+  'copilot.loopGuard.maxSteps':
+    '已达到本轮任务的最大执行步数（{max} 步）仍未完成，已停止以避免无限循环。请检查进度，或用更具体的指令继续。',
+  'copilot.loopGuard.repeat':
+    '检测到重复执行相同命令且无进展，已停止以避免死循环。请调整策略或补充更多信息后重试。',
+  'copilot.loopGuard.tokenBudget':
+    '本轮任务累计消耗的上下文已超出预算，已停止。请开启新对话或缩小任务范围。',
   'copilot.modelSelect': '选择 Copilot 模型',
   'copilot.resizeLabel': '调整 Copilot 面板宽度',
   'copilot.resizeTip': '拖动调整宽度（双击重置）',
@@ -303,6 +310,11 @@ const zh = {
   'tool.approvalHint': '也可在下方输入「确认」「批准」或「拒绝」来操作。',
   'tool.approvalPlaceholder': '输入「确认」或「批准」执行，「拒绝」取消…',
   'tool.approvalRequired': '有待批准的操作，请输入「确认」/「批准」或「拒绝」，或点击卡片上的按钮。',
+  'tool.approveDangerCard': '该操作可能具有破坏性，请点击卡片上的「批准」按钮确认。',
+  'tool.approveAll': '全部批准',
+  'tool.rejectAll': '全部拒绝',
+  'tool.approveAllHint': '有 {count} 项操作待批准',
+  'tool.interruptedReload': '应用已重载，该操作已取消。',
   'tool.approvedViaChat': '已通过聊天批准 {count} 项操作',
   'tool.rejectedViaChat': '已通过聊天拒绝 {count} 项操作',
   'tool.action.open_ssh': '打开 SSH 连接',
@@ -318,6 +330,7 @@ const zh = {
   'tool.action.list_open_tabs': '读取打开的标签',
   'tool.action.get_app_settings': '查看应用设置',
   'tool.action.update_app_settings': '更新应用设置',
+  'tool.action.read_skill': '读取技能',
   'tool.settings.theme': '主题',
   'tool.settings.locale': '语言',
   'tool.settings.terminal': '终端外观',
@@ -388,6 +401,7 @@ const zh = {
   'tool.desc.list_open_tabs': '读取当前打开的终端标签',
   'tool.desc.get_app_settings': '读取当前应用设置',
   'tool.desc.update_app_settings': '将更新应用设置',
+  'tool.desc.read_skill': '读取已安装技能的完整步骤',
 
   'sftp.title': 'SFTP',
   'sftp.refresh': '刷新',
@@ -713,6 +727,13 @@ const en: Record<keyof typeof zh, string> = {
   'copilot.placeholder': 'Describe what you want to do… (type @terminal to bind terminal)',
   'copilot.noTerminal': 'No active terminal',
   'copilot.stop': 'Stop',
+  'copilot.emptyReply': 'No response was generated. Please try rephrasing your request.',
+  'copilot.loopGuard.maxSteps':
+    'Reached the maximum number of steps ({max}) for this task without finishing; stopped to avoid an infinite loop. Review the progress or continue with a more specific instruction.',
+  'copilot.loopGuard.repeat':
+    'Detected the same command repeating with no progress; stopped to avoid a loop. Adjust the approach or provide more details and retry.',
+  'copilot.loopGuard.tokenBudget':
+    'This task exceeded its cumulative context budget and was stopped. Start a new chat or narrow the task scope.',
   'copilot.send': 'Send',
   'copilot.modelSelect': 'Select Copilot model',
   'copilot.resizeLabel': 'Resize Copilot panel',
@@ -786,6 +807,12 @@ const en: Record<keyof typeof zh, string> = {
   'tool.approvalPlaceholder': 'Type “confirm” or “approve” to run, “reject” to cancel…',
   'tool.approvalRequired':
     'Actions are awaiting approval. Type “confirm”/“approve” or “reject”, or use the card buttons.',
+  'tool.approveDangerCard':
+    'This action may be destructive — click Approve on the card to confirm.',
+  'tool.approveAll': 'Approve all',
+  'tool.rejectAll': 'Reject all',
+  'tool.approveAllHint': '{count} actions awaiting approval',
+  'tool.interruptedReload': 'The app was reloaded; this action was cancelled.',
   'tool.approvedViaChat': 'Approved {count} action(s) via chat',
   'tool.rejectedViaChat': 'Rejected {count} action(s) via chat',
   'tool.action.open_ssh': 'Open SSH connection',
@@ -801,6 +828,7 @@ const en: Record<keyof typeof zh, string> = {
   'tool.action.list_open_tabs': 'List open tabs',
   'tool.action.get_app_settings': 'View app settings',
   'tool.action.update_app_settings': 'Update app settings',
+  'tool.action.read_skill': 'Read skill',
   'tool.settings.theme': 'Theme',
   'tool.settings.locale': 'Language',
   'tool.settings.terminal': 'Terminal view',
@@ -871,6 +899,7 @@ const en: Record<keyof typeof zh, string> = {
   'tool.desc.list_open_tabs': 'Lists open terminal tabs',
   'tool.desc.get_app_settings': 'Reads current app settings',
   'tool.desc.update_app_settings': 'Updates app settings',
+  'tool.desc.read_skill': 'Loads the full steps of an installed skill',
 
   'sftp.title': 'SFTP',
   'sftp.refresh': 'Refresh',

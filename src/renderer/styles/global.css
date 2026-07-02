@@ -4275,6 +4275,73 @@ select:focus {
   transform: scale(0.98);
 }
 
+/* Batch approve/reject bar shown above the composer when several actions wait */
+.tool-approval-batch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 12px 8px;
+  padding: 9px 12px;
+  border: 1px solid rgba(91, 233, 208, 0.28);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--signal) 8%, transparent);
+}
+
+.tool-approval-batch-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.tool-approval-batch-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.tool-approval-batch .tool-btn-approve,
+.tool-approval-batch .tool-btn-reject {
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.1s ease;
+}
+
+.tool-approval-batch .tool-btn-approve {
+  background: linear-gradient(180deg, rgba(91, 233, 208, 0.22), rgba(91, 233, 208, 0.12));
+  border-color: rgba(91, 233, 208, 0.35);
+  color: var(--signal);
+}
+
+.tool-approval-batch .tool-btn-approve:hover {
+  background: linear-gradient(180deg, rgba(91, 233, 208, 0.3), rgba(91, 233, 208, 0.16));
+  border-color: rgba(91, 233, 208, 0.5);
+}
+
+.tool-approval-batch .tool-btn-reject {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--line-strong);
+  color: var(--text-dim);
+}
+
+.tool-approval-batch .tool-btn-reject:hover {
+  background: rgba(255, 122, 147, 0.1);
+  border-color: rgba(255, 122, 147, 0.35);
+  color: var(--danger);
+}
+
+.tool-approval-batch .tool-btn-approve:active,
+.tool-approval-batch .tool-btn-reject:active {
+  transform: scale(0.98);
+}
+
 /* Friendly rendering for read-only list tool results */
 .tool-call-card .tool-list {
   display: flex;

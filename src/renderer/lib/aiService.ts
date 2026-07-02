@@ -8,7 +8,7 @@ import { buildContextMessage } from '../../shared/terminalContext'
 import { translate } from './i18n/translations'
 import { useLocaleStore } from '../store/localeStore'
 import { debugLog } from './debugLog'
-import { isDisplayTool, isReadonlyTool, requiresToolApproval } from '../../shared/aiTools'
+import { AI_TOOLS, isDisplayTool, isReadonlyTool, requiresToolApproval } from '../../shared/aiTools'
 import {
   buildSkillsContextMessage,
   buildToolContextMessage,
@@ -17,9 +17,23 @@ import {
 } from './aiTools'
 import {
   getPendingToolCalls,
+  hasDangerousPending,
   hasPendingToolCalls,
   parseToolApprovalInput
 } from './toolApproval'
+import {
+  accountTokens,
+  checkLoopGuard,
+  createGuardState,
+  MAX_STEPS,
+  noProgressStreak,
+  recordTurn,
+  turnSignature,
+  type GuardState,
+  type GuardTrip
+} from './loopGuard'
+import { buildTaskMemoryMessage, recordTaskStep } from './taskMemory'
+import { transition, type AgentEvent, type AgentPhase } from './agentPhase'
 import type { ChatMessage } from '../store/aiStore'
 import { useUserRulesStore } from '../store/userRulesStore'
 import type { ChatMessageDTO, TerminalContext, ToolCallView } from '../../shared/types'
@@ -46,6 +60,20 @@ interface LoopState {
    * its reasoning but forgot to emit the action, so it should still be nudged.
    */
   executedActionTool?: boolean
+  /** Loop Guard counters (steps, token spend, no-progress detection). */
+  guard?: GuardState
+  /** Current phase in the explicit agent state machine (observability). */
+  phase?: AgentPhase
+  /** True once a just-in-time reflection nudge has been injected this task. */
+  reflected?: boolean
+  /**
+   * The user asked to VISUALIZE terminal output as a chart (@terminal + a
+   * charting verb). For the first turn we disable function-calling and inject a
+   * hard "emit a chart block" nudge: small local models otherwise almost always
+   * run the collection command as a tool/bash instead of emitting the ```chart
+   * fence, so the two-phase chart pipeline never starts. See sendPrompt.
+   */
+  chartIntent?: boolean
 }
 
 interface PendingRequest {
@@ -74,6 +102,26 @@ function findMessage(tabId: string, messageId: string): ChatMessage | undefined 
 }
 
 /**
+ * Apply a state-machine transition to the loop and log the phase change. This is
+ * the single place the loop's phase moves, so every branch of the event-driven
+ * flow maps to a named, observable transition.
+ */
+function advance(loop: LoopState, event: AgentEvent, tabId: string): AgentPhase {
+  const from = loop.phase ?? 'idle'
+  const to = transition(from, event)
+  loop.phase = to
+  if (to !== from) {
+    debugLog({
+      category: 'action.triggered',
+      tabId,
+      message: 'agent.phase',
+      data: { from, event, to }
+    })
+  }
+  return to
+}
+
+/**
  * Begin one LLM turn for the loop: a fresh assistant message + chat request.
  *
  * When `epilogue` is true the turn follows a display-only tool turn (its card is
@@ -84,12 +132,36 @@ function findMessage(tabId: string, messageId: string): ChatMessage | undefined 
  */
 function startTurn(loop: LoopState, epilogue = false): void {
   const ai = useAIStore.getState()
+  // A chart-visualization request only applies to the FIRST turn: emit the
+  // ```chart fence with tools OFF (below), then the loop is done — there is no
+  // continuation to keep nudging.
+  const chartTurn = !!loop.chartIntent && loop.phase === undefined
   const snapshot = buildToolContextMessage()
   const skillsCatalog = buildSkillsContextMessage()
+  const taskMemory = buildTaskMemoryMessage(loop.tabId)
   const prefix: ChatMessageDTO[] = []
   if (skillsCatalog) prefix.push({ role: 'system', content: skillsCatalog })
   if (snapshot) prefix.push({ role: 'system', content: snapshot })
+  // Cross-turn ledger of actions already performed this session, so follow-up
+  // user turns retain memory of prior tool executions (the conversation itself
+  // is rebuilt as role+content only across user turns).
+  if (taskMemory) prefix.push({ role: 'system', content: taskMemory })
   const messages: ChatMessageDTO[] = [...prefix, ...loop.conversation]
+  // Append the chart nudge as the LAST (trailing user) message: recency beats
+  // the large tool-oriented system prompt, which otherwise wins and the model
+  // answers with a bare bash block. It is NOT written back to loop.conversation,
+  // so it never leaks into persisted history or later turns.
+  if (chartTurn) messages.push({ role: 'user', content: CHART_TURN_NUDGE })
+
+  // Entering an LLM turn is the "thinking" phase of the state machine.
+  advance(loop, loop.phase ? 'continue' : 'prompt', loop.tabId)
+
+  // Loop Guard bookkeeping: every turn counts as a step and adds its outgoing
+  // token cost to the task-level budget. The limits are enforced in
+  // maybeContinueLoop before a continuation is started.
+  loop.guard ??= createGuardState()
+  loop.guard.stepCount += 1
+  accountTokens(loop.guard, messages.map((m) => m.content))
 
   const assistantId = crypto.randomUUID()
   const requestId = crypto.randomUUID()
@@ -113,7 +185,7 @@ function startTurn(loop: LoopState, epilogue = false): void {
     message: epilogue ? 'agent.startTurn.epilogue' : 'agent.startTurn',
     data: { messageCount: messages.length, epilogue }
   })
-  window.api.ai.chat({ requestId, messages, context: loop.context, enableTools: true, userRules })
+  window.api.ai.chat({ requestId, messages, context: loop.context, enableTools: !chartTurn, userRules })
 }
 
 /** Execute a single tool call and record its outcome, then advance the loop. */
@@ -156,11 +228,15 @@ async function runToolCall(tabId: string, messageId: string, callId: string): Pr
 
 /** Approve a pending (action) tool call from the UI. */
 export function approveToolCall(tabId: string, messageId: string, callId: string): void {
+  const loop = loops.get(messageId)
+  if (loop) advance(loop, 'approved', tabId)
   void runToolCall(tabId, messageId, callId)
 }
 
 /** Reject a pending (action) tool call from the UI. */
 export function rejectToolCall(tabId: string, messageId: string, callId: string): void {
+  const loop = loops.get(messageId)
+  if (loop) advance(loop, 'rejected', tabId)
   const call = findMessage(tabId, messageId)?.toolCalls?.find((c) => c.id === callId)
   debugLog({
     category: 'action.triggered',
@@ -178,11 +254,14 @@ export function rejectToolCall(tabId: string, messageId: string, callId: string)
 export type ToolApprovalHandleResult =
   | { handled: false }
   | { handled: true; action: 'approve' | 'reject'; count: number }
-  | { handled: true; action: 'unrecognized' }
+  | { handled: true; action: 'dangerous_blocked' }
 
 /**
  * When action tools are awaiting approval, interpret short chat replies like
- * "确认" / "approve" as approve/reject instead of sending a new LLM turn.
+ * "确认" / "approve" as approve/reject. Anything that is NOT an approve/reject
+ * phrase is treated as a NEW instruction (handled:false) and flows through to
+ * sendPrompt, which supersedes the pending actions. Destructive actions are
+ * never approved via a loose chat phrase — they must use the card buttons.
  */
 export function tryHandleToolApprovalFromInput(
   tabId: string,
@@ -192,6 +271,17 @@ export function tryHandleToolApprovalFromInput(
 
   const action = parseToolApprovalInput(text)
   if (action === 'approve') {
+    // Refuse to approve destructive actions from a fuzzy chat phrase; the user
+    // must click Approve on the card so the intent is unambiguous.
+    if (hasDangerousPending(tabId)) {
+      debugLog({
+        category: 'user.action',
+        tabId,
+        message: 'tool.approval.dangerBlocked',
+        data: { text }
+      })
+      return { handled: true, action: 'dangerous_blocked' }
+    }
     const refs = getPendingToolCalls(tabId)
     debugLog({
       category: 'user.action',
@@ -213,7 +303,139 @@ export function tryHandleToolApprovalFromInput(
     for (const ref of refs) rejectToolCall(tabId, ref.messageId, ref.callId)
     return refs.length > 0 ? { handled: true, action: 'reject', count: refs.length } : { handled: false }
   }
-  return { handled: true, action: 'unrecognized' }
+  // Not an approve/reject phrase: let it flow through as a new instruction.
+  return { handled: false }
+}
+
+/**
+ * Abandon every pending (awaiting-approval) tool call in a tab without
+ * continuing its agent loop: the loops are dropped and the calls marked
+ * rejected. Used when a new user instruction supersedes proposed actions so the
+ * app does not stay stuck waiting on approvals the user has effectively dropped.
+ */
+export function cancelPendingApprovals(tabId: string): void {
+  const refs = getPendingToolCalls(tabId)
+  if (refs.length === 0) return
+  const ai = useAIStore.getState()
+  for (const ref of refs) {
+    loops.delete(ref.messageId)
+    ai.updateToolCall(tabId, ref.messageId, ref.callId, {
+      status: 'rejected',
+      result: 'Superseded by a new instruction.'
+    })
+  }
+  debugLog({
+    category: 'user.action',
+    tabId,
+    message: 'tool.approval.superseded',
+    data: { count: refs.length }
+  })
+  // The paused turn's request already completed; clear busy so the new prompt
+  // can start a fresh turn.
+  ai.setBusy(false)
+}
+
+/** Parse the structured result string produced by the exec_command tool. */
+function parseExecResult(result: string): {
+  exitCode: number | null
+  cwd?: string
+  outputTail: string
+} {
+  const ecMatch = /^exit_code:\s*(.+)$/m.exec(result)
+  const cwdMatch = /^cwd:\s*(.+)$/m.exec(result)
+  const outIdx = result.indexOf('output:\n')
+  const output = outIdx >= 0 ? result.slice(outIdx + 'output:\n'.length) : result
+  let exitCode: number | null = null
+  if (ecMatch) {
+    const n = Number.parseInt(ecMatch[1].trim(), 10)
+    exitCode = Number.isFinite(n) ? n : null
+  }
+  return {
+    exitCode,
+    cwd: cwdMatch ? cwdMatch[1].trim() : undefined,
+    outputTail: output.replace(/\s+/g, ' ').trim().slice(0, 200)
+  }
+}
+
+/**
+ * Record a completed tool call into the cross-turn Task Memory ledger. Read-only
+ * lookups are skipped (they carry no lasting state); exec_command steps store
+ * the command + exit code + a short output tail; other action tools store a
+ * brief outcome line.
+ */
+function recordCallInTaskMemory(chatTabId: string, call: ToolCallView, content: string): void {
+  if (isReadonlyTool(call.name)) return
+  const status: 'ok' | 'error' | 'rejected' =
+    call.status === 'rejected' ? 'rejected' : call.status === 'error' ? 'error' : 'ok'
+
+  if (call.name === 'exec_command') {
+    let command = '(command)'
+    try {
+      const args = JSON.parse(call.args) as { command?: unknown }
+      if (typeof args.command === 'string') command = args.command
+    } catch {
+      /* keep placeholder */
+    }
+    if (status === 'ok') {
+      const parsed = parseExecResult(content)
+      recordTaskStep(chatTabId, {
+        kind: 'exec',
+        label: command,
+        cwd: parsed.cwd,
+        exitCode: parsed.exitCode,
+        status,
+        summary: parsed.outputTail || undefined,
+        at: Date.now()
+      })
+    } else {
+      recordTaskStep(chatTabId, {
+        kind: 'exec',
+        label: command,
+        status,
+        summary: content,
+        at: Date.now()
+      })
+    }
+    return
+  }
+
+  recordTaskStep(chatTabId, {
+    kind: 'action',
+    label: call.name,
+    status,
+    summary: status === 'ok' ? undefined : content,
+    at: Date.now()
+  })
+}
+
+/**
+ * Stop a runaway loop and tell the user why. Called when the Loop Guard trips
+ * (too many steps, no progress, or the token budget is exhausted) so the loop
+ * ends with a clear, actionable notice instead of continuing to burn turns.
+ */
+function stopLoopWithGuardNotice(tabId: string, loop: LoopState, trip: GuardTrip): void {
+  if (!trip.tripped) return
+  const ai = useAIStore.getState()
+  const message =
+    trip.reason === 'max_steps'
+      ? tNotice('copilot.loopGuard.maxSteps', { max: MAX_STEPS })
+      : trip.reason === 'token_budget'
+        ? tNotice('copilot.loopGuard.tokenBudget')
+        : tNotice('copilot.loopGuard.repeat')
+  ai.addMessage(tabId, {
+    id: crypto.randomUUID(),
+    role: 'assistant',
+    content: message,
+    boundSessionId: loop.boundSessionId,
+    boundTabId: loop.boundTabId
+  })
+  debugLog({
+    category: 'action.triggered',
+    tabId,
+    message: 'agent.loopGuard.tripped',
+    data: { reason: trip.reason, steps: loop.guard?.stepCount, tokens: loop.guard?.tokenSpent }
+  })
+  ai.setBusy(false)
 }
 
 /** When every tool call of a turn is resolved, feed results back and continue. */
@@ -225,6 +447,7 @@ function maybeContinueLoop(tabId: string, messageId: string): void {
   if (calls.some((c) => c.status === 'pending' || c.status === 'running')) return
 
   loops.delete(messageId)
+  const signatureCalls: { name: string; args: string; result: string }[] = []
   for (const c of calls) {
     const content =
       c.status === 'rejected'
@@ -233,6 +456,36 @@ function maybeContinueLoop(tabId: string, messageId: string): void {
           ? `Error: ${c.error}`
           : (c.result ?? 'Done.')
     loop.conversation.push({ role: 'tool', tool_call_id: c.id, content })
+    signatureCalls.push({ name: c.name, args: c.args, result: content })
+    recordCallInTaskMemory(loop.tabId, c, content)
+  }
+
+  // Tool results are now captured: observe -> verify.
+  advance(loop, 'toolExecuted', tabId)
+  advance(loop, 'observed', tabId)
+
+  // Loop Guard: record this turn's signature and stop before continuing if a
+  // hard limit is hit (max steps, no-progress repeats, or token budget).
+  loop.guard ??= createGuardState()
+  recordTurn(loop.guard, turnSignature(signatureCalls))
+  const trip = checkLoopGuard(loop.guard)
+  if (trip.tripped) {
+    advance(loop, 'guardTripped', tabId)
+    stopLoopWithGuardNotice(tabId, loop, trip)
+    return
+  }
+
+  // Just-in-time Reflection: the loop is repeating the same action with the same
+  // result but has not YET hit the hard repeat limit. Inject a one-shot reflect
+  // prompt so the model changes strategy instead of grinding into the guard.
+  if (!loop.reflected && noProgressStreak(loop.guard) >= 2) {
+    loop.reflected = true
+    debugLog({ category: 'action.triggered', tabId, message: 'agent.reflect', data: {} })
+    loop.conversation.push({
+      role: 'user',
+      content:
+        'Reflection checkpoint: your last actions repeated with the SAME result and made no progress. Do NOT repeat the same command again. Step back and reconsider: what assumption is wrong, what different approach or diagnostic could work, or is user input needed? Either change strategy now or state clearly why you are blocked and ask the user.'
+    })
   }
 
   // If this turn ran ONLY display tools and they all succeeded, the rich cards
@@ -281,6 +534,7 @@ export function initAIService(): void {
         ai.setBusy(false)
         return
       }
+      advance(loop, 'finalAnswer', tabId)
       ai.finishMessage(tabId, messageId)
       if (content.trim() === '') {
         // Degenerate turn: the model produced neither a visible answer nor a
@@ -308,7 +562,16 @@ export function initAIService(): void {
           startTurn(loop)
           return
         }
-        ai.removeMessage(tabId, messageId)
+        if (loop.nudged) {
+          // Already nudged once and STILL empty: surface a fallback so the user
+          // is not left staring at their prompt with no reply at all.
+          ai.appendToMessage(tabId, messageId, tNotice('copilot.emptyReply'))
+          ai.finishMessage(tabId, messageId)
+        } else {
+          // Empty turn right after a mutating action already ran: legitimately
+          // "nothing more to say" — drop the blank bubble.
+          ai.removeMessage(tabId, messageId)
+        }
       }
       ai.setBusy(false)
       return
@@ -341,6 +604,7 @@ export function initAIService(): void {
       message: 'agent.toolCalls',
       data: { toolCalls: toolCalls.map((tc) => ({ name: tc.name, id: tc.id })) }
     })
+    advance(loop, 'toolCalls', tabId)
     loop.conversation.push({ role: 'assistant', content, tool_calls: toolCalls })
     const views: ToolCallView[] = toolCalls.map((tc) => ({
       id: tc.id,
@@ -351,6 +615,8 @@ export function initAIService(): void {
     ai.setToolCalls(tabId, messageId, views)
     loops.set(messageId, loop)
 
+    if (views.some((v) => v.status === 'pending')) advance(loop, 'needApproval', tabId)
+
     for (const tc of toolCalls) {
       if (!requiresToolApproval(tc.name, tc.arguments)) void runToolCall(tabId, messageId, tc.id)
     }
@@ -360,6 +626,7 @@ export function initAIService(): void {
     pending.delete(requestId)
     if (entry) {
       const ai = useAIStore.getState()
+      advance(entry.loop, 'recover', entry.tabId)
       if (entry.epilogue) {
         // No visible message exists for an epilogue turn yet — create one so the
         // error is surfaced to the user instead of being silently swallowed.
@@ -380,6 +647,46 @@ export function initAIService(): void {
 
 /** Matches the @terminal mention used to bind the active terminal's live output. */
 const TERMINAL_MENTION = /@terminal\b/i
+
+/**
+ * Charting intent in the user's prompt (paired with @terminal). Matches the CN
+ * chart nouns from the copilot prompt plus common EN verbs. Used to force the
+ * chart path: with function-calling enabled, small local models overwhelmingly
+ * prefer running the collection command as a tool/bash over emitting the
+ * ```chart fence, so the two-phase renderer never starts.
+ */
+const CHART_INTENT =
+  /折线图|柱状图|饼图|散点图|条形图|曲线图?|图表|实时图|可视化|画(个|成|张|一)?图|chart|plot|graph|visuali[sz]e/i
+
+/**
+ * First-turn-only instruction that forces the chart-block format when the user
+ * asked to visualize terminal output. Appended as the trailing user message
+ * with tools disabled; empirically this makes even a small local model reliably
+ * emit the ```chart fence instead of running the command directly. The explicit
+ * template matters — a plain instruction loses to the large tool-oriented
+ * system prompt that pushes bare bash blocks.
+ */
+const CHART_TURN_NUDGE = `[CHART MODE — overrides the general output rules for THIS reply]
+The user asked to VISUALIZE terminal output. Do NOT just print a bash command as the answer. Your reply MUST contain a fenced block tagged EXACTLY \`chart\` FIRST, then a separate \`bash\` block.
+The \`chart\` block body is ONE short sentence describing: chart type (line/bar/pie/scatter), live or static, the source command, and per series the column header/field index (or inline value) to plot, plus any transform (e.g. CPU usage = 100 - id).
+
+The \`bash\` block MUST be a SINGLE simple command whose plain text output the app parses line by line — the columns it prints MUST match what the chart block references.
+FORBIDDEN in the command: \`watch\`, \`while\`/\`for\` loops, \`awk\`/\`sed\`/\`cut\` post-processing, subshells, and full-screen/interactive tools (\`top\` without \`-b\`, \`htop\`). Emit the raw tool so its native columns stream through unmodified.
+Use these canonical commands unless the user clearly needs another tool:
+- CPU: \`vmstat 1\` (idle = the "id" column; CPU usage = 100 - id).
+- Memory: \`free -m -s 1\` (parse the "Mem:" row; "used" is field index 2, "total" is 1, "available" is 6).
+- Disk latency / IO: \`iostat -x 1\`.
+- Ping latency: \`ping <host>\` (regex time=([0-9.]+)).
+- Disk usage breakdown (static pie/bar): \`du -h --max-depth=1 <path> | sort -rh | head -15\`.
+
+Template — fill in and adapt, keep the fences:
+\`\`\`chart
+<实时/静态><折线/柱状/饼/散点>图：<指标>，数据来自 <命令> 的 <列名/字段>，<变换如 使用率 = 100 - id>，x 轴按时间，保留最近 60 个点。
+\`\`\`
+\`\`\`bash
+<the collection command>
+\`\`\`
+A reply without a \`chart\` block, or whose \`bash\` command uses watch/loops/awk, is WRONG.`
 
 const TAB_TITLE_MAX = 24
 
@@ -415,11 +722,17 @@ function buildTerminalContext(
  */
 export async function sendPrompt(text: string): Promise<void> {
   const prompt = text.trim()
-  const ai = useAIStore.getState()
-  if (!prompt || ai.busy) return
+  if (!prompt) return
 
-  const tabId = ai.activeChatTabId
+  const tabId = useAIStore.getState().activeChatTabId
   if (!tabId) return
+
+  // A new instruction while tool actions await approval supersedes them: drop
+  // the paused loop and clear busy so this prompt can start a fresh turn.
+  if (hasPendingToolCalls(tabId)) cancelPendingApprovals(tabId)
+
+  const ai = useAIStore.getState()
+  if (ai.busy) return
 
   let tab = ai.chatTabs.find((t) => t.id === tabId)
   if (!tab) return
@@ -512,7 +825,10 @@ export async function sendPrompt(text: string): Promise<void> {
     context,
     boundSessionId: mentionsTerminal ? activeTerminalTab?.sessionId : undefined,
     boundTabId: mentionsTerminal ? activeTerminalTab?.id : undefined,
-    conversation: history
+    conversation: history,
+    guard: createGuardState(),
+    // Force the chart path only when a terminal is bound to read from.
+    chartIntent: mentionsTerminal && !!activeTerminalTab && CHART_INTENT.test(prompt)
   })
 }
 
@@ -537,6 +853,9 @@ export function askAboutSelection(selection: string): void {
   void sendPrompt(prompt)
 }
 
+/** Estimated token cost of the tool/function schemas sent every turn. */
+const TOOLS_DEFINITION_TEXT = JSON.stringify(AI_TOOLS)
+
 /** Build context budget for the active chat tab (for UI meter). */
 export function computeActiveTabBudget(params: {
   messages: { role: 'user' | 'assistant'; content: string }[]
@@ -545,9 +864,23 @@ export function computeActiveTabBudget(params: {
   limit: number
   userRules?: string
 }) {
+  // Account for EVERY per-turn injection, not just the terminal context: the app
+  // snapshot, skills catalog, task-memory ledger and the tool schemas are all
+  // sent each turn and previously went uncounted, understating real usage.
+  const activeChatTabId = useAIStore.getState().activeChatTabId
+  const overhead = [
+    buildContextMessage(params.context),
+    buildToolContextMessage(),
+    buildSkillsContextMessage(),
+    activeChatTabId ? buildTaskMemoryMessage(activeChatTabId) : undefined,
+    TOOLS_DEFINITION_TEXT
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+
   return buildChatPayload({
     systemPrompt: buildEffectiveSystemPrompt(params.userRules ?? ''),
-    contextMessage: buildContextMessage(params.context),
+    contextMessage: overhead,
     messages: params.messages,
     draft: params.draft,
     limit: params.limit

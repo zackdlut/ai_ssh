@@ -6,8 +6,14 @@ import {
   PANEL_MAX_WIDTH
 } from '../../store/aiStore'
 import { useTabsStore } from '../../store/tabsStore'
-import { sendPrompt, computeActiveTabBudget, tryHandleToolApprovalFromInput } from '../../lib/aiService'
-import { hasPendingToolCalls } from '../../lib/toolApproval'
+import {
+  sendPrompt,
+  computeActiveTabBudget,
+  tryHandleToolApprovalFromInput,
+  approveToolCall,
+  rejectToolCall
+} from '../../lib/aiService'
+import { getPendingToolCalls, hasPendingToolCalls } from '../../lib/toolApproval'
 import { normalizeAISettings, DEFAULT_CONTEXT_LENGTHS } from '../../../shared/aiSettings'
 import type { ModelProfile } from '../../../shared/types'
 import { useT, type TranslationKey } from '../../lib/i18n'
@@ -110,9 +116,26 @@ export default function SidePanel(): JSX.Element {
     })
   }, [messages, input, activeTab, copilotProfile, contextLengths, activeChatTabId, userRules])
 
-  const waitingToolApproval = Boolean(
-    activeChatTabId && hasPendingToolCalls(activeChatTabId)
+  const pendingApprovals = useMemo(
+    () => (activeChatTabId ? getPendingToolCalls(activeChatTabId) : []),
+    // Recompute whenever the tab or its messages/tool-call statuses change.
+    [activeChatTabId, messages]
   )
+  const waitingToolApproval = pendingApprovals.length > 0
+
+  const approveAllPending = (): void => {
+    if (!activeChatTabId) return
+    for (const ref of getPendingToolCalls(activeChatTabId)) {
+      approveToolCall(activeChatTabId, ref.messageId, ref.callId)
+    }
+  }
+
+  const rejectAllPending = (): void => {
+    if (!activeChatTabId) return
+    for (const ref of getPendingToolCalls(activeChatTabId)) {
+      rejectToolCall(activeChatTabId, ref.messageId, ref.callId)
+    }
+  }
 
   useEffect(() => {
     setMentionOpen(false)
@@ -234,10 +257,19 @@ export default function SidePanel(): JSX.Element {
           setNotice(t('tool.approvedViaChat', { count: approval.count }))
         } else if (approval.action === 'reject') {
           setNotice(t('tool.rejectedViaChat', { count: approval.count }))
-        } else {
-          setNotice(t('tool.approvalRequired'))
+        } else if (approval.action === 'dangerous_blocked') {
+          setNotice(t('tool.approveDangerCard'))
         }
         updateDraft(activeChatTabId, '')
+        setMentionOpen(false)
+        return
+      }
+      // A new instruction while actions await approval supersedes them;
+      // sendPrompt drops the pending approvals and starts a fresh turn even
+      // though the paused loop still holds the busy flag.
+      if (waitingToolApproval) {
+        updateDraft(activeChatTabId, '')
+        void sendPrompt(text)
         setMentionOpen(false)
         return
       }
@@ -389,6 +421,22 @@ export default function SidePanel(): JSX.Element {
           messages.map((m) => <ChatMessage key={m.id} message={m} />)
         )}
       </div>
+
+      {pendingApprovals.length > 1 && (
+        <div className="tool-approval-batch">
+          <span className="tool-approval-batch-label">
+            {t('tool.approveAllHint', { count: pendingApprovals.length })}
+          </span>
+          <div className="tool-approval-batch-actions">
+            <button type="button" className="tool-btn-approve" onClick={approveAllPending}>
+              {t('tool.approveAll')}
+            </button>
+            <button type="button" className="tool-btn-reject" onClick={rejectAllPending}>
+              {t('tool.rejectAll')}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="composer">
         <span

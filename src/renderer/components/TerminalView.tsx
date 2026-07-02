@@ -9,6 +9,7 @@ import { COPILOT_CONTEXT_MAX_LINES, registerNlToggle, registerTerminal, unregist
 import { askAboutSelection } from '../lib/aiService'
 import { extractCommands, isDangerous } from '../lib/commands'
 import { stripAnsi } from '../lib/streamParse'
+import { buildMarkerCommand, parseMarker } from '../lib/execCapture'
 import {
   isFollowAppTheme,
   resolveTerminalTheme,
@@ -52,6 +53,8 @@ interface Capture {
   timer: ReturnType<typeof setTimeout>
   idleTimer?: ReturnType<typeof setTimeout>
   bumpIdle: () => void
+  /** Sentinel marker used to parse the exit code and delimit output. */
+  marker?: string
 }
 
 /** Local state machine for the in-terminal natural-language mode. */
@@ -98,9 +101,11 @@ function escapeRegExp(s: string): string {
  * Format captured command output for display / summary: strip ANSI, drop the
  * echoed command line and any trailing shell prompt, then trim and clamp.
  */
-function formatCaptured(raw: string, cmd: string, username?: string): string {
-  const lines = stripAnsi(raw).split(/\r?\n/)
+function formatCaptured(raw: string, cmd: string, username?: string, marker?: string): string {
+  let lines = stripAnsi(raw).split(/\r?\n/)
   const cmdTrim = cmd.trim()
+  // Drop sentinel-marker lines (the echoed helper and the printed marker).
+  if (marker) lines = lines.filter((l) => !l.includes(marker))
   // Drop the shell-echoed command line(s) at the top.
   while (lines.length && (lines[0].trim() === '' || lines[0].trim() === cmdTrim)) {
     lines.shift()
@@ -404,20 +409,23 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
     const runCommandAndCapture = (cmd: string): Promise<CommandRun> =>
       new Promise((resolve) => {
         const nl = nlRef.current
+        const { wrapped, marker } = buildMarkerCommand(cmd)
         const done = (): void => {
           if (cap.done) return
           cap.done = true
           clearTimeout(cap.timer)
           if (cap.idleTimer) clearTimeout(cap.idleTimer)
           if (nlRef.current.capture === cap) nlRef.current.capture = undefined
-          const output = formatCaptured(cap.buffer, cmd, tab.username)
+          const output = formatCaptured(cap.buffer, cmd, tab.username, marker)
+          const { exitCode } = parseMarker(cap.buffer, marker)
           if (output) term.write(output.replace(/\n/g, '\r\n') + '\r\n')
-          resolve({ command: cmd, output, code: null })
+          resolve({ command: cmd, output, code: exitCode })
         }
         const cap: Capture = {
           buffer: '',
           done: false,
           finish: done,
+          marker,
           timer: setTimeout(done, CAPTURE_TIMEOUT),
           bumpIdle() {
             if (cap.idleTimer) clearTimeout(cap.idleTimer)
@@ -425,7 +433,7 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
           }
         }
         nl.capture = cap
-        window.api.ssh.write(sessionId, cmd + '\n')
+        window.api.ssh.write(sessionId, wrapped)
       })
 
     const runNL = async (text: string): Promise<void> => {
