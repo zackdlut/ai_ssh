@@ -1,12 +1,15 @@
 import { app, ipcMain, dialog, type BrowserWindow } from 'electron'
 import { writeFile } from 'fs/promises'
-import { basename } from 'path'
+import { basename, join } from 'path'
 import { SshManager } from './ssh/manager'
 import { WslManager } from './wsl/manager'
 import { deleteLocal, listLocal, localHome, renameLocal } from './local/fs'
 import { AIProvider } from './ai/provider'
 import * as config from './config/store'
 import * as skills from './skills/store'
+import { initDebugLogger, logDebug } from './debug/logger'
+import { truncateForDebug } from '../shared/debugSanitize'
+import type { DebugLogPayload } from '../shared/debugLog'
 import type {
   AIChatRequest,
   AIChartSpecRequest,
@@ -58,14 +61,36 @@ export interface IpcManagers {
 }
 
 export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers {
+  initDebugLogger(() => config.getDebugLogSettings().enabled)
+
   const ssh = new SshManager(getWindow)
   const wsl = new WslManager(getWindow)
   const ai = new AIProvider(() => config.getAISettings())
 
+  // --- Debug log ---
+  ipcMain.on('debug:log', (_e, entry: DebugLogPayload) => {
+    logDebug(entry)
+  })
+  ipcMain.handle('debug:getSettings', () => config.getDebugLogSettings())
+  ipcMain.handle('debug:setEnabled', (_e, enabled: boolean) => config.setDebugLogEnabled(enabled))
+
   // --- SSH ---
-  ipcMain.handle('ssh:connect', (_e, opts: ConnectOptions) => ssh.connect(opts))
+  ipcMain.handle('ssh:connect', (_e, opts: ConnectOptions) => {
+    logDebug({
+      category: 'ipc',
+      message: 'ssh:connect',
+      data: { host: opts.host, port: opts.port, username: opts.username }
+    })
+    return ssh.connect(opts)
+  })
   // write/resize/close are shared across SSH and WSL sessions; route by owner.
   ipcMain.on('ssh:write', (_e, sessionId: string, data: string) => {
+    logDebug({
+      category: 'ipc',
+      message: 'ssh:write',
+      sessionId_ssh: sessionId,
+      data: { data: truncateForDebug(data) }
+    })
     if (wsl.has(sessionId)) wsl.write(sessionId, data)
     else ssh.write(sessionId, data)
   })
@@ -74,16 +99,30 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
     else ssh.resize(sessionId, cols, rows)
   })
   ipcMain.on('ssh:close', (_e, sessionId: string) => {
+    logDebug({ category: 'ipc', message: 'ssh:close', sessionId_ssh: sessionId })
     if (wsl.has(sessionId)) wsl.close(sessionId)
     else ssh.close(sessionId)
   })
 
   // --- WSL (local pseudo-terminal) ---
   ipcMain.handle('wsl:list', () => wsl.listDistros())
-  ipcMain.handle('wsl:connect', (_e, opts: WslConnectOptions) => wsl.connect(opts))
+  ipcMain.handle('wsl:connect', (_e, opts: WslConnectOptions) => {
+    logDebug({ category: 'ipc', message: 'wsl:connect', data: { distro: opts.distro } })
+    return wsl.connect(opts)
+  })
 
   // --- AI (streaming) ---
   ipcMain.on('ai:chat', (e, req: AIChatRequest) => {
+    logDebug({
+      category: 'ipc',
+      message: 'ai:chat',
+      traceId: req.requestId,
+      data: {
+        messageCount: req.messages.length,
+        enableTools: req.enableTools,
+        hasContext: !!req.context
+      }
+    })
     void ai.chat(req, {
       onChunk: (delta) =>
         e.sender.send('ai:chunk', { requestId: req.requestId, delta } satisfies AIChunkEvent),
@@ -102,7 +141,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
         e.sender.send('ai:error', { requestId: req.requestId, error } satisfies AIErrorEvent)
     })
   })
-  ipcMain.on('ai:cancel', (_e, requestId: string) => ai.cancel(requestId))
+  ipcMain.on('ai:cancel', (_e, requestId: string) => {
+    logDebug({ category: 'ipc', message: 'ai:cancel', traceId: requestId })
+    ai.cancel(requestId)
+  })
 
   ipcMain.handle(
     'ai:compressHistory',
@@ -131,6 +173,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
   ipcMain.handle(
     'ai:translate',
     async (_e, req: AITranslateRequest): Promise<AITranslateResult> => {
+      logDebug({
+        category: 'ipc',
+        message: 'ai:translate',
+        data: { promptLength: req.prompt.length, hasContext: !!req.context }
+      })
       try {
         return { content: await ai.translate(req) }
       } catch (err) {
@@ -141,6 +188,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
 
   // Stream command execution summary for the in-terminal NL mode.
   ipcMain.on('ai:summarize', (e, req: AISummarizeRequest) => {
+    logDebug({
+      category: 'ipc',
+      message: 'ai:summarize',
+      traceId: req.requestId,
+      data: { runCount: req.runs.length, hasContext: !!req.context }
+    })
     void ai.summarize(req, {
       onChunk: (delta) =>
         e.sender.send('ai:chunk', { requestId: req.requestId, delta } satisfies AIChunkEvent),
@@ -382,16 +435,21 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
   // --- App ---
   ipcMain.handle(
     'app:getInfo',
-    (): AppInfo => ({
-      name: 'AI Terminal',
-      version: app.getVersion(),
-      description:
-        'AI-Augmented multi-tab SSH terminal with an integrated AI Copilot side panel.',
-      author: 'zackdlut',
-      email: 'zack.dlut@gmail.com',
-      license: 'MIT',
-      electron: process.versions.electron ?? ''
-    })
+    (): AppInfo => {
+      const userDataPath = app.getPath('userData')
+      return {
+        name: 'AI Terminal',
+        version: app.getVersion(),
+        description:
+          'AI-Augmented multi-tab SSH terminal with an integrated AI Copilot side panel.',
+        author: 'zackdlut',
+        email: 'zack.dlut@gmail.com',
+        license: 'MIT',
+        electron: process.versions.electron ?? '',
+        userDataPath,
+        debugLogDir: join(userDataPath, 'logs')
+      }
+    }
   )
 
   // --- Config ---

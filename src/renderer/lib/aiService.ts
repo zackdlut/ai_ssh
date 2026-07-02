@@ -7,6 +7,7 @@ import { selectMessagesToCompress, buildChatPayload, type BudgetMessage } from '
 import { buildContextMessage } from '../../shared/terminalContext'
 import { translate } from './i18n/translations'
 import { useLocaleStore } from '../store/localeStore'
+import { debugLog } from './debugLog'
 import { isDisplayTool, isReadonlyTool, requiresToolApproval } from '../../shared/aiTools'
 import {
   buildSkillsContextMessage,
@@ -105,6 +106,13 @@ function startTurn(loop: LoopState, epilogue = false): void {
   pending.set(requestId, { tabId: loop.tabId, messageId: assistantId, loop, epilogue })
   ai.setBusy(true, requestId, loop.tabId)
   const userRules = useUserRulesStore.getState().rules
+  debugLog({
+    category: 'action.triggered',
+    traceId: requestId,
+    tabId: loop.tabId,
+    message: epilogue ? 'agent.startTurn.epilogue' : 'agent.startTurn',
+    data: { messageCount: messages.length, epilogue }
+  })
   window.api.ai.chat({ requestId, messages, context: loop.context, enableTools: true, userRules })
 }
 
@@ -118,8 +126,20 @@ async function runToolCall(tabId: string, messageId: string, callId: string): Pr
     if (loop) loop.executedActionTool = true
   }
   ai.updateToolCall(tabId, messageId, callId, { status: 'running' })
+  debugLog({
+    category: 'action.triggered',
+    tabId,
+    message: `tool.${call.name}`,
+    data: { args: parseToolArgs(call.args) }
+  })
   try {
     const res = await executeToolCall(call.name, parseToolArgs(call.args))
+    debugLog({
+      category: 'action.triggered',
+      tabId,
+      message: `tool.${call.name}.result`,
+      data: { ok: res.ok, result: res.ok ? res.result : res.error }
+    })
     if (res.ok) {
       ai.updateToolCall(tabId, messageId, callId, { status: 'done', result: res.result })
     } else {
@@ -141,6 +161,13 @@ export function approveToolCall(tabId: string, messageId: string, callId: string
 
 /** Reject a pending (action) tool call from the UI. */
 export function rejectToolCall(tabId: string, messageId: string, callId: string): void {
+  const call = findMessage(tabId, messageId)?.toolCalls?.find((c) => c.id === callId)
+  debugLog({
+    category: 'action.triggered',
+    tabId,
+    message: call ? `tool.${call.name}.rejected` : 'tool.rejected',
+    data: { callId }
+  })
   useAIStore.getState().updateToolCall(tabId, messageId, callId, {
     status: 'rejected',
     result: 'User rejected this action.'
@@ -166,11 +193,23 @@ export function tryHandleToolApprovalFromInput(
   const action = parseToolApprovalInput(text)
   if (action === 'approve') {
     const refs = getPendingToolCalls(tabId)
+    debugLog({
+      category: 'user.action',
+      tabId,
+      message: 'tool.approval.approve',
+      data: { count: refs.length, text }
+    })
     for (const ref of refs) approveToolCall(tabId, ref.messageId, ref.callId)
     return refs.length > 0 ? { handled: true, action: 'approve', count: refs.length } : { handled: false }
   }
   if (action === 'reject') {
     const refs = getPendingToolCalls(tabId)
+    debugLog({
+      category: 'user.action',
+      tabId,
+      message: 'tool.approval.reject',
+      data: { count: refs.length, text }
+    })
     for (const ref of refs) rejectToolCall(tabId, ref.messageId, ref.callId)
     return refs.length > 0 ? { handled: true, action: 'reject', count: refs.length } : { handled: false }
   }
@@ -253,6 +292,13 @@ export function initAIService(): void {
         // so we still nudge in that case.
         if (!loop.nudged && !loop.executedActionTool) {
           loop.nudged = true
+          debugLog({
+            category: 'action.triggered',
+            traceId: requestId,
+            tabId,
+            message: 'agent.nudge',
+            data: { reason: 'empty_turn_no_tools' }
+          })
           ai.removeMessage(tabId, messageId)
           loop.conversation.push({
             role: 'user',
@@ -288,6 +334,13 @@ export function initAIService(): void {
     // attach the tool-call views for rendering, and execute them. Read-only
     // tools run immediately; action tools wait for user approval. Busy stays
     // true until the loop produces a final, tool-call-free answer.
+    debugLog({
+      category: 'action.triggered',
+      traceId: requestId,
+      tabId,
+      message: 'agent.toolCalls',
+      data: { toolCalls: toolCalls.map((tc) => ({ name: tc.name, id: tc.id })) }
+    })
     loop.conversation.push({ role: 'assistant', content, tool_calls: toolCalls })
     const views: ToolCallView[] = toolCalls.map((tc) => ({
       id: tc.id,
@@ -440,6 +493,17 @@ export async function sendPrompt(text: string): Promise<void> {
 
   ai.updateDraft(tabId, '')
   ai.addMessage(tabId, { id: userId, role: 'user', content: prompt })
+
+  debugLog({
+    category: 'user.action',
+    tabId,
+    message: 'copilot.send',
+    data: {
+      textLength: prompt.length,
+      hasMention: mentionsTerminal,
+      boundTabId: mentionsTerminal ? activeTerminalTab?.id : undefined
+    }
+  })
 
   // Kick off the function-calling agent loop. startTurn appends the streaming
   // assistant message, wires up the request, and sets the busy flag.

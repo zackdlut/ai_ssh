@@ -42,6 +42,7 @@ import type {
   WslConnectOptions,
   WslDistro
 } from '../shared/types'
+import type { DebugLogPayload, DebugLogSettings } from '../shared/debugLog'
 
 type Unsubscribe = () => void
 
@@ -181,6 +182,12 @@ const api = {
       ipcRenderer.invoke('skills:setEnabled', id, enabled),
     read: (idOrName: string): Promise<SkillReadResult> =>
       ipcRenderer.invoke('skills:read', idOrName)
+  },
+  debug: {
+    log: (entry: DebugLogPayload): void => ipcRenderer.send('debug:log', entry),
+    getSettings: (): Promise<DebugLogSettings> => ipcRenderer.invoke('debug:getSettings'),
+    setEnabled: (enabled: boolean): Promise<DebugLogSettings> =>
+      ipcRenderer.invoke('debug:setEnabled', enabled)
   }
 }
 

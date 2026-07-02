@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTabsStore } from '../../store/tabsStore'
 import { isDangerous } from '../../lib/commands'
 import { useT } from '../../lib/i18n'
+import { debugLog } from '../../lib/debugLog'
 
 interface Props {
   command: string
@@ -30,6 +31,13 @@ export default function CommandCard({ command }: Props): JSX.Element {
       )
       if (!ok) return
     }
+    debugLog({
+      category: 'user.action',
+      tabId: activeTab.id,
+      sessionId_ssh: activeTab.sessionId,
+      message: 'commandCard.run',
+      data: { command: value.trim() }
+    })
     window.api.ssh.write(activeTab.sessionId, value.trim() + '\n')
   }
 

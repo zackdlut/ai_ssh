@@ -381,6 +381,8 @@ export interface AppInfo {
   email: string
   license: string
   electron: string
+  userDataPath: string
+  debugLogDir: string
 }
 
 /**

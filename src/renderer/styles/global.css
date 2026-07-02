@@ -1500,6 +1500,32 @@ select:focus {
   text-decoration: underline;
 }
 
+.about-meta-switch {
+  gap: 0;
+}
+
+.about-meta-switch-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.about-debug-log-hint {
+  margin: 0;
+  max-width: 240px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  text-align: right;
+  word-break: break-all;
+}
+
+.about-meta > div:has(.about-meta-switch-wrap) {
+  align-items: flex-start;
+}
+
 .toolbar-btn {
   display: inline-flex;
   align-items: center;

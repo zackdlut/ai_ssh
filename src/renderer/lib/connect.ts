@@ -2,6 +2,7 @@ import { useTabsStore, type TerminalTab } from '../store/tabsStore'
 import { useBookmarksStore } from '../store/bookmarksStore'
 import { t } from './i18n'
 import { useLocaleStore } from '../store/localeStore'
+import { debugLog } from './debugLog'
 import type { ConnectionConfig, ConnectOptions } from '../../shared/types'
 
 function loc() {
@@ -66,6 +67,11 @@ function resolveConnectOpts(tab: TerminalTab): ConnectOptions | undefined {
  * Returns an error string on failure, or undefined on success.
  */
 export async function connect({ opts, title, tabId }: ConnectArgs): Promise<string | undefined> {
+  debugLog({
+    category: 'user.action',
+    message: 'ssh.connect',
+    data: { host: opts.host, port: opts.port, username: opts.username, title }
+  })
   const store = useTabsStore.getState()
   const reuseIdleTab = findIdleTabToReuse(tabId)
 
@@ -109,6 +115,11 @@ export async function connect({ opts, title, tabId }: ConnectArgs): Promise<stri
  * Returns an error string on failure, or undefined on success.
  */
 export async function connectWsl(distro?: string): Promise<string | undefined> {
+  debugLog({
+    category: 'user.action',
+    message: 'wsl.connect',
+    data: { distro }
+  })
   const store = useTabsStore.getState()
   const reuseIdleTab = findIdleTabToReuse()
   const title = distro || 'WSL'

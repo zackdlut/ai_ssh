@@ -21,6 +21,7 @@ import { MIN_TERMINAL_LINE_HEIGHT, MAX_TERMINAL_LINE_HEIGHT, xtermFontWeight } f
 import { matchesKeyEvent } from '../lib/keybindingMatch'
 import { useLocaleStore } from '../store/localeStore'
 import { t, useT } from '../lib/i18n'
+import { debugLog } from '../lib/debugLog'
 import type { AppLocale } from '../../shared/types'
 import type { CommandRun } from '../../shared/types'
 import { SHORTCUT_COPY, formatShortcut } from '../lib/shortcuts'
@@ -430,6 +431,13 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
     const runNL = async (text: string): Promise<void> => {
       const nl = nlRef.current
       nl.busy = true
+      debugLog({
+        category: 'user.action',
+        tabId: tab.id,
+        sessionId_ssh: sessionId,
+        message: 'nl.input',
+        data: { textLength: text.length }
+      })
       term.write(`\r\n${DIM}${t(loc(), 'terminal.nl.parsing')}${RESET}\r\n`)
 
       const context = {
@@ -440,6 +448,12 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
 
       let result: { content?: string; error?: string }
       try {
+        debugLog({
+          category: 'action.triggered',
+          tabId: tab.id,
+          message: 'nl.translate',
+          data: { prompt: text }
+        })
         result = await window.api.ai.translate({ prompt: text, context })
       } catch (e) {
         term.write(
@@ -489,6 +503,13 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
         } else {
           term.write(`${GREEN}▶${RESET} ${cmd}\r\n`)
         }
+        debugLog({
+          category: 'action.triggered',
+          tabId: tab.id,
+          sessionId_ssh: sessionId,
+          message: 'nl.execCommand',
+          data: { command: cmd }
+        })
         runs.push(await runCommandAndCapture(cmd))
       }
 
@@ -499,6 +520,12 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
           writeAnswer(term, direct)
         } else {
           term.write(`${DIM}${t(loc(), 'terminal.nl.summarizing')}${RESET}\r\n`)
+          debugLog({
+            category: 'action.triggered',
+            tabId: tab.id,
+            message: 'nl.summarize',
+            data: { runCount: runs.length }
+          })
           try {
             await streamSummarize(
               term,

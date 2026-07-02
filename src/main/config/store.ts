@@ -11,6 +11,7 @@ import {
 import type { TerminalAppearanceSettings } from '../../shared/terminalSettings'
 import { DEFAULT_KEYBINDINGS, normalizeKeybindingsSettings } from '../../shared/keybindings'
 import type { KeybindingsSettings } from '../../shared/keybindings'
+import type { DebugLogSettings } from '../../shared/debugLog'
 import type {
   AISettings,
   AppLocale,
@@ -32,6 +33,7 @@ interface StoreSchema {
   skills: InstalledSkill[]
   /** Custom instructions injected into the copilot system prompt. */
   userRules: string
+  debugLog: DebugLogSettings
 }
 
 let _store: Store<StoreSchema> | null = null
@@ -82,7 +84,8 @@ function store(): Store<StoreSchema> {
         connections: [],
         folders: [],
         skills: [],
-        userRules: ''
+        userRules: '',
+        debugLog: { enabled: false }
       }
     })
     migrateCopilotChatsFromConfig(_store)
@@ -228,6 +231,16 @@ export function setUserRules(rules: string): string {
   const normalized = typeof rules === 'string' ? rules : ''
   store().set('userRules', normalized)
   return getUserRules()
+}
+
+export function getDebugLogSettings(): DebugLogSettings {
+  const settings = store().get('debugLog')
+  return { enabled: !!settings?.enabled }
+}
+
+export function setDebugLogEnabled(enabled: boolean): DebugLogSettings {
+  store().set('debugLog', { enabled })
+  return getDebugLogSettings()
 }
 
 export function deleteFolder(id: string): {

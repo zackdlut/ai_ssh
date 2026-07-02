@@ -31,6 +31,8 @@ import {
   buildContextMessage
 } from './prompt'
 import { buildUserRulesSystemMessage } from '../../shared/userRules'
+import { logDebug } from '../debug/logger'
+import { sanitizeForDebug } from '../../shared/debugSanitize'
 
 /**
  * JSON Schema for the ChartSpec, used with the provider's strict structured
@@ -239,6 +241,44 @@ function extractMessageText(
   return extra.reasoning ?? extra.reasoning_content ?? ''
 }
 
+function llmBaseUrl(settings: AISettings): string {
+  return normalizeBaseURL(settings.baseURL) ?? ''
+}
+
+function logLlmRequest(traceId: string, message: string, data: unknown): void {
+  logDebug({ category: 'llm.request', traceId, message, data: sanitizeForDebug(data) })
+}
+
+function logLlmResponse(
+  traceId: string,
+  message: string,
+  data: unknown,
+  durationMs: number
+): void {
+  logDebug({
+    category: 'llm.response',
+    traceId,
+    message,
+    data: sanitizeForDebug(data),
+    durationMs
+  })
+}
+
+function logLlmError(
+  traceId: string,
+  message: string,
+  data: unknown,
+  durationMs?: number
+): void {
+  logDebug({
+    category: 'llm.error',
+    traceId,
+    message,
+    data: sanitizeForDebug(data),
+    ...(durationMs != null ? { durationMs } : {})
+  })
+}
+
 /**
  * Thin wrapper around an OpenAI-compatible Chat Completions endpoint with
  * streaming support and per-request cancellation.
@@ -265,6 +305,7 @@ export class AIProvider {
     }
 
     const client = await this.createClient()
+    const started = Date.now()
 
     const controller = new AbortController()
     this.controllers.set(req.requestId, controller)
@@ -290,7 +331,18 @@ export class AIProvider {
       tool_choice: 'auto' as const
     }
 
+    logLlmRequest(req.requestId, 'chat.completions.create', {
+      method: 'chat.completions.create',
+      model,
+      baseURL: llmBaseUrl(settings),
+      stream: true,
+      enableTools: req.enableTools,
+      messages
+    })
+
     let full = ''
+    let reasoningFull = ''
+    let chunkCount = 0
     const toolAcc = new Map<number, ToolCallAccumulator>()
     try {
       // Some OpenAI-compatible backends (older Ollama models, etc.) reject the
@@ -313,10 +365,14 @@ export class AIProvider {
       }
 
       for await (const part of stream as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>) {
+        chunkCount++
         const { content, reasoning } = splitStreamDelta(part)
         // Reasoning is streamed to a separate channel and intentionally NOT
         // added to `full`, so it never leaks into the answer or the history.
-        if (reasoning) cb.onReasoning?.(reasoning)
+        if (reasoning) {
+          reasoningFull += reasoning
+          cb.onReasoning?.(reasoning)
+        }
         if (content) {
           full += content
           cb.onChunk(content)
@@ -340,11 +396,29 @@ export class AIProvider {
           name: t.name,
           arguments: t.args || '{}'
         }))
+      logLlmResponse(req.requestId, 'chat.done', {
+        content: full,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        reasoning: reasoningFull || undefined,
+        chunkCount,
+        totalChars: full.length
+      }, Date.now() - started)
       cb.onDone(full, toolCalls.length > 0 ? toolCalls : undefined)
     } catch (e) {
       if (controller.signal.aborted) {
+        logLlmResponse(req.requestId, 'chat.aborted', {
+          content: full,
+          reasoning: reasoningFull || undefined,
+          chunkCount,
+          aborted: true
+        }, Date.now() - started)
         cb.onDone(full)
       } else {
+        logLlmError(req.requestId, 'chat.error', {
+          error: e instanceof Error ? e.message : String(e),
+          content: full,
+          chunkCount
+        }, Date.now() - started)
         cb.onError(e instanceof Error ? e.message : String(e))
       }
     } finally {
@@ -371,6 +445,8 @@ export class AIProvider {
     }
 
     const client = await this.createClient()
+    const started = Date.now()
+    const traceId = `chart-${started}`
 
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: 'system', content: CHART_SPEC_SYSTEM_PROMPT }
@@ -416,6 +492,14 @@ export class AIProvider {
       return extractMessageText(completion.choices[0]?.message).trim()
     }
 
+    logLlmRequest(traceId, 'chartSpec.completions.create', {
+      method: 'chat.completions.create',
+      model,
+      baseURL: llmBaseUrl(settings),
+      stream: false,
+      messages
+    })
+
     let lastError: unknown
     for (const body of attempts) {
       try {
@@ -425,16 +509,25 @@ export class AIProvider {
         // model to fix it once (the json_object fallback does not enforce the
         // schema, and weak models routinely drop "column"). This keeps the spec
         // model-generated rather than patched client-side.
-        if (isCompleteChartSpec(text)) return text
+        if (isCompleteChartSpec(text)) {
+          logLlmResponse(traceId, 'chartSpec.done', { content: text }, Date.now() - started)
+          return text
+        }
         if (looksLikeJson(text)) {
           const fixed = await this.correctChartSpec(client, base, messages, text).catch(() => null)
-          return fixed ?? text
+          const result = fixed ?? text
+          logLlmResponse(traceId, 'chartSpec.done', { content: result }, Date.now() - started)
+          return result
         }
+        logLlmResponse(traceId, 'chartSpec.done', { content: text }, Date.now() - started)
         return text
       } catch (e) {
         lastError = e
       }
     }
+    logLlmError(traceId, 'chartSpec.error', {
+      error: lastError instanceof Error ? lastError.message : String(lastError)
+    }, Date.now() - started)
     throw lastError instanceof Error
       ? lastError
       : new Error('Failed to generate chart spec')
@@ -479,6 +572,8 @@ export class AIProvider {
     }
 
     const client = await this.createClient()
+    const started = Date.now()
+    const traceId = `translate-${started}`
 
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: 'system', content: TRANSLATE_SYSTEM_PROMPT }
@@ -489,10 +584,28 @@ export class AIProvider {
     }
     messages.push({ role: 'user', content: req.prompt })
 
-    const completion = await client.chat.completions.create(
-      ollamaDirectAnswerBody(resolveModel(settings, settings.nlModelProfile), messages)
-    )
-    return extractMessageText(completion.choices[0]?.message)
+    const model = resolveModel(settings, settings.nlModelProfile)
+    logLlmRequest(traceId, 'translate.completions.create', {
+      method: 'chat.completions.create',
+      model,
+      baseURL: llmBaseUrl(settings),
+      stream: false,
+      messages
+    })
+
+    try {
+      const completion = await client.chat.completions.create(
+        ollamaDirectAnswerBody(model, messages)
+      )
+      const content = extractMessageText(completion.choices[0]?.message)
+      logLlmResponse(traceId, 'translate.done', { content }, Date.now() - started)
+      return content
+    } catch (e) {
+      logLlmError(traceId, 'translate.error', {
+        error: e instanceof Error ? e.message : String(e)
+      }, Date.now() - started)
+      throw e
+    }
   }
 
   async summarize(req: AISummarizeRequest, cb: StreamCallbacks): Promise<void> {
@@ -503,6 +616,7 @@ export class AIProvider {
     }
 
     const client = await this.createClient()
+    const started = Date.now()
 
     const controller = new AbortController()
     this.controllers.set(req.requestId, controller)
@@ -526,25 +640,51 @@ export class AIProvider {
     }
     messages.push({ role: 'user', content: userContent })
 
+    const model = resolveModel(settings, settings.nlModelProfile)
+    logLlmRequest(req.requestId, 'summarize.completions.create', {
+      method: 'chat.completions.create',
+      model,
+      baseURL: llmBaseUrl(settings),
+      stream: true,
+      messages
+    })
+
     let full = ''
+    let chunkCount = 0
     try {
       const stream = await client.chat.completions.create(
-        ollamaDirectAnswerStreamBody(resolveModel(settings, settings.nlModelProfile), messages, 256),
+        ollamaDirectAnswerStreamBody(model, messages, 256),
         { signal: controller.signal }
       )
 
       for await (const part of stream) {
+        chunkCount++
         const delta = extractStreamDelta(part)
         if (delta) {
           full += delta
           cb.onChunk(delta)
         }
       }
+      logLlmResponse(req.requestId, 'summarize.done', {
+        content: full,
+        chunkCount,
+        totalChars: full.length
+      }, Date.now() - started)
       cb.onDone(full)
     } catch (e) {
       if (controller.signal.aborted) {
+        logLlmResponse(req.requestId, 'summarize.aborted', {
+          content: full,
+          chunkCount,
+          aborted: true
+        }, Date.now() - started)
         cb.onDone(full)
       } else {
+        logLlmError(req.requestId, 'summarize.error', {
+          error: e instanceof Error ? e.message : String(e),
+          content: full,
+          chunkCount
+        }, Date.now() - started)
         cb.onError(e instanceof Error ? e.message : String(e))
       }
     } finally {
@@ -563,6 +703,8 @@ export class AIProvider {
     }
 
     const client = await this.createClient()
+    const started = Date.now()
+    const traceId = `compress-${started}`
 
     const convText = req.messages
       .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
@@ -580,14 +722,31 @@ export class AIProvider {
       content: `请压缩以下较早的对话记录：\n\n${convText}`
     })
 
-    const completion = await client.chat.completions.create(
-      ollamaDirectAnswerBody(resolveActiveModel(settings), messages, 1024)
-    )
-    const summary = extractMessageText(completion.choices[0]?.message).trim()
-    if (!summary) {
-      throw new Error('Empty summary from model.')
+    const model = resolveActiveModel(settings)
+    logLlmRequest(traceId, 'compressHistory.completions.create', {
+      method: 'chat.completions.create',
+      model,
+      baseURL: llmBaseUrl(settings),
+      stream: false,
+      messages
+    })
+
+    try {
+      const completion = await client.chat.completions.create(
+        ollamaDirectAnswerBody(model, messages, 1024)
+      )
+      const summary = extractMessageText(completion.choices[0]?.message).trim()
+      if (!summary) {
+        throw new Error('Empty summary from model.')
+      }
+      logLlmResponse(traceId, 'compressHistory.done', { content: summary }, Date.now() - started)
+      return summary
+    } catch (e) {
+      logLlmError(traceId, 'compressHistory.error', {
+        error: e instanceof Error ? e.message : String(e)
+      }, Date.now() - started)
+      throw e
     }
-    return summary
   }
 }
 

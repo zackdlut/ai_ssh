@@ -100,6 +100,8 @@ const zh = {
   'settings.ai.nlModel': '终端 AI 模式模型',
   'settings.ai.hint':
     '兼容 OpenAI、DeepSeek、本地 vLLM/Ollama 等 OpenAI 兼容端点。密钥仅保存在本地，由主进程调用。每个配置档可使用不同模型。Copilot 模型档位可在侧栏下拉切换；终端 AI 模式模型档位在此配置（默认：Fast）。',
+  'settings.debugLog.enabled': '启用 Debug 日志',
+  'settings.debugLog.hint': '日志写入 {dir}（NDJSON 格式，按日分文件）',
 
   'settings.skills.title': '技能',
   'settings.skills.hint':
@@ -578,6 +580,8 @@ const en: Record<keyof typeof zh, string> = {
   'settings.ai.nlModel': 'Terminal AI Mode Model',
   'settings.ai.hint':
     'Works with OpenAI, DeepSeek, local vLLM/Ollama and other OpenAI-compatible endpoints. The key is stored locally and only used by the main process. Each profile can use a different model. Switch the Copilot model tier from the sidebar dropdown; configure the terminal AI mode model tier here (default: Fast).',
+  'settings.debugLog.enabled': 'Enable debug logging',
+  'settings.debugLog.hint': 'Logs are written to {dir} (NDJSON, one file per day)',
 
   'settings.skills.title': 'Skills',
   'settings.skills.hint':
