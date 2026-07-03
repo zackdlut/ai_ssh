@@ -191,6 +191,16 @@ export interface AIChatRequest {
   enableTools?: boolean
   /** Custom user rules injected into the system prompt. */
   userRules?: string
+  /**
+   * Which optional system-prompt sections to assemble for this turn. Lets the
+   * renderer inject the long chart/mermaid rules only when the user asks to
+   * visualize/diagram, and trim first-turn examples on continuation turns.
+   */
+  promptSections?: {
+    chart?: boolean
+    mermaid?: boolean
+    concise?: boolean
+  }
 }
 
 /** Summarize older Copilot turns before they exceed the context budget. */

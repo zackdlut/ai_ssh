@@ -5,8 +5,15 @@ import { COPILOT_SYSTEM_PROMPT } from '../../shared/copilotPrompts'
  * It is asked to explain briefly and to emit any runnable shell commands
  * inside fenced ```bash code blocks so the renderer can extract them into
  * actionable command cards (kubectl-ai style).
+ *
+ * This is the FULL assembly (all optional sections). Prefer
+ * `buildCopilotSystemPrompt(sections)` in the chat path so a turn only carries
+ * the chart/mermaid rules it actually needs.
  */
 export const SYSTEM_PROMPT = COPILOT_SYSTEM_PROMPT
+
+export { buildCopilotSystemPrompt } from '../../shared/copilotPrompts'
+export type { PromptSections } from '../../shared/copilotPrompts'
 
 /**
  * Phase-2 system prompt: turn a free-text chart description into a STRICT

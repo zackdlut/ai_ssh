@@ -23,7 +23,7 @@ import type {
   ToolCallDTO
 } from '../../shared/types'
 import {
-  SYSTEM_PROMPT,
+  buildCopilotSystemPrompt,
   CHART_SPEC_SYSTEM_PROMPT,
   TRANSLATE_SYSTEM_PROMPT,
   SUMMARIZE_SYSTEM_PROMPT,
@@ -321,7 +321,7 @@ export class AIProvider {
     this.controllers.set(req.requestId, controller)
 
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: SYSTEM_PROMPT }
+      { role: 'system', content: buildCopilotSystemPrompt(req.promptSections ?? {}) }
     ]
     const userRulesMessage = buildUserRulesSystemMessage(req.userRules ?? '')
     if (userRulesMessage) {

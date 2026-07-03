@@ -144,7 +144,16 @@ function startTurn(loop: LoopState, epilogue = false): void {
   // A chart-visualization request only applies to the FIRST turn: emit the
   // ```chart fence with tools OFF (below), then the loop is done — there is no
   // continuation to keep nudging.
-  const chartTurn = !!loop.chartIntent && loop.phase === undefined
+  const firstTurn = loop.phase === undefined
+  const chartTurn = !!loop.chartIntent && firstTurn
+  // Only assemble the prompt sections this turn actually needs: the long chart
+  // rules ride along only on the (first) chart turn, mermaid rules only when the
+  // request asked for a diagram, and continuation turns drop first-turn examples.
+  const promptSections = {
+    chart: chartTurn,
+    mermaid: MERMAID_INTENT.test(loop.userIntent ?? ''),
+    concise: !firstTurn
+  }
   const snapshot = buildToolContextMessage()
   const skillsCatalog = buildSkillsContextMessage()
   const taskMemory = buildTaskMemoryMessage(loop.tabId)
@@ -194,7 +203,14 @@ function startTurn(loop: LoopState, epilogue = false): void {
     message: epilogue ? 'agent.startTurn.epilogue' : 'agent.startTurn',
     data: { messageCount: messages.length, epilogue }
   })
-  window.api.ai.chat({ requestId, messages, context: loop.context, enableTools: !chartTurn, userRules })
+  window.api.ai.chat({
+    requestId,
+    messages,
+    context: loop.context,
+    enableTools: !chartTurn,
+    userRules,
+    promptSections
+  })
 }
 
 /** Execute a single tool call and record its outcome, then advance the loop. */
@@ -722,6 +738,14 @@ const TERMINAL_MENTION = /@terminal\b/i
  */
 const CHART_INTENT =
   /折线图|柱状图|饼图|散点图|条形图|曲线图?|图表|实时图|可视化|画(个|成|张|一)?图|chart|plot|graph|visuali[sz]e/i
+
+/**
+ * Mermaid diagram intent. Used to decide whether to inject the (long) mermaid
+ * authoring rules into the system prompt for a turn; unlike charts it needs no
+ * @terminal binding and may be produced on any turn (e.g. after investigating).
+ */
+const MERMAID_INTENT =
+  /流程图|时序图|顺序图|架构图|关系图|状态图|类图|甘特图|泳道|拓扑图|mermaid|flowchart|sequence\s*diagram|diagram|\bUML\b/i
 
 /**
  * First-turn-only instruction that forces the chart-block format when the user
