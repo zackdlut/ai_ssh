@@ -397,6 +397,11 @@ export const AI_TOOLS: AIToolDefinition[] = [
                 properties: {
                   baseURL: { type: 'string', description: 'Base URL for the default profile.' },
                   apiKey: { type: 'string', description: 'API key for the default profile.' },
+                  httpProxy: {
+                    type: 'string',
+                    description:
+                      'HTTP(S) proxy URL for AI API requests (e.g. http://127.0.0.1:7890). Empty disables the app setting; env HTTPS_PROXY/HTTP_PROXY may still apply.'
+                  },
                   baseURLs: {
                     type: 'object',
                     description: 'Base URL per profile tier (empty inherits default).',

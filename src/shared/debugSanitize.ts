@@ -9,7 +9,8 @@ const SENSITIVE_KEYS = new Set([
   'private_key',
   'passphrase',
   'authorization',
-  'Authorization'
+  'Authorization',
+  'httpProxy'
 ])
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {

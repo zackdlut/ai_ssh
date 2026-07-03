@@ -3,6 +3,9 @@ import type OpenAI from 'openai'
 type OpenAIConstructor = typeof import('openai').default
 let openaiCtor: OpenAIConstructor | null = null
 
+type HttpsProxyAgentConstructor = typeof import('https-proxy-agent').HttpsProxyAgent
+let httpsProxyAgentCtor: HttpsProxyAgentConstructor | null = null
+
 async function loadOpenAI(): Promise<OpenAIConstructor> {
   if (!openaiCtor) {
     const mod = await import('openai')
@@ -10,11 +13,20 @@ async function loadOpenAI(): Promise<OpenAIConstructor> {
   }
   return openaiCtor
 }
+
+async function loadHttpsProxyAgent(): Promise<HttpsProxyAgentConstructor> {
+  if (!httpsProxyAgentCtor) {
+    const mod = await import('https-proxy-agent')
+    httpsProxyAgentCtor = mod.HttpsProxyAgent
+  }
+  return httpsProxyAgentCtor
+}
 import {
   resolveActiveModel,
   resolveModel,
   resolveBaseURL,
-  resolveApiKey
+  resolveApiKey,
+  resolveHttpProxy
 } from '../../shared/aiSettings'
 import { AI_TOOLS } from '../../shared/aiTools'
 import type {
@@ -303,15 +315,31 @@ function logLlmError(
  */
 export class AIProvider {
   private controllers = new Map<string, AbortController>()
+  private proxyAgent: InstanceType<HttpsProxyAgentConstructor> | undefined
+  private proxyAgentUrl = ''
 
   constructor(private getSettings: () => AISettings) {}
+
+  private async getProxyAgent(
+    url: string
+  ): Promise<InstanceType<HttpsProxyAgentConstructor>> {
+    if (!this.proxyAgent || this.proxyAgentUrl !== url) {
+      const HttpsProxyAgent = await loadHttpsProxyAgent()
+      this.proxyAgent = new HttpsProxyAgent(url)
+      this.proxyAgentUrl = url
+    }
+    return this.proxyAgent
+  }
 
   private async createClient(profile: ModelProfile): Promise<OpenAI> {
     const settings = this.getSettings()
     const OpenAIClient = await loadOpenAI()
+    const proxyUrl = resolveHttpProxy(settings)
+    const proxyAgent = proxyUrl ? await this.getProxyAgent(proxyUrl) : undefined
     return new OpenAIClient({
       apiKey: resolveApiKey(settings, profile),
-      baseURL: normalizeBaseURL(resolveBaseURL(settings, profile))
+      baseURL: normalizeBaseURL(resolveBaseURL(settings, profile)),
+      ...(proxyAgent ? { httpAgent: proxyAgent } : {})
     })
   }
 

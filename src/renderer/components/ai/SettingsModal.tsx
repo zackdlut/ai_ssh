@@ -26,6 +26,7 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
   const [contextLengths, setContextLengths] = useState<Record<ModelProfile, number>>({
     ...DEFAULT_CONTEXT_LENGTHS
   })
+  const [httpProxy, setHttpProxy] = useState('')
   const [loaded, setLoaded] = useState(false)
   const locale = useLocaleStore((s) => s.locale)
 
@@ -38,6 +39,7 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
       setNlModelProfile(normalized.nlModelProfile)
       setModels({ ...normalized.models })
       setContextLengths({ ...normalized.contextLengths })
+      setHttpProxy(normalized.httpProxy)
       setLoaded(true)
     })
   }, [])
@@ -71,7 +73,8 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
       copilotModelProfile,
       nlModelProfile,
       models: { ...models },
-      contextLengths: { ...contextLengths }
+      contextLengths: { ...contextLengths },
+      httpProxy
     })
     onClose()
   }
@@ -139,6 +142,15 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
               onChange={(e) => updateApiKey(editingProfile, e.target.value)}
               placeholder={editingProfile === 'default' ? 'sk-...' : t('settings.ai.inheritDefault')}
             />
+          </div>
+          <div className="field">
+            <label>{t('settings.ai.httpProxy')}</label>
+            <input
+              value={httpProxy}
+              onChange={(e) => setHttpProxy(e.target.value)}
+              placeholder="http://127.0.0.1:7890"
+            />
+            <div className="context-hint">{t('settings.ai.httpProxyHint')}</div>
           </div>
           <div className="field">
             <label>{t('settings.ai.copilotModel')}</label>

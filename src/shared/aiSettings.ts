@@ -162,6 +162,8 @@ export function normalizeAISettings(raw: unknown): AISettings {
 
   const legacyProfile = isModelProfile(input.modelProfile) ? input.modelProfile : undefined
 
+  const httpProxy = typeof input.httpProxy === 'string' ? input.httpProxy.trim() : ''
+
   return {
     baseURLs,
     apiKeys,
@@ -170,7 +172,8 @@ export function normalizeAISettings(raw: unknown): AISettings {
       : legacyProfile ?? 'default',
     nlModelProfile: isModelProfile(input.nlModelProfile) ? input.nlModelProfile : 'fast',
     models,
-    contextLengths: cloneContextLengths(input.contextLengths)
+    contextLengths: cloneContextLengths(input.contextLengths),
+    httpProxy
   }
 }
 
@@ -207,4 +210,14 @@ export function resolveContextLength(settings: AISettings, profile: ModelProfile
 /** Context window for the active Copilot profile. */
 export function resolveActiveContextLength(settings: AISettings): number {
   return resolveContextLength(settings, settings.copilotModelProfile)
+}
+
+/** Resolve HTTP(S) proxy for AI API requests; falls back to env when unset. */
+export function resolveHttpProxy(settings: AISettings): string {
+  const configured = settings.httpProxy?.trim()
+  if (configured) return configured
+  if (typeof process !== 'undefined' && process.env) {
+    return (process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '').trim()
+  }
+  return ''
 }

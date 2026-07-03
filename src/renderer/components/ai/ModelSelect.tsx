@@ -40,7 +40,8 @@ export default function ModelSelect({
     copilotModelProfile: value,
     nlModelProfile: 'fast' as const,
     models: modelNames,
-    contextLengths: { ...DEFAULT_CONTEXT_LENGTHS }
+    contextLengths: { ...DEFAULT_CONTEXT_LENGTHS },
+    httpProxy: ''
   }
   const activeModelName = resolveModel(settings, value)
 

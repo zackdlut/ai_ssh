@@ -86,7 +86,8 @@ function store(): Store<StoreSchema> {
           copilotModelProfile: 'default',
           nlModelProfile: 'fast',
           models: { ...DEFAULT_MODELS },
-          contextLengths: { ...DEFAULT_CONTEXT_LENGTHS }
+          contextLengths: { ...DEFAULT_CONTEXT_LENGTHS },
+          httpProxy: ''
         },
         theme: 'dawn',
         locale: 'zh',

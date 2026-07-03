@@ -82,6 +82,8 @@ export interface AISettings {
   models: Record<ModelProfile, string>
   /** Context window size (tokens) per profile tier. */
   contextLengths: Record<ModelProfile, number>
+  /** HTTP(S) proxy URL for AI API requests, e.g. http://127.0.0.1:7890 */
+  httpProxy: string
 }
 
 /** Application color theme. `dawn` is the default light palette. */

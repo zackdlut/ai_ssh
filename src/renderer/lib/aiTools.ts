@@ -401,10 +401,25 @@ function listOpenTabs(): ToolResult {
   return { ok: true, result: JSON.stringify(tabs) }
 }
 
+function maskHttpProxy(url: string): string {
+  const trimmed = url.trim()
+  if (!trimmed) return ''
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.username || parsed.password) {
+      return `${parsed.protocol}//[REDACTED]@${parsed.host}`
+    }
+    return trimmed
+  } catch {
+    return '[REDACTED]'
+  }
+}
+
 function sanitizeAISettings(ai: AISettings): Record<string, unknown> {
   return {
     baseURL: ai.baseURLs.default,
     hasApiKey: !!ai.apiKeys.default,
+    httpProxy: maskHttpProxy(ai.httpProxy),
     copilotModelProfile: ai.copilotModelProfile,
     nlModelProfile: ai.nlModelProfile,
     models: { ...ai.models },
@@ -523,6 +538,7 @@ async function updateAppSettings(args: Record<string, unknown>): Promise<ToolRes
     // (baseURLs/apiKeys) let the model set any tier.
     if (typeof aiUpdates.baseURL === 'string') merged.baseURLs.default = aiUpdates.baseURL
     if (typeof aiUpdates.apiKey === 'string') merged.apiKeys.default = aiUpdates.apiKey
+    if (typeof aiUpdates.httpProxy === 'string') merged.httpProxy = aiUpdates.httpProxy
     if (aiUpdates.baseURLs && typeof aiUpdates.baseURLs === 'object') {
       const urls = aiUpdates.baseURLs as Record<string, unknown>
       for (const key of Object.keys(urls)) {
