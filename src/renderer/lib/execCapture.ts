@@ -23,21 +23,80 @@ export interface CommandCapture {
   timedOut: boolean
   /** True when the SSH session closed/errored mid-capture. */
   disconnected: boolean
+  /** Wall-clock ms spent waiting for the command to finish. */
+  waitMs: number
 }
 
 /** Treat output as complete after this idle period when the marker is absent. */
 const EXEC_IDLE_MS = 800
-/** Absolute safety cap for a single command's capture. */
-const EXEC_HARD_TIMEOUT_MS = 60000
+/** Absolute safety cap for a typical command's capture. */
+const EXEC_HARD_TIMEOUT_MS = 60_000
+/** Hard cap for slow commands (du/find/etc.) that may emit no output for a while. */
+const EXEC_SLOW_HARD_TIMEOUT_MS = 300_000
 /** Max captured output (chars) fed back to the model. */
 const EXEC_OUTPUT_MAX = 4000
+/** How often to emit capture progress callbacks. */
+const PROGRESS_INTERVAL_MS = 1000
+
+/** Commands that may run long with little or no output before the marker appears. */
+const SLOW_COMMAND_RE = /\b(du|find|locate|mlocate|updatedb|rsync|ncdu|tree)\b/i
+
+export interface CaptureTiming {
+  /** Idle ms before giving up without marker; null = wait only for marker/hard cap. */
+  idleMs: number | null
+  hardTimeoutMs: number
+  slow: boolean
+}
+
+export interface CaptureOptions {
+  /** Called about once per second while capture is in flight. */
+  onProgress?: (elapsedMs: number) => void
+}
+
+/** True when the command is likely to run long before producing output. */
+export function isSlowCaptureCommand(command: string): boolean {
+  const cmd = command.trim()
+  if (!cmd) return false
+  const core = cmd.replace(/^(?:sudo\s+|[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*/, '')
+  return SLOW_COMMAND_RE.test(core)
+}
+
+/** Resolve idle/hard timeouts for a command. Slow commands wait for the marker only. */
+export function getCaptureTiming(command: string): CaptureTiming {
+  const slow = isSlowCaptureCommand(command)
+  return {
+    slow,
+    idleMs: slow ? null : EXEC_IDLE_MS,
+    hardTimeoutMs: slow ? EXEC_SLOW_HARD_TIMEOUT_MS : EXEC_HARD_TIMEOUT_MS
+  }
+}
+
+/** Human-readable elapsed time for progress UI. */
+export function formatCaptureElapsed(ms: number): string {
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  const rem = s % 60
+  return rem > 0 ? `${m}m ${rem}s` : `${m}m`
+}
+
+/** Prefix for sentinel marker tokens embedded in wrapped commands. */
+export const CAPTURE_MARKER_PREFIX = 'AISSH_'
 
 function markerToken(): string {
   const rand =
     typeof crypto !== 'undefined' && 'randomUUID' in crypto
       ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
       : Math.random().toString(36).slice(2, 14)
-  return `AISSH_${rand}`
+  return `${CAPTURE_MARKER_PREFIX}${rand}`
+}
+
+/** Sessions with an in-flight execCapture run (agent / silent pwd). */
+const activeCaptures = new Set<string>()
+
+/** True while runCapturedCommand is capturing on this SSH session. */
+export function isSessionCaptureActive(sessionId: string): boolean {
+  return activeCaptures.has(sessionId)
 }
 
 /**
@@ -53,6 +112,11 @@ function buildWrappedCommand(command: string, marker: string): string {
 
 function markerRegex(marker: string): RegExp {
   return new RegExp(`${marker} ec=(-?\\d+) cwd=([\\s\\S]*?) ${marker}`)
+}
+
+/** True when raw SSH output contains the completion marker for this capture. */
+export function hasCaptureMarker(raw: string, marker: string): boolean {
+  return markerRegex(marker).test(stripAnsi(raw))
 }
 
 export interface MarkerCommand {
@@ -102,27 +166,38 @@ export function cleanCapturedOutput(raw: string, command: string, marker: string
 
 /**
  * Run a command on an SSH session and capture its output + exit code + cwd.
- * Resolves as soon as the sentinel marker is seen; falls back to idle/hard
- * timeout when the marker never arrives (e.g. a shell without printf, or a
- * long-running foreground process). Never rejects — failures are reported via
- * the `timedOut` / `disconnected` flags so the loop can decide how to recover.
+ * Resolves as soon as the sentinel marker is seen; for fast commands, falls
+ * back to idle timeout when the marker never arrives. Slow commands (du/find/…)
+ * wait for the marker or the extended hard timeout only. Never rejects —
+ * failures are reported via the `timedOut` / `disconnected` flags.
  */
-export function runCapturedCommand(sessionId: string, command: string): Promise<CommandCapture> {
+export function runCapturedCommand(
+  sessionId: string,
+  command: string,
+  options?: CaptureOptions
+): Promise<CommandCapture> {
   return new Promise((resolve) => {
+    const timing = getCaptureTiming(command)
     const marker = markerToken()
     const re = markerRegex(marker)
+    const startedAt = Date.now()
     let buffer = ''
     let done = false
     let idleTimer: ReturnType<typeof setTimeout> | undefined
     let hardTimer: ReturnType<typeof setTimeout> | undefined
+    let progressTimer: ReturnType<typeof setInterval> | undefined
     let unsubData = (): void => {}
     let unsubStatus = (): void => {}
+
+    const elapsed = (): number => Date.now() - startedAt
 
     const complete = (timedOut: boolean, disconnected: boolean): void => {
       if (done) return
       done = true
+      activeCaptures.delete(sessionId)
       if (idleTimer) clearTimeout(idleTimer)
       if (hardTimer) clearTimeout(hardTimer)
+      if (progressTimer) clearInterval(progressTimer)
       unsubData()
       unsubStatus()
       const stripped = stripAnsi(buffer)
@@ -134,13 +209,21 @@ export function runCapturedCommand(sessionId: string, command: string): Promise<
         exitCode: Number.isFinite(exitCode as number) ? exitCode : null,
         cwd,
         timedOut,
-        disconnected
+        disconnected,
+        waitMs: elapsed()
       })
     }
 
     const bumpIdle = (): void => {
+      if (timing.idleMs === null) return
       if (idleTimer) clearTimeout(idleTimer)
-      idleTimer = setTimeout(() => complete(true, false), EXEC_IDLE_MS)
+      idleTimer = setTimeout(() => complete(true, false), timing.idleMs)
+    }
+
+    if (options?.onProgress) {
+      const emit = (): void => options.onProgress!(elapsed())
+      emit()
+      progressTimer = setInterval(emit, PROGRESS_INTERVAL_MS)
     }
 
     unsubData = window.api.ssh.onData((e) => {
@@ -159,7 +242,8 @@ export function runCapturedCommand(sessionId: string, command: string): Promise<
       if (e.status === 'closed' || e.status === 'error') complete(false, true)
     })
 
-    hardTimer = setTimeout(() => complete(true, false), EXEC_HARD_TIMEOUT_MS)
+    hardTimer = setTimeout(() => complete(true, false), timing.hardTimeoutMs)
+    activeCaptures.add(sessionId)
     bumpIdle()
     window.api.ssh.write(sessionId, buildWrappedCommand(command, marker))
   })

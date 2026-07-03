@@ -206,7 +206,14 @@ async function runToolCall(tabId: string, messageId: string, callId: string): Pr
     data: { args: parseToolArgs(call.args) }
   })
   try {
-    const res = await executeToolCall(call.name, parseToolArgs(call.args))
+    const res = await executeToolCall(call.name, parseToolArgs(call.args), {
+      onCaptureProgress:
+        call.name === 'exec_command'
+          ? (elapsedMs) => {
+              ai.updateToolCall(tabId, messageId, callId, { progressMs: elapsedMs })
+            }
+          : undefined
+    })
     debugLog({
       category: 'action.triggered',
       tabId,

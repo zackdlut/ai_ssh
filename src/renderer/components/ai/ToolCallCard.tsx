@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { approveToolCall, rejectToolCall } from '../../lib/aiService'
 import { isDangerous } from '../../lib/commands'
+import { formatCaptureElapsed } from '../../lib/execCapture'
 import { isDangerousTool } from '../../../shared/aiTools'
 import { useT, type TranslationKey } from '../../lib/i18n'
 import { useAIStore } from '../../store/aiStore'
@@ -519,15 +520,17 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
   const cardRef = useRef<HTMLDivElement>(null)
 
   const statusLabel =
-    call.status === 'running'
-      ? t('tool.running')
-      : call.status === 'done'
-        ? t('tool.done')
-        : call.status === 'rejected'
-          ? t('tool.rejected')
-          : call.status === 'error'
-            ? t('tool.error')
-            : t('tool.pending')
+    call.status === 'running' && call.name === 'exec_command' && call.progressMs
+      ? t('tool.runningWithWait', { elapsed: formatCaptureElapsed(call.progressMs) })
+      : call.status === 'running'
+        ? t('tool.running')
+        : call.status === 'done'
+          ? t('tool.done')
+          : call.status === 'rejected'
+            ? t('tool.rejected')
+            : call.status === 'error'
+              ? t('tool.error')
+              : t('tool.pending')
 
   const isListTool =
     call.name === 'list_ssh_configs' ||

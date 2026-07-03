@@ -127,6 +127,8 @@ export interface ToolCallView {
   /** Captured result text fed back to the model (truncated when persisted). */
   result?: string
   error?: string
+  /** Elapsed ms while a long-running tool (e.g. exec_command) is in flight. */
+  progressMs?: number
 }
 
 /** Persisted ECharts replay data for a chart block inside an assistant message. */

@@ -9,7 +9,7 @@ import { COPILOT_CONTEXT_MAX_LINES, registerNlToggle, registerTerminal, unregist
 import { askAboutSelection } from '../lib/aiService'
 import { extractCommands, isDangerous } from '../lib/commands'
 import { stripAnsi } from '../lib/streamParse'
-import { buildMarkerCommand, parseMarker, runCapturedCommand } from '../lib/execCapture'
+import { buildMarkerCommand, parseMarker, runCapturedCommand, getCaptureTiming, hasCaptureMarker, formatCaptureElapsed, isSessionCaptureActive } from '../lib/execCapture'
 import { getTabObservation, setTabObservation } from '../lib/terminalObservation'
 import {
   isFollowAppTheme,
@@ -89,10 +89,6 @@ const NL_CONTEXT_MAX_LINES = 100
 const MAX_CAPTURE = 2000
 // Skip the summarize LLM call when a single command returns short, plain output.
 const DIRECT_ANSWER_MAX = 200
-// Safety timeout (ms) for a single command's output capture.
-const CAPTURE_TIMEOUT = 20000
-// Treat command output as complete after this idle period (ms).
-const CAPTURE_IDLE_MS = 500
 
 /** Build NL-mode AI context, including the observed shell cwd when known. */
 function buildNlContext(
@@ -441,12 +437,35 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
     const runCommandAndCapture = (cmd: string): Promise<CommandRun> =>
       new Promise((resolve) => {
         const nl = nlRef.current
+        const timing = getCaptureTiming(cmd)
         const { wrapped, marker } = buildMarkerCommand(cmd)
+        const startedAt = Date.now()
+        let progressTimer: ReturnType<typeof setInterval> | undefined
+        let showingWait = false
+
+        const clearWaitLine = (): void => {
+          if (progressTimer) {
+            clearInterval(progressTimer)
+            progressTimer = undefined
+          }
+          if (showingWait) {
+            term.write('\r\n')
+            showingWait = false
+          }
+        }
+
+        const showWait = (): void => {
+          const elapsed = formatCaptureElapsed(Date.now() - startedAt)
+          term.write(`\r${DIM}  ${t(loc(), 'terminal.nl.waiting', { elapsed })}${RESET}`)
+          showingWait = true
+        }
+
         const done = (): void => {
           if (cap.done) return
           cap.done = true
           clearTimeout(cap.timer)
           if (cap.idleTimer) clearTimeout(cap.idleTimer)
+          clearWaitLine()
           if (nlRef.current.capture === cap) nlRef.current.capture = undefined
           const output = formatCaptured(cap.buffer, cmd, tab.username, marker)
           const { exitCode, cwd } = parseMarker(cap.buffer, marker)
@@ -466,13 +485,18 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
           done: false,
           finish: done,
           marker,
-          timer: setTimeout(done, CAPTURE_TIMEOUT),
+          timer: setTimeout(done, timing.hardTimeoutMs),
           bumpIdle() {
+            if (timing.idleMs === null) return
             if (cap.idleTimer) clearTimeout(cap.idleTimer)
-            cap.idleTimer = setTimeout(done, CAPTURE_IDLE_MS)
+            cap.idleTimer = setTimeout(done, timing.idleMs)
           }
         }
         nl.capture = cap
+        if (timing.slow) {
+          showWait()
+          progressTimer = setInterval(showWait, 1000)
+        }
         window.api.ssh.write(sessionId, wrapped)
       })
 
@@ -856,6 +880,10 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
     const dataUnsub = window.api.ssh.onData((e) => {
       if (e.sessionId !== sessionId) return
 
+      // Agent exec_command / silent pwd: execCapture buffers the wrapped stream;
+      // suppress echo so marker helper lines never appear in the terminal.
+      if (isSessionCaptureActive(sessionId)) return
+
       const nl = nlRef.current
       const cap = nl.capture
       // While capturing an NL command, buffer the raw stream but don't echo it
@@ -864,6 +892,10 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
       if (cap && !cap.done) {
         cap.buffer += e.data
         if (cap.buffer.length > 200000) cap.buffer = cap.buffer.slice(-100000)
+        if (cap.marker && hasCaptureMarker(cap.buffer, cap.marker)) {
+          cap.finish()
+          return
+        }
         cap.bumpIdle()
         return
       }

@@ -14,7 +14,7 @@ import { useStartupStore } from '../store/startupStore'
 import { useSkillsStore } from '../store/skillsStore'
 import { useUserRulesStore } from '../store/userRulesStore'
 import { connect, connectFromConfig } from './connect'
-import { runCapturedCommand } from './execCapture'
+import { runCapturedCommand, formatCaptureElapsed } from './execCapture'
 import { getTabObservation, setTabObservation } from './terminalObservation'
 import { verifyCommand } from '../../shared/verify'
 import { normalizeAISettings } from '../../shared/aiSettings'
@@ -317,7 +317,10 @@ async function moveConnectionToFolder(args: Record<string, unknown>): Promise<To
   }
 }
 
-async function execCommand(args: Record<string, unknown>): Promise<ToolResult> {
+async function execCommand(
+  args: Record<string, unknown>,
+  ctx?: { onCaptureProgress?: (elapsedMs: number) => void }
+): Promise<ToolResult> {
   const tabId = str(args.tab_id)
   const command = str(args.command)
   if (!tabId || !command) return { ok: false, error: 'tab_id and command are required.' }
@@ -327,7 +330,9 @@ async function execCommand(args: Record<string, unknown>): Promise<ToolResult> {
     return { ok: false, error: `Tab "${tabId}" is not connected (status: ${tab.status}).` }
   }
 
-  const cap = await runCapturedCommand(tab.sessionId, command)
+  const cap = await runCapturedCommand(tab.sessionId, command, {
+    onProgress: ctx?.onCaptureProgress
+  })
 
   // A dropped session mid-command is a recoverable transient failure: surface it
   // as an error (not a "successful" empty result) so the loop can reconnect or
@@ -356,6 +361,7 @@ async function execCommand(args: Record<string, unknown>): Promise<ToolResult> {
   lines.push(`status: ${verdict.status}`)
   lines.push(`exit_code: ${cap.exitCode === null ? 'unknown' : cap.exitCode}`)
   if (cap.cwd) lines.push(`cwd: ${cap.cwd}`)
+  if (cap.waitMs > 0) lines.push(`wait: ${formatCaptureElapsed(cap.waitMs)}`)
   if (verdict.hint) {
     lines.push(`verify: ${verdict.hint}${verdict.retryable ? ' (transient — a retry may help)' : ''}`)
   }
@@ -564,7 +570,8 @@ export function parseToolArgs(raw: string): Record<string, unknown> {
 /** Dispatch a single tool call to its handler. */
 export async function executeToolCall(
   name: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  ctx?: { onCaptureProgress?: (elapsedMs: number) => void }
 ): Promise<ToolResult> {
   switch (name) {
     case 'open_ssh':
@@ -582,7 +589,7 @@ export async function executeToolCall(
     case 'move_connection_to_folder':
       return moveConnectionToFolder(args)
     case 'exec_command':
-      return execCommand(args)
+      return execCommand(args, ctx)
     case 'list_ssh_configs':
       return listSshConfigs()
     case 'list_folders':
