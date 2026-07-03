@@ -1,6 +1,7 @@
 import { useAIStore, DEFAULT_CHAT_TAB_TITLE } from '../store/aiStore'
 import { useTabsStore } from '../store/tabsStore'
 import { COPILOT_CONTEXT_MAX_LINES, COPILOT_TERMINAL_MENTION_MAX_LINES, readTerminalOutput } from './terminalRegistry'
+import { getTabObservation } from './terminalObservation'
 import { normalizeAISettings, resolveActiveContextLength } from '../../shared/aiSettings'
 import { buildEffectiveSystemPrompt } from '../../shared/userRules'
 import { selectMessagesToCompress, buildChatPayload, type BudgetMessage } from '../../shared/contextBudget'
@@ -712,7 +713,8 @@ function buildTerminalContext(
       mentionsTerminal ? COPILOT_TERMINAL_MENTION_MAX_LINES : COPILOT_CONTEXT_MAX_LINES
     ),
     host: activeTerminalTab.host,
-    username: activeTerminalTab.username
+    username: activeTerminalTab.username,
+    cwd: getTabObservation(activeTerminalTab.id)?.cwd
   }
 }
 

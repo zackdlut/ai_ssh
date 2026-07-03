@@ -48,7 +48,7 @@ ss -ltnp 'sport = :8080'
 - Output NO prose, NO explanation, NO comments, NO example output. Code blocks only.
 - If multiple steps are needed, emit multiple bash code blocks in execution order.
 - Prefer the safest command that satisfies the intent. Do not add destructive flags unless the intent explicitly requires them.
-- Assume commands run in the user's current shell on the connected host.
+- Assume commands run in the user's current shell on the connected host. When the context includes a working directory, treat it as the shell cwd and prefer paths relative to it; do not assume the home directory.
 - If the intent is unclear or cannot be turned into a command, output a single bash code block containing only: echo "无法解析该意图，请换种说法"`
 
 /**

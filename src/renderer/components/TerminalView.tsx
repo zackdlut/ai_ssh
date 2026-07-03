@@ -9,7 +9,8 @@ import { COPILOT_CONTEXT_MAX_LINES, registerNlToggle, registerTerminal, unregist
 import { askAboutSelection } from '../lib/aiService'
 import { extractCommands, isDangerous } from '../lib/commands'
 import { stripAnsi } from '../lib/streamParse'
-import { buildMarkerCommand, parseMarker } from '../lib/execCapture'
+import { buildMarkerCommand, parseMarker, runCapturedCommand } from '../lib/execCapture'
+import { getTabObservation, setTabObservation } from '../lib/terminalObservation'
 import {
   isFollowAppTheme,
   resolveTerminalTheme,
@@ -23,7 +24,7 @@ import { matchesKeyEvent } from '../lib/keybindingMatch'
 import { useLocaleStore } from '../store/localeStore'
 import { t, useT } from '../lib/i18n'
 import { debugLog } from '../lib/debugLog'
-import type { AppLocale } from '../../shared/types'
+import type { AppLocale, TerminalContext } from '../../shared/types'
 import type { CommandRun } from '../../shared/types'
 import { SHORTCUT_COPY, formatShortcut } from '../lib/shortcuts'
 import ContextMenuItem from './ContextMenuItem'
@@ -93,6 +94,36 @@ const CAPTURE_TIMEOUT = 20000
 // Treat command output as complete after this idle period (ms).
 const CAPTURE_IDLE_MS = 500
 
+/** Build NL-mode AI context, including the observed shell cwd when known. */
+function buildNlContext(
+  term: Terminal,
+  tab: { id: string; host: string; username: string }
+): TerminalContext {
+  return {
+    recentOutput: serializeBuffer(term, NL_CONTEXT_MAX_LINES),
+    host: tab.host,
+    username: tab.username,
+    cwd: getTabObservation(tab.id)?.cwd
+  }
+}
+
+/** Refresh cwd via a silent pwd (updates observation). */
+async function refreshTabCwd(tabId: string, sessionId: string): Promise<string | undefined> {
+  const cap = await runCapturedCommand(sessionId, 'pwd')
+  if (cap.cwd) {
+    setTabObservation(tabId, { cwd: cap.cwd, at: Date.now() })
+    return cap.cwd
+  }
+  return getTabObservation(tabId)?.cwd
+}
+
+/** Return observed cwd, running pwd once when still unknown. */
+async function ensureTabCwd(tabId: string, sessionId: string): Promise<string | undefined> {
+  const existing = getTabObservation(tabId)?.cwd
+  if (existing) return existing
+  return refreshTabCwd(tabId, sessionId)
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -145,7 +176,7 @@ function formatRunsFallback(runs: CommandRun[]): string | null {
 /** Stream summarize tokens into the terminal as they arrive from the model. */
 function streamSummarize(
   term: Terminal,
-  req: { request: string; runs: CommandRun[]; context?: { host: string; username: string } },
+  req: { request: string; runs: CommandRun[]; context?: { tabId: string; host: string; username: string } },
   locale: AppLocale
 ): Promise<void> {
   const requestId = crypto.randomUUID()
@@ -205,11 +236,11 @@ function streamSummarize(
       request: req.request,
       runs: req.runs,
       context: req.context
-        ? {
-            recentOutput: serializeBuffer(term, NL_CONTEXT_MAX_LINES),
+        ? buildNlContext(term, {
+            id: req.context.tabId,
             host: req.context.host,
             username: req.context.username
-          }
+          })
         : undefined
     })
   })
@@ -375,6 +406,7 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
         term.write(
           `\r\n${ORANGE}${t(loc(), 'terminal.nl.entered', { toggleKey })}${RESET}`
         )
+        void refreshTabCwd(tab.id, sessionId)
         writeNlPrompt()
       } else {
         nl.mode = 'normal'
@@ -417,7 +449,15 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
           if (cap.idleTimer) clearTimeout(cap.idleTimer)
           if (nlRef.current.capture === cap) nlRef.current.capture = undefined
           const output = formatCaptured(cap.buffer, cmd, tab.username, marker)
-          const { exitCode } = parseMarker(cap.buffer, marker)
+          const { exitCode, cwd } = parseMarker(cap.buffer, marker)
+          if (cwd) {
+            setTabObservation(tab.id, {
+              cwd,
+              lastCommand: cmd,
+              lastExitCode: exitCode,
+              at: Date.now()
+            })
+          }
           if (output) term.write(output.replace(/\n/g, '\r\n') + '\r\n')
           resolve({ command: cmd, output, code: exitCode })
         }
@@ -448,11 +488,8 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
       })
       term.write(`\r\n${DIM}${t(loc(), 'terminal.nl.parsing')}${RESET}\r\n`)
 
-      const context = {
-        recentOutput: serializeBuffer(term, NL_CONTEXT_MAX_LINES),
-        host: tab.host,
-        username: tab.username
-      }
+      await ensureTabCwd(tab.id, sessionId)
+      const context = buildNlContext(term, tab)
 
       let result: { content?: string; error?: string }
       try {
@@ -540,7 +577,7 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
               {
                 request: text,
                 runs,
-                context: { host: tab.host, username: tab.username }
+                context: { tabId: tab.id, host: tab.host, username: tab.username }
               },
               loc()
             )

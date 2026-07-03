@@ -177,6 +177,8 @@ export interface TerminalContext {
   host?: string
   username?: string
   osHint?: string
+  /** Observed shell working directory on the connected host, when known. */
+  cwd?: string
 }
 
 export interface AIChatRequest {
