@@ -50,6 +50,4 @@ npm run typecheck
 - **WSL2 / 无头环境**：已在主进程调用 `app.disableHardwareAcceleration()` 以规避 GPU 进程崩溃。
 - 若环境中设置了 `ELECTRON_RUN_AS_NODE=1`（部分远程/容器环境会注入），Electron 会以纯 Node 模式运行导致 `app` 为 undefined。运行前请确保未设置该变量：`env -u ELECTRON_RUN_AS_NODE npm run dev`。
 
-## 后续可扩展
 
-连接分组/书签、会话历史持久化、选中输出做解释、SFTP、端口转发、多窗口等。
