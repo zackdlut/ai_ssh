@@ -1,6 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { MODEL_PROFILES, resolveModel, DEFAULT_CONTEXT_LENGTHS } from '../../../shared/aiSettings'
+import {
+  MODEL_PROFILES,
+  resolveModel,
+  DEFAULT_CONTEXT_LENGTHS,
+  DEFAULT_BASE_URLS,
+  DEFAULT_API_KEYS
+} from '../../../shared/aiSettings'
 import type { ModelProfile } from '../../../shared/types'
 import { modelProfileLabel, useT, type AppLocale } from '../../lib/i18n'
 
@@ -29,8 +35,8 @@ export default function ModelSelect({
   const t = useT()
 
   const settings = {
-    baseURL: '',
-    apiKey: '',
+    baseURLs: { ...DEFAULT_BASE_URLS },
+    apiKeys: { ...DEFAULT_API_KEYS },
     copilotModelProfile: value,
     nlModelProfile: 'fast' as const,
     models: modelNames,

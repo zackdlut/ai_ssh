@@ -403,8 +403,8 @@ function listOpenTabs(): ToolResult {
 
 function sanitizeAISettings(ai: AISettings): Record<string, unknown> {
   return {
-    baseURL: ai.baseURL,
-    hasApiKey: !!ai.apiKey,
+    baseURL: ai.baseURLs.default,
+    hasApiKey: !!ai.apiKeys.default,
     copilotModelProfile: ai.copilotModelProfile,
     nlModelProfile: ai.nlModelProfile,
     models: { ...ai.models },
@@ -511,10 +511,34 @@ async function updateAppSettings(args: Record<string, unknown>): Promise<ToolRes
     }
     const aiUpdates = updates.ai as Record<string, unknown>
     const current = normalizeAISettings(await window.api.config.getAISettings())
-    const merged: AISettings = { ...current }
+    const merged: AISettings = {
+      ...current,
+      baseURLs: { ...current.baseURLs },
+      apiKeys: { ...current.apiKeys },
+      models: { ...current.models },
+      contextLengths: { ...current.contextLengths }
+    }
 
-    if (typeof aiUpdates.baseURL === 'string') merged.baseURL = aiUpdates.baseURL
-    if (typeof aiUpdates.apiKey === 'string') merged.apiKey = aiUpdates.apiKey
+    // Scalar baseURL/apiKey target the `default` profile; per-profile records
+    // (baseURLs/apiKeys) let the model set any tier.
+    if (typeof aiUpdates.baseURL === 'string') merged.baseURLs.default = aiUpdates.baseURL
+    if (typeof aiUpdates.apiKey === 'string') merged.apiKeys.default = aiUpdates.apiKey
+    if (aiUpdates.baseURLs && typeof aiUpdates.baseURLs === 'object') {
+      const urls = aiUpdates.baseURLs as Record<string, unknown>
+      for (const key of Object.keys(urls)) {
+        if (isModelProfile(key) && typeof urls[key] === 'string') {
+          merged.baseURLs[key] = urls[key] as string
+        }
+      }
+    }
+    if (aiUpdates.apiKeys && typeof aiUpdates.apiKeys === 'object') {
+      const keys = aiUpdates.apiKeys as Record<string, unknown>
+      for (const key of Object.keys(keys)) {
+        if (isModelProfile(key) && typeof keys[key] === 'string') {
+          merged.apiKeys[key] = keys[key] as string
+        }
+      }
+    }
     if (isModelProfile(aiUpdates.copilotModelProfile)) {
       merged.copilotModelProfile = aiUpdates.copilotModelProfile
     }

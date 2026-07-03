@@ -10,10 +10,16 @@ async function loadOpenAI(): Promise<OpenAIConstructor> {
   }
   return openaiCtor
 }
-import { resolveActiveModel, resolveModel } from '../../shared/aiSettings'
+import {
+  resolveActiveModel,
+  resolveModel,
+  resolveBaseURL,
+  resolveApiKey
+} from '../../shared/aiSettings'
 import { AI_TOOLS } from '../../shared/aiTools'
 import type {
   AISettings,
+  ModelProfile,
   AIChatRequest,
   AIChartSpecRequest,
   AITranslateRequest,
@@ -253,8 +259,8 @@ function extractMessageText(
   return extra.reasoning ?? extra.reasoning_content ?? ''
 }
 
-function llmBaseUrl(settings: AISettings): string {
-  return normalizeBaseURL(settings.baseURL) ?? ''
+function llmBaseUrl(settings: AISettings, profile: ModelProfile): string {
+  return normalizeBaseURL(resolveBaseURL(settings, profile)) ?? ''
 }
 
 function logLlmRequest(traceId: string, message: string, data: unknown): void {
@@ -300,23 +306,24 @@ export class AIProvider {
 
   constructor(private getSettings: () => AISettings) {}
 
-  private async createClient(): Promise<OpenAI> {
+  private async createClient(profile: ModelProfile): Promise<OpenAI> {
     const settings = this.getSettings()
     const OpenAIClient = await loadOpenAI()
     return new OpenAIClient({
-      apiKey: settings.apiKey,
-      baseURL: normalizeBaseURL(settings.baseURL)
+      apiKey: resolveApiKey(settings, profile),
+      baseURL: normalizeBaseURL(resolveBaseURL(settings, profile))
     })
   }
 
   async chat(req: AIChatRequest, cb: StreamCallbacks): Promise<void> {
     const settings = this.getSettings()
-    if (!settings.apiKey) {
+    const profile = settings.copilotModelProfile
+    if (!resolveApiKey(settings, profile)) {
       cb.onError('AI is not configured. Set the API key in Settings.')
       return
     }
 
-    const client = await this.createClient()
+    const client = await this.createClient(profile)
     const started = Date.now()
 
     const controller = new AbortController()
@@ -346,7 +353,7 @@ export class AIProvider {
     logLlmRequest(req.requestId, 'chat.completions.create', {
       method: 'chat.completions.create',
       model,
-      baseURL: llmBaseUrl(settings),
+      baseURL: llmBaseUrl(settings, profile),
       stream: true,
       enableTools: req.enableTools,
       messages
@@ -480,11 +487,12 @@ export class AIProvider {
    */
   async chartSpec(req: AIChartSpecRequest): Promise<string> {
     const settings = this.getSettings()
-    if (!settings.apiKey) {
+    const profile = settings.copilotModelProfile
+    if (!resolveApiKey(settings, profile)) {
       throw new Error('AI is not configured. Set the API key in Settings.')
     }
 
-    const client = await this.createClient()
+    const client = await this.createClient(profile)
     const started = Date.now()
     const traceId = `chart-${started}`
 
@@ -535,7 +543,7 @@ export class AIProvider {
     logLlmRequest(traceId, 'chartSpec.completions.create', {
       method: 'chat.completions.create',
       model,
-      baseURL: llmBaseUrl(settings),
+      baseURL: llmBaseUrl(settings, profile),
       stream: false,
       messages
     })
@@ -607,11 +615,12 @@ export class AIProvider {
    */
   async translate(req: AITranslateRequest): Promise<string> {
     const settings = this.getSettings()
-    if (!settings.apiKey) {
+    const profile = settings.nlModelProfile
+    if (!resolveApiKey(settings, profile)) {
       throw new Error('AI is not configured. Set the API key in Settings.')
     }
 
-    const client = await this.createClient()
+    const client = await this.createClient(profile)
     const started = Date.now()
     const traceId = `translate-${started}`
 
@@ -624,11 +633,11 @@ export class AIProvider {
     }
     messages.push({ role: 'user', content: req.prompt })
 
-    const model = resolveModel(settings, settings.nlModelProfile)
+    const model = resolveModel(settings, profile)
     logLlmRequest(traceId, 'translate.completions.create', {
       method: 'chat.completions.create',
       model,
-      baseURL: llmBaseUrl(settings),
+      baseURL: llmBaseUrl(settings, profile),
       stream: false,
       messages
     })
@@ -650,12 +659,13 @@ export class AIProvider {
 
   async summarize(req: AISummarizeRequest, cb: StreamCallbacks): Promise<void> {
     const settings = this.getSettings()
-    if (!settings.apiKey) {
+    const profile = settings.nlModelProfile
+    if (!resolveApiKey(settings, profile)) {
       cb.onError('AI is not configured. Set the API key in Settings.')
       return
     }
 
-    const client = await this.createClient()
+    const client = await this.createClient(profile)
     const started = Date.now()
 
     const controller = new AbortController()
@@ -680,11 +690,11 @@ export class AIProvider {
     }
     messages.push({ role: 'user', content: userContent })
 
-    const model = resolveModel(settings, settings.nlModelProfile)
+    const model = resolveModel(settings, profile)
     logLlmRequest(req.requestId, 'summarize.completions.create', {
       method: 'chat.completions.create',
       model,
-      baseURL: llmBaseUrl(settings),
+      baseURL: llmBaseUrl(settings, profile),
       stream: true,
       messages
     })
@@ -735,14 +745,15 @@ export class AIProvider {
   /** Compress older Copilot turns into a short summary (non-streaming). */
   async compressHistory(req: AICompressHistoryRequest): Promise<string> {
     const settings = this.getSettings()
-    if (!settings.apiKey) {
+    const profile = settings.copilotModelProfile
+    if (!resolveApiKey(settings, profile)) {
       throw new Error('AI is not configured. Set the API key in Settings.')
     }
     if (req.messages.length === 0) {
       throw new Error('No messages to compress.')
     }
 
-    const client = await this.createClient()
+    const client = await this.createClient(profile)
     const started = Date.now()
     const traceId = `compress-${started}`
 
@@ -766,7 +777,7 @@ export class AIProvider {
     logLlmRequest(traceId, 'compressHistory.completions.create', {
       method: 'chat.completions.create',
       model,
-      baseURL: llmBaseUrl(settings),
+      baseURL: llmBaseUrl(settings, profile),
       stream: false,
       messages
     })

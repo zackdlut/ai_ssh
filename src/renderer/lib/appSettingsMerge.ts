@@ -74,8 +74,8 @@ function parseAiSnapshot(raw: unknown, fallback?: AISettings): AppSettingsSnapsh
   }
 
   return {
-    baseURL: typeof input.baseURL === 'string' ? input.baseURL : base.baseURL,
-    hasApiKey: typeof input.hasApiKey === 'boolean' ? input.hasApiKey : !!base.apiKey,
+    baseURL: typeof input.baseURL === 'string' ? input.baseURL : base.baseURLs.default,
+    hasApiKey: typeof input.hasApiKey === 'boolean' ? input.hasApiKey : !!base.apiKeys.default,
     copilotModelProfile: isModelProfile(input.copilotModelProfile)
       ? input.copilotModelProfile
       : base.copilotModelProfile,
@@ -131,8 +131,8 @@ export async function buildCurrentAppSettingsSnapshot(): Promise<AppSettingsSnap
       copilotOpen: startup.copilotOpen
     },
     ai: {
-      baseURL: ai.baseURL,
-      hasApiKey: !!ai.apiKey,
+      baseURL: ai.baseURLs.default,
+      hasApiKey: !!ai.apiKeys.default,
       copilotModelProfile: ai.copilotModelProfile,
       nlModelProfile: ai.nlModelProfile,
       models: { ...ai.models },

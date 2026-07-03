@@ -315,7 +315,7 @@ export const AI_TOOLS: AIToolDefinition[] = [
     function: {
       name: 'update_app_settings',
       description:
-        'Update application settings. Pass an updates object with only the fields to change. Supports theme (aurora/dawn), locale (zh/en), terminal_appearance (colorScheme, fontFamily, fontSize, lineHeight, fontWeight), startup (connSidebarOpen, copilotOpen — whether each side panel opens on app launch), user_rules (custom copilot instructions as plain text), and ai (baseURL, apiKey, copilotModelProfile, nlModelProfile, models, contextLengths). Batch multiple categories in one call when the user asks for several changes.',
+        'Update application settings. Pass an updates object with only the fields to change. Supports theme (aurora/dawn), locale (zh/en), terminal_appearance (colorScheme, fontFamily, fontSize, lineHeight, fontWeight), startup (connSidebarOpen, copilotOpen — whether each side panel opens on app launch), user_rules (custom copilot instructions as plain text), and ai (baseURL, apiKey — these target the default profile; baseURLs and apiKeys per-profile objects; copilotModelProfile, nlModelProfile, models, contextLengths). baseURLs/apiKeys are keyed by profile (default/fast/medium/high/custom); a profile left empty inherits the default profile. Batch multiple categories in one call when the user asks for several changes.',
       parameters: {
         type: 'object',
         properties: {
@@ -395,8 +395,32 @@ export const AI_TOOLS: AIToolDefinition[] = [
                 type: 'object',
                 description: 'AI provider and model settings.',
                 properties: {
-                  baseURL: { type: 'string' },
-                  apiKey: { type: 'string' },
+                  baseURL: { type: 'string', description: 'Base URL for the default profile.' },
+                  apiKey: { type: 'string', description: 'API key for the default profile.' },
+                  baseURLs: {
+                    type: 'object',
+                    description: 'Base URL per profile tier (empty inherits default).',
+                    properties: {
+                      default: { type: 'string' },
+                      fast: { type: 'string' },
+                      medium: { type: 'string' },
+                      high: { type: 'string' },
+                      custom: { type: 'string' }
+                    },
+                    additionalProperties: false
+                  },
+                  apiKeys: {
+                    type: 'object',
+                    description: 'API key per profile tier (empty inherits default).',
+                    properties: {
+                      default: { type: 'string' },
+                      fast: { type: 'string' },
+                      medium: { type: 'string' },
+                      high: { type: 'string' },
+                      custom: { type: 'string' }
+                    },
+                    additionalProperties: false
+                  },
                   copilotModelProfile: {
                     type: 'string',
                     enum: ['default', 'fast', 'medium', 'high', 'custom']

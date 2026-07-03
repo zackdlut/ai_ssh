@@ -95,11 +95,13 @@ const zh = {
   'settings.ai.editProfile': '编辑配置档',
   'settings.ai.model': '模型（{profile}）',
   'settings.ai.contextLength': '上下文长度 / Context length（{profile}，tokens）',
-  'settings.ai.baseUrl': 'Base URL（OpenAI 兼容）',
-  'settings.ai.apiKey': 'API Key',
+  'settings.ai.baseUrl': 'Base URL（{profile}，OpenAI 兼容）',
+  'settings.ai.apiKey': 'API Key（{profile}）',
+  'settings.ai.inheritDefault': '留空则继承 Default 档位',
+  'settings.ai.copilotModel': 'Copilot 模型档位',
   'settings.ai.nlModel': '终端 AI 模式模型',
   'settings.ai.hint':
-    '兼容 OpenAI、DeepSeek、本地 vLLM/Ollama 等 OpenAI 兼容端点。密钥仅保存在本地，由主进程调用。每个配置档可使用不同模型。Copilot 模型档位可在侧栏下拉切换；终端 AI 模式模型档位在此配置（默认：Fast）。',
+    '兼容 OpenAI、DeepSeek、本地 vLLM/Ollama 等 OpenAI 兼容端点。密钥仅保存在本地，由主进程调用。每个配置档可使用不同的模型、Base URL 和 API Key；非 Default 档位留空时自动继承 Default 档位的值。Copilot 模型档位可在此或侧栏下拉切换；终端 AI 模式模型档位在此配置（默认：Fast）。',
   'settings.debugLog.enabled': '启用 Debug 日志',
   'settings.debugLog.hint': '日志写入 {dir}（NDJSON 格式，按日分文件）',
 
@@ -591,11 +593,13 @@ const en: Record<keyof typeof zh, string> = {
   'settings.ai.editProfile': 'Edit Profile',
   'settings.ai.model': 'Model ({profile})',
   'settings.ai.contextLength': 'Context length ({profile}, tokens)',
-  'settings.ai.baseUrl': 'Base URL (OpenAI-compatible)',
-  'settings.ai.apiKey': 'API Key',
+  'settings.ai.baseUrl': 'Base URL ({profile}, OpenAI-compatible)',
+  'settings.ai.apiKey': 'API Key ({profile})',
+  'settings.ai.inheritDefault': 'Leave empty to inherit the Default profile',
+  'settings.ai.copilotModel': 'Copilot Model Tier',
   'settings.ai.nlModel': 'Terminal AI Mode Model',
   'settings.ai.hint':
-    'Works with OpenAI, DeepSeek, local vLLM/Ollama and other OpenAI-compatible endpoints. The key is stored locally and only used by the main process. Each profile can use a different model. Switch the Copilot model tier from the sidebar dropdown; configure the terminal AI mode model tier here (default: Fast).',
+    'Works with OpenAI, DeepSeek, local vLLM/Ollama and other OpenAI-compatible endpoints. The key is stored locally and only used by the main process. Each profile can use a different model, Base URL and API Key; non-Default profiles inherit the Default profile when left empty. Switch the Copilot model tier here or from the sidebar dropdown; configure the terminal AI mode model tier here (default: Fast).',
   'settings.debugLog.enabled': 'Enable debug logging',
   'settings.debugLog.hint': 'Logs are written to {dir} (NDJSON, one file per day)',
 

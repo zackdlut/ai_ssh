@@ -70,8 +70,10 @@ export interface SshDataEvent {
 export type ModelProfile = 'default' | 'fast' | 'medium' | 'high' | 'custom'
 
 export interface AISettings {
-  baseURL: string
-  apiKey: string
+  /** OpenAI-compatible base URL per profile tier. Empty falls back to `default`. */
+  baseURLs: Record<ModelProfile, string>
+  /** API key per profile tier. Empty falls back to `default`. */
+  apiKeys: Record<ModelProfile, string>
   /** Model profile used by the AI Copilot sidebar chat. */
   copilotModelProfile: ModelProfile
   /** Model profile used by in-terminal natural-language mode. */

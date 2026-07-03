@@ -3,7 +3,17 @@ import Store from 'electron-store'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { readCopilotChats, writeCopilotChats } from './copilotChatsStore'
-import { DEFAULT_MODELS, DEFAULT_CONTEXT_LENGTHS, cloneModels, cloneContextLengths, normalizeAISettings } from '../../shared/aiSettings'
+import {
+  DEFAULT_MODELS,
+  DEFAULT_CONTEXT_LENGTHS,
+  DEFAULT_BASE_URLS,
+  DEFAULT_API_KEYS,
+  cloneModels,
+  cloneContextLengths,
+  cloneBaseURLs,
+  cloneApiKeys,
+  normalizeAISettings
+} from '../../shared/aiSettings'
 import {
   DEFAULT_TERMINAL_APPEARANCE,
   normalizeTerminalAppearanceSettings
@@ -69,9 +79,10 @@ function store(): Store<StoreSchema> {
     _store = new Store<StoreSchema>({
       defaults: {
         ai: {
-          // Ollama exposes an OpenAI-compatible API under /v1.
-          baseURL: 'http://10.67.34.44:11434/v1',
-          apiKey: 'ollam',
+          // Ollama exposes an OpenAI-compatible API under /v1. Non-default
+          // profiles start empty and fall back to `default` until configured.
+          baseURLs: { ...DEFAULT_BASE_URLS, default: 'http://10.67.34.44:11434/v1' },
+          apiKeys: { ...DEFAULT_API_KEYS, default: 'ollam' },
           copilotModelProfile: 'default',
           nlModelProfile: 'fast',
           models: { ...DEFAULT_MODELS },
@@ -101,6 +112,8 @@ export function setAISettings(settings: AISettings): AISettings {
   const normalized = normalizeAISettings(settings)
   store().set('ai', {
     ...normalized,
+    baseURLs: cloneBaseURLs(normalized.baseURLs),
+    apiKeys: cloneApiKeys(normalized.apiKeys),
     models: cloneModels(normalized.models),
     contextLengths: cloneContextLengths(normalized.contextLengths)
   })

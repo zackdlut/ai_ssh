@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
+  DEFAULT_API_KEYS,
+  DEFAULT_BASE_URLS,
   DEFAULT_CONTEXT_LENGTHS,
   DEFAULT_MODELS,
   MODEL_PROFILES,
@@ -15,9 +17,10 @@ interface Props {
 
 export default function SettingsModal({ onClose }: Props): JSX.Element {
   const t = useT()
-  const [baseURL, setBaseURL] = useState('')
-  const [apiKey, setApiKey] = useState('')
+  const [baseURLs, setBaseURLs] = useState<Record<ModelProfile, string>>({ ...DEFAULT_BASE_URLS })
+  const [apiKeys, setApiKeys] = useState<Record<ModelProfile, string>>({ ...DEFAULT_API_KEYS })
   const [editingProfile, setEditingProfile] = useState<ModelProfile>('default')
+  const [copilotModelProfile, setCopilotModelProfile] = useState<ModelProfile>('default')
   const [nlModelProfile, setNlModelProfile] = useState<ModelProfile>('fast')
   const [models, setModels] = useState<Record<ModelProfile, string>>({ ...DEFAULT_MODELS })
   const [contextLengths, setContextLengths] = useState<Record<ModelProfile, number>>({
@@ -29,8 +32,9 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
   useEffect(() => {
     void window.api.config.getAISettings().then((s: AISettings) => {
       const normalized = normalizeAISettings(s)
-      setBaseURL(normalized.baseURL)
-      setApiKey(normalized.apiKey)
+      setBaseURLs({ ...normalized.baseURLs })
+      setApiKeys({ ...normalized.apiKeys })
+      setCopilotModelProfile(normalized.copilotModelProfile)
       setNlModelProfile(normalized.nlModelProfile)
       setModels({ ...normalized.models })
       setContextLengths({ ...normalized.contextLengths })
@@ -50,12 +54,21 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
     setContextLengths((prev) => ({ ...prev, [profile]: parsed }))
   }
 
+  const updateBaseURL = (profile: ModelProfile, value: string): void => {
+    setBaseURLs((prev) => ({ ...prev, [profile]: value }))
+  }
+
+  const updateApiKey = (profile: ModelProfile, value: string): void => {
+    setApiKeys((prev) => ({ ...prev, [profile]: value }))
+  }
+
   const handleSave = async (): Promise<void> => {
     const current = normalizeAISettings(await window.api.config.getAISettings())
     await window.api.config.setAISettings({
       ...current,
-      baseURL,
-      apiKey,
+      baseURLs: { ...baseURLs },
+      apiKeys: { ...apiKeys },
+      copilotModelProfile,
       nlModelProfile,
       models: { ...models },
       contextLengths: { ...contextLengths }
@@ -105,21 +118,42 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
             />
           </div>
           <div className="field">
-            <label>{t('settings.ai.baseUrl')}</label>
+            <label>{t('settings.ai.baseUrl', { profile: editingProfileLabel })}</label>
             <input
-              value={baseURL}
-              onChange={(e) => setBaseURL(e.target.value)}
-              placeholder="https://api.openai.com/v1"
+              key={`base-${editingProfile}`}
+              value={baseURLs[editingProfile]}
+              onChange={(e) => updateBaseURL(editingProfile, e.target.value)}
+              placeholder={
+                editingProfile === 'default'
+                  ? 'https://api.openai.com/v1'
+                  : t('settings.ai.inheritDefault')
+              }
             />
           </div>
           <div className="field">
-            <label>{t('settings.ai.apiKey')}</label>
+            <label>{t('settings.ai.apiKey', { profile: editingProfileLabel })}</label>
             <input
+              key={`key-${editingProfile}`}
               type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-..."
+              value={apiKeys[editingProfile]}
+              onChange={(e) => updateApiKey(editingProfile, e.target.value)}
+              placeholder={editingProfile === 'default' ? 'sk-...' : t('settings.ai.inheritDefault')}
             />
+          </div>
+          <div className="field">
+            <label>{t('settings.ai.copilotModel')}</label>
+            <div className="seg seg-profile">
+              {MODEL_PROFILES.map((profile) => (
+                <button
+                  key={profile.id}
+                  type="button"
+                  className={copilotModelProfile === profile.id ? 'active' : ''}
+                  onClick={() => setCopilotModelProfile(profile.id)}
+                >
+                  {modelProfileLabel(locale, profile.id)}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="field">
             <label>{t('settings.ai.nlModel')}</label>

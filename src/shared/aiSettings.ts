@@ -32,6 +32,24 @@ export const DEFAULT_CONTEXT_LENGTHS: Record<ModelProfile, number> = {
   custom: 32768
 }
 
+/** Fresh-install base URLs: all empty (each profile falls back to `default`). */
+export const DEFAULT_BASE_URLS: Record<ModelProfile, string> = {
+  default: '',
+  fast: '',
+  medium: '',
+  high: '',
+  custom: ''
+}
+
+/** Fresh-install API keys: all empty (each profile falls back to `default`). */
+export const DEFAULT_API_KEYS: Record<ModelProfile, string> = {
+  default: '',
+  fast: '',
+  medium: '',
+  high: '',
+  custom: ''
+}
+
 function isModelProfile(value: unknown): value is ModelProfile {
   return (
     value === 'default' ||
@@ -63,6 +81,35 @@ export function cloneModels(
   return result
 }
 
+function cloneStringMap(
+  values: Partial<Record<ModelProfile, string>> | undefined,
+  defaults: Record<ModelProfile, string>
+): Record<ModelProfile, string> {
+  const result = { ...defaults }
+  if (!values || typeof values !== 'object') {
+    return result
+  }
+  for (const { id } of MODEL_PROFILES) {
+    const value = values[id]
+    if (typeof value === 'string') {
+      result[id] = value
+    }
+  }
+  return result
+}
+
+export function cloneBaseURLs(
+  values: Partial<Record<ModelProfile, string>> | undefined
+): Record<ModelProfile, string> {
+  return cloneStringMap(values, DEFAULT_BASE_URLS)
+}
+
+export function cloneApiKeys(
+  values: Partial<Record<ModelProfile, string>> | undefined
+): Record<ModelProfile, string> {
+  return cloneStringMap(values, DEFAULT_API_KEYS)
+}
+
 export function cloneContextLengths(
   lengths: Partial<Record<ModelProfile, number>> | undefined
 ): Record<ModelProfile, number> {
@@ -83,6 +130,10 @@ export function cloneContextLengths(
 export function normalizeAISettings(raw: unknown): AISettings {
   const input = (raw ?? {}) as Partial<AISettings> & {
     model?: string
+    /** @deprecated migrated to baseURLs.default */
+    baseURL?: string
+    /** @deprecated migrated to apiKeys.default */
+    apiKey?: string
     /** @deprecated migrated to copilotModelProfile */
     modelProfile?: ModelProfile
   }
@@ -95,11 +146,25 @@ export function normalizeAISettings(raw: unknown): AISettings {
     models.default = legacyModel
   }
 
+  // Migrate the previously-shared scalar baseURL/apiKey into the `default` slot
+  // so existing installs keep working when the fields become per-profile.
+  const legacyBaseURL = typeof input.baseURL === 'string' ? input.baseURL : ''
+  const baseURLs = cloneBaseURLs(input.baseURLs)
+  if (legacyBaseURL && (!input.baseURLs || typeof input.baseURLs.default !== 'string')) {
+    baseURLs.default = legacyBaseURL
+  }
+
+  const legacyApiKey = typeof input.apiKey === 'string' ? input.apiKey : ''
+  const apiKeys = cloneApiKeys(input.apiKeys)
+  if (legacyApiKey && (!input.apiKeys || typeof input.apiKeys.default !== 'string')) {
+    apiKeys.default = legacyApiKey
+  }
+
   const legacyProfile = isModelProfile(input.modelProfile) ? input.modelProfile : undefined
 
   return {
-    baseURL: typeof input.baseURL === 'string' ? input.baseURL : '',
-    apiKey: typeof input.apiKey === 'string' ? input.apiKey : '',
+    baseURLs,
+    apiKeys,
     copilotModelProfile: isModelProfile(input.copilotModelProfile)
       ? input.copilotModelProfile
       : legacyProfile ?? 'default',
@@ -118,6 +183,20 @@ export function resolveModel(settings: AISettings, profile: ModelProfile): strin
 /** Resolve the model name for the Copilot sidebar profile. */
 export function resolveActiveModel(settings: AISettings): string {
   return resolveModel(settings, settings.copilotModelProfile)
+}
+
+/** Resolve the base URL for a profile, falling back to the `default` profile. */
+export function resolveBaseURL(settings: AISettings, profile: ModelProfile): string {
+  const url = settings.baseURLs[profile]?.trim()
+  if (url) return url
+  return settings.baseURLs.default?.trim() || ''
+}
+
+/** Resolve the API key for a profile, falling back to the `default` profile. */
+export function resolveApiKey(settings: AISettings, profile: ModelProfile): string {
+  const key = settings.apiKeys[profile]?.trim()
+  if (key) return key
+  return settings.apiKeys.default?.trim() || ''
 }
 
 /** Resolve the context window (tokens) for a given profile tier. */
