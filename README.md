@@ -5,6 +5,8 @@
 - **Edge Copilot 侧边栏**：可折叠的 AI 聊天面板，能感知当前终端的最近输出与主机上下文。
 - **kubectl-ai**：用自然语言描述意图，AI 生成可执行的 shell 命令，确认后一键注入当前终端执行。
 
+![AI Terminal 应用概览](docs/public/app-overview.png)
+
 ## 技术栈
 
 - Electron + Vite + React + TypeScript（electron-vite）
