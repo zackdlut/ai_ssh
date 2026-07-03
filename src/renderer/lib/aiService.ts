@@ -3,9 +3,14 @@ import { useTabsStore } from '../store/tabsStore'
 import { COPILOT_CONTEXT_MAX_LINES, COPILOT_TERMINAL_MENTION_MAX_LINES, readTerminalOutput } from './terminalRegistry'
 import { getTabObservation } from './terminalObservation'
 import { normalizeAISettings, resolveActiveContextLength } from '../../shared/aiSettings'
-import { buildEffectiveSystemPrompt } from '../../shared/userRules'
+import {
+  buildEffectiveSystemPrompt,
+  buildContextMessage,
+  CHART_INTENT,
+  MERMAID_INTENT,
+  CHART_TURN_NUDGE
+} from '../../shared/prompts'
 import { selectMessagesToCompress, buildChatPayload, type BudgetMessage } from '../../shared/contextBudget'
-import { buildContextMessage } from '../../shared/terminalContext'
 import { translate } from './i18n/translations'
 import { useLocaleStore } from '../store/localeStore'
 import { debugLog } from './debugLog'
@@ -728,54 +733,6 @@ export function initAIService(): void {
 
 /** Matches the @terminal mention used to bind the active terminal's live output. */
 const TERMINAL_MENTION = /@terminal\b/i
-
-/**
- * Charting intent in the user's prompt (paired with @terminal). Matches the CN
- * chart nouns from the copilot prompt plus common EN verbs. Used to force the
- * chart path: with function-calling enabled, small local models overwhelmingly
- * prefer running the collection command as a tool/bash over emitting the
- * ```chart fence, so the two-phase renderer never starts.
- */
-const CHART_INTENT =
-  /折线图|柱状图|饼图|散点图|条形图|曲线图?|图表|实时图|可视化|画(个|成|张|一)?图|chart|plot|graph|visuali[sz]e/i
-
-/**
- * Mermaid diagram intent. Used to decide whether to inject the (long) mermaid
- * authoring rules into the system prompt for a turn; unlike charts it needs no
- * @terminal binding and may be produced on any turn (e.g. after investigating).
- */
-const MERMAID_INTENT =
-  /流程图|时序图|顺序图|架构图|关系图|状态图|类图|甘特图|泳道|拓扑图|mermaid|flowchart|sequence\s*diagram|diagram|\bUML\b/i
-
-/**
- * First-turn-only instruction that forces the chart-block format when the user
- * asked to visualize terminal output. Appended as the trailing user message
- * with tools disabled; empirically this makes even a small local model reliably
- * emit the ```chart fence instead of running the command directly. The explicit
- * template matters — a plain instruction loses to the large tool-oriented
- * system prompt that pushes bare bash blocks.
- */
-const CHART_TURN_NUDGE = `[CHART MODE — overrides the general output rules for THIS reply]
-The user asked to VISUALIZE terminal output. Do NOT just print a bash command as the answer. Your reply MUST contain a fenced block tagged EXACTLY \`chart\` FIRST, then a separate \`bash\` block.
-The \`chart\` block body is ONE short sentence describing: chart type (line/bar/pie/scatter), live or static, the source command, and per series the column header/field index (or inline value) to plot, plus any transform (e.g. CPU usage = 100 - id).
-
-The \`bash\` block MUST be a SINGLE simple command whose plain text output the app parses line by line — the columns it prints MUST match what the chart block references.
-FORBIDDEN in the command: \`watch\`, \`while\`/\`for\` loops, \`awk\`/\`sed\`/\`cut\` post-processing, subshells, and full-screen/interactive tools (\`top\` without \`-b\`, \`htop\`). Emit the raw tool so its native columns stream through unmodified.
-Use these canonical commands unless the user clearly needs another tool:
-- CPU: \`vmstat 1\` (idle = the "id" column; CPU usage = 100 - id).
-- Memory: \`free -m -s 1\` (parse the "Mem:" row; "used" is field index 2, "total" is 1, "available" is 6).
-- Disk latency / IO: \`iostat -x 1\`.
-- Ping latency: \`ping <host>\` (regex time=([0-9.]+)).
-- Disk usage breakdown (static pie/bar): \`du -h --max-depth=1 <path> | sort -rh | head -15\`.
-
-Template — fill in and adapt, keep the fences:
-\`\`\`chart
-<实时/静态><折线/柱状/饼/散点>图：<指标>，数据来自 <命令> 的 <列名/字段>，<变换如 使用率 = 100 - id>，x 轴按时间，保留最近 60 个点。
-\`\`\`
-\`\`\`bash
-<the collection command>
-\`\`\`
-A reply without a \`chart\` block, or whose \`bash\` command uses watch/loops/awk, is WRONG.`
 
 const TAB_TITLE_MAX = 24
 

@@ -7,7 +7,7 @@
  * examples. `COPILOT_SYSTEM_PROMPT` remains exported as the full assembly for
  * the (worst-case) token-budget meter.
  */
-import { AI_TOOLS, READONLY_TOOLS } from './aiTools'
+import { AI_TOOLS, READONLY_TOOLS } from '../aiTools'
 
 // The "Available tools:" line is generated from AI_TOOLS so it never drifts out
 // of sync with the real schema when a tool is added/removed/renamed.

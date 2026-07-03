@@ -1,4 +1,4 @@
-import { COPILOT_SYSTEM_PROMPT } from './copilotPrompts'
+import { COPILOT_SYSTEM_PROMPT } from './copilot'
 
 /** Wrap trimmed user rules for injection as a system message. */
 export function buildUserRulesSystemMessage(rules: string): string | undefined {

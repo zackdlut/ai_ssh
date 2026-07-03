@@ -28,9 +28,11 @@ import {
   TRANSLATE_SYSTEM_PROMPT,
   SUMMARIZE_SYSTEM_PROMPT,
   HISTORY_SUMMARY_SYSTEM_PROMPT,
-  buildContextMessage
-} from './prompt'
-import { buildUserRulesSystemMessage } from '../../shared/userRules'
+  buildContextMessage,
+  buildChartSpecUserMessage,
+  buildHistoryCompressUserMessage,
+  buildUserRulesSystemMessage
+} from '../../shared/prompts'
 import { logDebug } from '../debug/logger'
 import { sanitizeForDebug } from '../../shared/debugSanitize'
 
@@ -495,7 +497,7 @@ export class AIProvider {
     }
     messages.push({
       role: 'user',
-      content: `Produce the ChartSpec JSON for this chart description:\n${req.description}`
+      content: buildChartSpecUserMessage(req.description)
     })
 
     const model = resolveActiveModel(settings)
@@ -757,7 +759,7 @@ export class AIProvider {
     }
     messages.push({
       role: 'user',
-      content: `请压缩以下较早的对话记录：\n\n${convText}`
+      content: buildHistoryCompressUserMessage(convText)
     })
 
     const model = resolveActiveModel(settings)

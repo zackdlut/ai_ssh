@@ -1,5 +1,10 @@
-import type { TerminalContext } from './types'
+import type { TerminalContext } from '../types'
 
+/**
+ * Build the per-turn "current terminal context" system message from the
+ * connected host / user / cwd / OS hint and a snippet of recent output.
+ * Returns null when there is nothing worth injecting.
+ */
 export function buildContextMessage(context?: TerminalContext): string | null {
   if (!context) return null
   const parts: string[] = []
