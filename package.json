@@ -1,6 +1,6 @@
 {
   "name": "ai-augmented-terminal",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AI-Augmented multi-tab SSH terminal (Edge Copilot side panel + kubectl-ai style)",
   "main": "./out/main/index.js",
   "author": "",
@@ -10,6 +10,7 @@
     "clean": "rm -rf out dist release",
     "build": "electron-vite build",
     "build:win": "electron-vite build && electron-builder --win --x64",
+    "build:linux": "electron-vite build && electron-builder --linux --x64",
     "preview": "electron-vite preview",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",

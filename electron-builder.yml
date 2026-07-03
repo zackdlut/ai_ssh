@@ -16,6 +16,13 @@ electronLanguages:
 asarUnpack:
   - "**/node_modules/ssh2/**"
   - "**/node_modules/cpu-features/**"
+linux:
+  target:
+    - target: zip
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-linux-${arch}.${ext}
+  category: Utility
 win:
   signAndEditExecutable: false
   target:

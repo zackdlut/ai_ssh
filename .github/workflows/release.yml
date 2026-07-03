@@ -9,8 +9,18 @@ permissions:
   contents: write
 
 jobs:
-  release-win:
-    runs-on: windows-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            build: build:win
+            artifact: release/*-win-*.zip
+          - os: ubuntu-latest
+            build: build:linux
+            artifact: release/*-linux-*.zip
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -20,9 +30,24 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run build:win
+      - run: npm run ${{ matrix.build }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: release/*.zip
+          files: release/**
           generate_release_notes: true
