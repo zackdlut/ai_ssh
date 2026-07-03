@@ -75,6 +75,14 @@ interface LoopState {
    * fence, so the two-phase chart pipeline never starts. See sendPrompt.
    */
   chartIntent?: boolean
+  /**
+   * The raw user instruction that kicked off this loop. Used by the Verify step
+   * to decide, after a display-only tool turn, whether the request was pure
+   * "show me X" (stop once the card is shown) or a "show then act" intent that
+   * should keep looping. Set once in sendPrompt and never rewritten by injected
+   * nudge/reflection turns, so it always reflects the real intent.
+   */
+  userIntent?: string
 }
 
 interface PendingRequest {
@@ -446,6 +454,41 @@ function stopLoopWithGuardNotice(tabId: string, loop: LoopState, trip: GuardTrip
   ai.setBusy(false)
 }
 
+/**
+ * Operation intent in the user's instruction: verbs that imply the user wants
+ * the copilot to CHANGE state (open/close a tab, create/update a config, move a
+ * connection, run/restart/install something, change settings), not merely SEE
+ * the current state. Used by the Verify step: when a turn ran ONLY display tools
+ * and the request carries one of these verbs, the list was likely a lookup step
+ * before an action, so the loop keeps going; otherwise the card is the answer.
+ */
+const ACTION_INTENT =
+  /\b(open|connect|close|create|add|update|edit|change|modify|set|rename|move|delete|remove|run|exec|execute|restart|start|stop|kill|install|deploy|enable|disable)\b|打开|连接|关闭|新建|创建|添加|更新|修改|改成?|设置|重命名|移动|移除|删除|运行|执行|重启|启动|停止|安装|部署|启用|禁用/i
+
+/**
+ * The Verify step of the ReAct loop. After a turn's tool results are observed,
+ * decide whether the goal is already met (`finalAnswer`, stop) or the loop
+ * should keep going (`continue`). Today this only short-circuits the common
+ * "just show me X" case: a turn that ran ONLY display tools (the list_ / get_
+ * lookups), all succeeded, AND whose originating instruction shows no operation intent is
+ * fully answered by the rich card — so we stop instead of burning an extra
+ * (invisible) epilogue LLM turn. Every other shape keeps looping unchanged.
+ *
+ * Heuristic limitation (intentional): a "show + analyze" ask with no operation
+ * verb (e.g. "list hosts and tell me which is prod") is treated as pure display
+ * and stops; the user can follow up. This trades a rare missed analysis for
+ * never spending a silent turn on the overwhelmingly common lookup case.
+ */
+function evaluateAfterObservation(
+  loop: LoopState,
+  calls: { name: string; status: string }[]
+): 'continue' | 'finalAnswer' {
+  const displayOnly = calls.every((c) => isDisplayTool(c.name) && c.status === 'done')
+  if (!displayOnly) return 'continue'
+  if (loop.userIntent && ACTION_INTENT.test(loop.userIntent)) return 'continue'
+  return 'finalAnswer'
+}
+
 /** When every tool call of a turn is resolved, feed results back and continue. */
 function maybeContinueLoop(tabId: string, messageId: string): void {
   const loop = loops.get(messageId)
@@ -483,6 +526,18 @@ function maybeContinueLoop(tabId: string, messageId: string): void {
     return
   }
 
+  // Verify: decide whether the goal is met. When a turn ran ONLY display tools
+  // (list_*/get_*) that all succeeded and the request had no operation intent,
+  // the rich card IS the final answer — stop here instead of spending an extra
+  // invisible epilogue turn (which, being tool-call-free, would just be dropped
+  // anyway). Every other shape keeps looping.
+  if (evaluateAfterObservation(loop, calls) === 'finalAnswer') {
+    advance(loop, 'finalAnswer', tabId)
+    debugLog({ category: 'action.triggered', tabId, message: 'agent.verify.done', data: {} })
+    useAIStore.getState().setBusy(false)
+    return
+  }
+
   // Just-in-time Reflection: the loop is repeating the same action with the same
   // result but has not YET hit the hard repeat limit. Inject a one-shot reflect
   // prompt so the model changes strategy instead of grinding into the guard.
@@ -496,9 +551,11 @@ function maybeContinueLoop(tabId: string, messageId: string): void {
     })
   }
 
-  // If this turn ran ONLY display tools and they all succeeded, the rich cards
-  // already answer the user. Run the follow-up as an invisible "epilogue" turn
-  // so a text-only restatement of those cards is dropped instead of shown.
+  // Continue the loop. If this turn ran ONLY display tools that all succeeded
+  // (reached here only when the request DID carry operation intent — a "show
+  // then act" flow), run the follow-up as an invisible "epilogue" turn: a
+  // text-only restatement of the cards is dropped, but a real follow-up action
+  // is materialized and executed.
   const displayOnly = calls.every((c) => isDisplayTool(c.name) && c.status === 'done')
   startTurn(loop, displayOnly)
 }
@@ -836,6 +893,8 @@ export async function sendPrompt(text: string): Promise<void> {
     boundTabId: mentionsTerminal ? activeTerminalTab?.id : undefined,
     conversation: history,
     guard: createGuardState(),
+    // Raw instruction, kept for the Verify step's display-only stop decision.
+    userIntent: prompt,
     // Force the chart path only when a terminal is bound to read from.
     chartIntent: mentionsTerminal && !!activeTerminalTab && CHART_INTENT.test(prompt)
   })

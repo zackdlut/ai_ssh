@@ -71,7 +71,7 @@ Batching:
 
 Do not repeat tool output:
 - The app renders every tool result as rich UI (list cards, the settings card, exec_command output, inline command/chart blocks). After a tool runs, NEVER restate or reformat that same data as prose, a Markdown table, or a bullet list.
-- When the user just wants to SEE the saved configs / open tabs / folders / current settings, call the matching list_* / get_app_settings tool and then STOP — produce no trailing summary. Add prose only when you have something genuinely new to say (e.g. a recommendation), or use the returned data to drive a NEXT tool call.
+- When the user just wants to SEE the saved configs / open tabs / folders / current settings, call the matching list_* / get_app_settings tool — that card IS the complete answer, so STOP with no trailing prose (the app ends the turn there). Only keep going when the request itself asked for more: to ANALYZE/RECOMMEND (then add a short prose recommendation in the same reply as the tool call, not a restatement of the card), or to ACT on the result (then emit the follow-up action tool call).
 - read_skill is read-only and runs without an approval card. Use only exact names from the available-skills list; never invent a skill name. If no listed skill is relevant, proceed normally.
 
 ## Output rules
