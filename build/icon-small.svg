@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="AI Terminal">
+  <title>AI Terminal</title>
+  <!--
+    Small-size companion to icon.svg, used for the 16/24/32px ICO frames.
+    The mesh links and drop shadow of the full mark collapse into noise below
+    ~48px, so this variant drops them, thickens the prompt and keeps only three
+    nodes. Colours and composition stay identical to icon.svg.
+  -->
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" />
+      <stop offset="1" stop-color="#f4f5f8" />
+    </linearGradient>
+  </defs>
+
+  <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#paper)" />
+
+  <g transform="translate(-30 47)">
+    <circle cx="630" cy="320" r="56" fill="#0a9d87" />
+    <circle cx="790" cy="250" r="56" fill="#3b6fd9" />
+    <circle cx="800" cy="430" r="56" fill="#7c5dd4" />
+
+    <path d="M280 340 520 512 280 684" fill="none" stroke="#067a68" stroke-width="104" stroke-linecap="round" stroke-linejoin="round" />
+    <rect x="600" y="660" width="180" height="76" rx="38" fill="#0a9d87" />
+  </g>
+</svg>

@@ -10,6 +10,9 @@ files:
   - out/**/*
   - package.json
   - node_modules/**/*
+  # Shipped inside the app so BrowserWindow resolves the same relative path in
+  # dev and when packaged.
+  - build/icon.png
 electronLanguages:
   - en-US
   - zh-CN
@@ -17,6 +20,7 @@ asarUnpack:
   - "**/node_modules/ssh2/**"
   - "**/node_modules/cpu-features/**"
 linux:
+  icon: build/icon.png
   target:
     - target: zip
       arch:
@@ -24,6 +28,7 @@ linux:
   artifactName: ${productName}-${version}-linux-${arch}.${ext}
   category: Utility
 win:
+  icon: build/icon.ico
   signAndEditExecutable: false
   target:
     - target: zip
