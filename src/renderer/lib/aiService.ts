@@ -6,20 +6,35 @@ import { normalizeAISettings, resolveActiveContextLength } from '../../shared/ai
 import {
   buildEffectiveSystemPrompt,
   buildContextMessage,
+  buildCopilotSystemPrompt,
+  buildUserRulesSystemMessage,
   CHART_INTENT,
   MERMAID_INTENT,
   CHART_TURN_NUDGE
 } from '../../shared/prompts'
-import { selectMessagesToCompress, buildChatPayload, type BudgetMessage } from '../../shared/contextBudget'
+import {
+  buildChatPayload,
+  estimateTokens,
+  selectMessagesToCompress,
+  type BudgetMessage
+} from '../../shared/contextBudget'
 import { translate } from './i18n/translations'
 import { useLocaleStore } from '../store/localeStore'
 import { debugLog } from './debugLog'
-import { AI_TOOLS, isDisplayTool, isReadonlyTool, requiresToolApproval } from '../../shared/aiTools'
+import {
+  buildAITools,
+  isDisplayTool,
+  isReadonlyTool,
+  toolTierForProfile,
+  type ToolTier
+} from '../../shared/aiTools'
+import { decideToolCall, DEFAULT_AUTONOMY_MODE } from '../../shared/toolPolicy'
 import {
   buildSkillsContextMessage,
   buildToolContextMessage,
   executeToolCall,
-  parseToolArgs
+  parseToolArgs,
+  type ToolResult
 } from './aiTools'
 import {
   getPendingToolCalls,
@@ -33,16 +48,32 @@ import {
   createGuardState,
   MAX_STEPS,
   noProgressStreak,
+  reconcileTokens,
   recordTurn,
   turnSignature,
   type GuardState,
   type GuardTrip
 } from './loopGuard'
-import { buildTaskMemoryMessage, recordTaskStep } from './taskMemory'
+import { buildTaskMemoryMessage } from './taskMemory'
+import { compactConversation } from './conversationCompact'
+import {
+  buildHistoryFromMessages,
+  digestToolResult,
+  messageBudgetText,
+  toolCallContent
+} from './toolTrace'
+import { buildPlanContextMessage } from './planTool'
+import { setToolResultCharBudget } from './toolBudget'
 import { transition, type AgentEvent, type AgentPhase } from './agentPhase'
 import type { ChatMessage } from '../store/aiStore'
 import { useUserRulesStore } from '../store/userRulesStore'
-import type { ChatMessageDTO, TerminalContext, ToolCallView } from '../../shared/types'
+import type {
+  AutonomyMode,
+  ChatMessageDTO,
+  ModelProfile,
+  TerminalContext,
+  ToolCallView
+} from '../../shared/types'
 
 /**
  * State for an in-progress function-calling agent loop. The `conversation`
@@ -88,6 +119,91 @@ interface LoopState {
    * nudge/reflection turns, so it always reflects the real intent.
    */
   userIntent?: string
+  /** Model context window (tokens), used to bound the conversation in-loop. */
+  contextLimit?: number
+  /** Tool tier the active profile exposes; its schemas are part of every payload. */
+  toolTier?: ToolTier
+  /**
+   * Tokens the conversation may occupy, recomputed each turn from the window
+   * minus everything else in the payload. Cached here so tool results can be
+   * capped against the same number when they come back.
+   */
+  conversationBudget?: number
+}
+
+/**
+ * Tokens held back for the model's own reply. A context window covers prompt
+ * plus generation, so a prompt sized to fill it leaves nothing to answer with.
+ */
+const OUTPUT_RESERVE_TOKENS = 2048
+/** Floor so even a badly configured window leaves room for a step or two. */
+const MIN_CONVERSATION_TOKENS = 1024
+
+/**
+ * Token cost of the tool schemas, memoized per tier. Constant per tier but far
+ * from free — the full tier's 21 schemas measure ~4.5k real tokens, 14% of a
+ * 32k window, and none of it was previously counted against any budget.
+ */
+const toolSchemaTokens = new Map<ToolTier, number>()
+
+function toolTokens(tier: ToolTier): number {
+  const cached = toolSchemaTokens.get(tier)
+  if (cached !== undefined) return cached
+  const tokens = estimateTokens(JSON.stringify(buildAITools(tier)))
+  toolSchemaTokens.set(tier, tokens)
+  return tokens
+}
+
+/**
+ * Tokens left for the running conversation once everything else in the payload
+ * is paid for: system prompt, user rules, terminal context, tool schemas, the
+ * skills catalog, and the snapshot/plan/ledger tail.
+ *
+ * This used to be a flat 50% of the window. That guess ignored the tool schemas
+ * entirely and, paired with a token estimate tuned for prose, let a log-heavy
+ * turn exceed the window — at which point the server truncated the prompt from
+ * the front and rejected the request for having no user message left in it.
+ */
+function conversationBudget(
+  loop: LoopState,
+  tier: ToolTier,
+  promptSections: Record<string, boolean>,
+  surrounding: ChatMessageDTO[]
+): number {
+  if (!loop.contextLimit) return 0
+  const systemPrompt = buildCopilotSystemPrompt({
+    ...promptSections,
+    toolNames: buildAITools(tier).map((t) => t.function.name)
+  })
+  const fixed = [
+    systemPrompt,
+    buildUserRulesSystemMessage(useUserRulesStore.getState().rules) ?? '',
+    buildContextMessage(loop.context) ?? '',
+    ...surrounding.map((m) => m.content)
+  ].reduce((sum, text) => sum + estimateTokens(text), toolTokens(tier))
+
+  return Math.max(MIN_CONVERSATION_TOKENS, loop.contextLimit - fixed - OUTPUT_RESERVE_TOKENS)
+}
+
+/**
+ * Character cap for one tool result. Derived from the conversation budget so a
+ * single reply can never crowd out the instruction it is answering, and
+ * converted at the dense-content ratio because tool output is command output.
+ */
+const RESULT_BUDGET_RATIO = 0.3
+const DENSE_CHARS_PER_TOKEN = 2
+const RESULT_CAP_FLOOR_CHARS = 4000
+
+function perResultCap(budgetTokens: number): number {
+  if (budgetTokens <= 0) return RESULT_CAP_FLOOR_CHARS
+  return Math.max(
+    RESULT_CAP_FLOOR_CHARS,
+    Math.floor(budgetTokens * RESULT_BUDGET_RATIO * DENSE_CHARS_PER_TOKEN)
+  )
+}
+
+function capToolResult(text: string, cap: number): string {
+  return `${digestToolResult(text, cap)}\n[result truncated to fit the context window — narrow it with grep, a smaller read_file limit, or head/tail]`
 }
 
 interface PendingRequest {
@@ -108,7 +224,53 @@ interface PendingRequest {
 const pending = new Map<string, PendingRequest>()
 /** Assistant messages whose tool calls are awaiting execution/approval. */
 const loops = new Map<string, LoopState>()
+/** Prompts typed while a tab was busy, replayed once its loop finishes. */
+const queuedPrompts = new Map<string, string[]>()
 let initialized = false
+
+/**
+ * Autonomy level read from settings. Cached because the approval decision runs
+ * synchronously inside the streaming `onDone` handler, which cannot await.
+ */
+let autonomyMode: AutonomyMode = DEFAULT_AUTONOMY_MODE
+
+/** Tools the user chose to always allow, per chat tab, for this session only. */
+const sessionAllowlists = new Map<string, Set<string>>()
+
+export function refreshAutonomyMode(mode: AutonomyMode): void {
+  autonomyMode = mode
+}
+
+/**
+ * Grant a tool blanket approval for the rest of this chat. Scoped to the chat
+ * and to this app run: a grant made while fixing one service should not still
+ * be in force next week on an unrelated task.
+ */
+export function allowToolForSession(chatTabId: string, tool: string): void {
+  const set = sessionAllowlists.get(chatTabId) ?? new Set<string>()
+  set.add(tool)
+  sessionAllowlists.set(chatTabId, set)
+  debugLog({
+    category: 'user.action',
+    tabId: chatTabId,
+    message: 'tool.approval.allowSession',
+    data: { tool }
+  })
+}
+
+export function isToolAllowedForSession(chatTabId: string, tool: string): boolean {
+  return sessionAllowlists.get(chatTabId)?.has(tool) ?? false
+}
+
+/** Approval decision for one call, given the current mode and session grants. */
+function decideCall(chatTabId: string, name: string, argsJson: string): ReturnType<typeof decideToolCall> {
+  return decideToolCall({
+    tool: name,
+    argsJson,
+    mode: autonomyMode,
+    sessionAllowlist: sessionAllowlists.get(chatTabId)
+  })
+}
 
 function findMessage(tabId: string, messageId: string): ChatMessage | undefined {
   const tab = useAIStore.getState().chatTabs.find((t) => t.id === tabId)
@@ -159,17 +321,51 @@ function startTurn(loop: LoopState, epilogue = false): void {
     mermaid: MERMAID_INTENT.test(loop.userIntent ?? ''),
     concise: !firstTurn
   }
-  const snapshot = buildToolContextMessage()
   const skillsCatalog = buildSkillsContextMessage()
-  const taskMemory = buildTaskMemoryMessage(loop.tabId)
+  // Prefix layer: near-constant across the task, so it stays at the front where
+  // provider prefix caches can reuse it.
   const prefix: ChatMessageDTO[] = []
   if (skillsCatalog) prefix.push({ role: 'system', content: skillsCatalog })
-  if (snapshot) prefix.push({ role: 'system', content: snapshot })
-  // Cross-turn ledger of actions already performed this session, so follow-up
-  // user turns retain memory of prior tool executions (the conversation itself
-  // is rebuilt as role+content only across user turns).
-  if (taskMemory) prefix.push({ role: 'system', content: taskMemory })
-  const messages: ChatMessageDTO[] = [...prefix, ...loop.conversation]
+
+  // Suffix layer: everything that changes every turn (live app snapshot, the
+  // task plan, the ledger of completed actions). Keeping it AFTER the
+  // conversation both preserves the cacheable prefix and gives these facts
+  // recency over the long system prompt.
+  const suffix: ChatMessageDTO[] = []
+  const snapshot = buildToolContextMessage()
+  const plan = buildPlanContextMessage(loop.tabId)
+  const taskMemory = buildTaskMemoryMessage(loop.tabId)
+  if (snapshot) suffix.push({ role: 'system', content: snapshot })
+  if (taskMemory) suffix.push({ role: 'system', content: taskMemory })
+  if (plan) suffix.push({ role: 'system', content: plan })
+
+  // Bound the running conversation with what is actually left over, which is
+  // why the surrounding layers are assembled first.
+  if (loop.contextLimit) {
+    const budget = conversationBudget(loop, loop.toolTier ?? 'full', promptSections, [
+      ...prefix,
+      ...suffix
+    ])
+    loop.conversationBudget = budget
+    setToolResultCharBudget(perResultCap(budget))
+    const compacted = compactConversation(loop.conversation, budget)
+    if (compacted.trimmed > 0 || compacted.dropped > 0 || compacted.condensed > 0) {
+      loop.conversation = compacted.messages
+      debugLog({
+        category: 'action.triggered',
+        tabId: loop.tabId,
+        message: 'agent.compact',
+        data: {
+          trimmed: compacted.trimmed,
+          dropped: compacted.dropped,
+          condensed: compacted.condensed,
+          budget
+        }
+      })
+    }
+  }
+
+  const messages: ChatMessageDTO[] = [...prefix, ...loop.conversation, ...suffix]
   // Append the chart nudge as the LAST (trailing user) message: recency beats
   // the large tool-oriented system prompt, which otherwise wins and the model
   // answers with a bare bash block. It is NOT written back to loop.conversation,
@@ -218,8 +414,36 @@ function startTurn(loop: LoopState, epilogue = false): void {
   })
 }
 
+/**
+ * Cancellers for commands currently running on behalf of a chat tab. Stop needs
+ * these because aborting the LLM stream leaves the remote command running.
+ */
+const runningCommandAborts = new Map<string, Set<() => void>>()
+
+/** Pause before the single automatic retry of a transiently failed call. */
+const RETRY_BACKOFF_MS = 1500
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function registerCommandAbort(tabId: string, abort: () => void): () => void {
+  const set = runningCommandAborts.get(tabId) ?? new Set<() => void>()
+  set.add(abort)
+  runningCommandAborts.set(tabId, set)
+  return () => {
+    set.delete(abort)
+    if (set.size === 0) runningCommandAborts.delete(tabId)
+  }
+}
+
 /** Execute a single tool call and record its outcome, then advance the loop. */
-async function runToolCall(tabId: string, messageId: string, callId: string): Promise<void> {
+async function runToolCall(
+  tabId: string,
+  messageId: string,
+  callId: string,
+  opts?: { deferContinue?: boolean }
+): Promise<void> {
   const ai = useAIStore.getState()
   const call = findMessage(tabId, messageId)?.toolCalls?.find((c) => c.id === callId)
   if (!call) return
@@ -227,40 +451,157 @@ async function runToolCall(tabId: string, messageId: string, callId: string): Pr
     const loop = loops.get(messageId)
     if (loop) loop.executedActionTool = true
   }
+
+  // Arguments that do not parse are reported as such. Silently substituting an
+  // empty object made the model chase a phantom "missing tab_id" instead of the
+  // real problem, which was its own malformed JSON.
+  const parsed = parseToolArgs(call.args)
+  if (!parsed.ok) {
+    ai.updateToolCall(tabId, messageId, callId, {
+      status: 'error',
+      error: parsed.error,
+      digest: digestToolResult(`Error: ${parsed.error}`)
+    })
+    if (!opts?.deferContinue) maybeContinueLoop(tabId, messageId)
+    return
+  }
+
   ai.updateToolCall(tabId, messageId, callId, { status: 'running' })
   debugLog({
     category: 'action.triggered',
     tabId,
     message: `tool.${call.name}`,
-    data: { args: parseToolArgs(call.args) }
+    data: { args: parsed.args }
   })
+  let unregisterAbort: (() => void) | undefined
   try {
-    const res = await executeToolCall(call.name, parseToolArgs(call.args), {
-      onCaptureProgress:
-        call.name === 'exec_command'
-          ? (elapsedMs) => {
-              ai.updateToolCall(tabId, messageId, callId, { progressMs: elapsedMs })
-            }
-          : undefined
-    })
+    const invoke = (): Promise<ToolResult> =>
+      executeToolCall(call.name, parsed.args, {
+        chatTabId: tabId,
+        onCaptureProgress:
+          call.name === 'exec_command' || call.name === 'run_in_terminal'
+            ? (elapsedMs) => {
+                ai.updateToolCall(tabId, messageId, callId, { progressMs: elapsedMs })
+              }
+            : undefined,
+        onAbortHandle: (abort) => {
+          unregisterAbort = registerCommandAbort(tabId, abort)
+        }
+      })
+
+    let res = await invoke()
+    let retryNote = ''
+
+    // Transient failures (a timeout, a lock still held, a service still coming
+    // up) are far cheaper to retry here than to round-trip through the model,
+    // which would spend a full turn deciding to do exactly this. One retry
+    // only — a second failure is a real failure the model should reason about.
+    if (res.retryable) {
+      debugLog({ category: 'action.triggered', tabId, message: `tool.${call.name}.retry`, data: {} })
+      await delay(RETRY_BACKOFF_MS)
+      const retried = await invoke()
+      retryNote = `\nnote: the first attempt failed transiently; this is an automatic retry after ${RETRY_BACKOFF_MS}ms.`
+      res = retried
+    }
+
     debugLog({
       category: 'action.triggered',
       tabId,
       message: `tool.${call.name}.result`,
       data: { ok: res.ok, result: res.ok ? res.result : res.error }
     })
+    // The digest is captured now, while the full result is in hand: it is what
+    // this call contributes to the conversation on every later user turn, and
+    // it must survive a restart even though the raw result may be trimmed.
     if (res.ok) {
-      ai.updateToolCall(tabId, messageId, callId, { status: 'done', result: res.result })
+      const result = `${res.result ?? 'Done.'}${retryNote}`
+      ai.updateToolCall(tabId, messageId, callId, {
+        status: 'done',
+        result,
+        digest: digestToolResult(result)
+      })
     } else {
-      ai.updateToolCall(tabId, messageId, callId, { status: 'error', error: res.error })
+      const error = `${res.error ?? 'unknown error'}${retryNote}`
+      ai.updateToolCall(tabId, messageId, callId, {
+        status: 'error',
+        error,
+        digest: digestToolResult(`Error: ${error}`)
+      })
     }
   } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
     ai.updateToolCall(tabId, messageId, callId, {
       status: 'error',
-      error: e instanceof Error ? e.message : String(e)
+      error: message,
+      digest: digestToolResult(`Error: ${message}`)
     })
+  } finally {
+    unregisterAbort?.()
+  }
+  if (!opts?.deferContinue) maybeContinueLoop(tabId, messageId)
+}
+
+/**
+ * Run a turn's auto-approved calls. Read-only calls go out together because
+ * they cannot interfere with each other; anything that mutates runs one at a
+ * time so two edits to the same file cannot interleave. The loop is advanced
+ * once, after the whole batch settles, instead of once per call.
+ */
+async function runAutoToolCalls(tabId: string, messageId: string, callIds: string[]): Promise<void> {
+  const calls = findMessage(tabId, messageId)?.toolCalls ?? []
+  const byId = new Map(calls.map((c) => [c.id, c]))
+  const readonly = callIds.filter((id) => isReadonlyTool(byId.get(id)?.name ?? ''))
+  const mutating = callIds.filter((id) => !readonly.includes(id))
+
+  await Promise.all(readonly.map((id) => runToolCall(tabId, messageId, id, { deferContinue: true })))
+  for (const id of mutating) {
+    await runToolCall(tabId, messageId, id, { deferContinue: true })
   }
   maybeContinueLoop(tabId, messageId)
+}
+
+/**
+ * Stop everything this chat tab has in flight: the LLM stream, any remote
+ * command it started, and the ReAct loop itself. Cancelling only the stream
+ * (the old behaviour) left the command running on the host and the loop ready
+ * to resume the moment that command returned.
+ */
+export function abortLoop(tabId: string): void {
+  const ai = useAIStore.getState()
+  queuedPrompts.delete(tabId)
+
+  for (const [requestId, entry] of pending) {
+    if (entry.tabId !== tabId) continue
+    window.api.ai.cancel(requestId)
+    pending.delete(requestId)
+    loops.delete(entry.messageId)
+  }
+
+  for (const abort of runningCommandAborts.get(tabId) ?? []) {
+    try {
+      abort()
+    } catch {
+      // A canceller for an already-finished command is not worth reporting.
+    }
+  }
+  runningCommandAborts.delete(tabId)
+
+  const tab = ai.chatTabs.find((t) => t.id === tabId)
+  for (const msg of tab?.messages ?? []) {
+    if (msg.streaming) ai.finishMessage(tabId, msg.id)
+    for (const call of msg.toolCalls ?? []) {
+      if (call.status !== 'pending' && call.status !== 'running') continue
+      ai.updateToolCall(tabId, msg.id, call.id, {
+        status: 'rejected',
+        result: 'Cancelled by the user.',
+        digest: 'Cancelled by the user.'
+      })
+    }
+    loops.delete(msg.id)
+  }
+
+  debugLog({ category: 'user.action', tabId, message: 'agent.abort', data: {} })
+  ai.setBusy(false)
 }
 
 /** Approve a pending (action) tool call from the UI. */
@@ -283,7 +624,8 @@ export function rejectToolCall(tabId: string, messageId: string, callId: string)
   })
   useAIStore.getState().updateToolCall(tabId, messageId, callId, {
     status: 'rejected',
-    result: 'User rejected this action.'
+    result: 'User rejected this action.',
+    digest: 'User rejected this action.'
   })
   maybeContinueLoop(tabId, messageId)
 }
@@ -358,7 +700,8 @@ export function cancelPendingApprovals(tabId: string): void {
     loops.delete(ref.messageId)
     ai.updateToolCall(tabId, ref.messageId, ref.callId, {
       status: 'rejected',
-      result: 'Superseded by a new instruction.'
+      result: 'Superseded by a new instruction.',
+      digest: 'Superseded by a new instruction.'
     })
   }
   debugLog({
@@ -370,79 +713,6 @@ export function cancelPendingApprovals(tabId: string): void {
   // The paused turn's request already completed; clear busy so the new prompt
   // can start a fresh turn.
   ai.setBusy(false)
-}
-
-/** Parse the structured result string produced by the exec_command tool. */
-function parseExecResult(result: string): {
-  exitCode: number | null
-  cwd?: string
-  outputTail: string
-} {
-  const ecMatch = /^exit_code:\s*(.+)$/m.exec(result)
-  const cwdMatch = /^cwd:\s*(.+)$/m.exec(result)
-  const outIdx = result.indexOf('output:\n')
-  const output = outIdx >= 0 ? result.slice(outIdx + 'output:\n'.length) : result
-  let exitCode: number | null = null
-  if (ecMatch) {
-    const n = Number.parseInt(ecMatch[1].trim(), 10)
-    exitCode = Number.isFinite(n) ? n : null
-  }
-  return {
-    exitCode,
-    cwd: cwdMatch ? cwdMatch[1].trim() : undefined,
-    outputTail: output.replace(/\s+/g, ' ').trim().slice(0, 200)
-  }
-}
-
-/**
- * Record a completed tool call into the cross-turn Task Memory ledger. Read-only
- * lookups are skipped (they carry no lasting state); exec_command steps store
- * the command + exit code + a short output tail; other action tools store a
- * brief outcome line.
- */
-function recordCallInTaskMemory(chatTabId: string, call: ToolCallView, content: string): void {
-  if (isReadonlyTool(call.name)) return
-  const status: 'ok' | 'error' | 'rejected' =
-    call.status === 'rejected' ? 'rejected' : call.status === 'error' ? 'error' : 'ok'
-
-  if (call.name === 'exec_command') {
-    let command = '(command)'
-    try {
-      const args = JSON.parse(call.args) as { command?: unknown }
-      if (typeof args.command === 'string') command = args.command
-    } catch {
-      /* keep placeholder */
-    }
-    if (status === 'ok') {
-      const parsed = parseExecResult(content)
-      recordTaskStep(chatTabId, {
-        kind: 'exec',
-        label: command,
-        cwd: parsed.cwd,
-        exitCode: parsed.exitCode,
-        status,
-        summary: parsed.outputTail || undefined,
-        at: Date.now()
-      })
-    } else {
-      recordTaskStep(chatTabId, {
-        kind: 'exec',
-        label: command,
-        status,
-        summary: content,
-        at: Date.now()
-      })
-    }
-    return
-  }
-
-  recordTaskStep(chatTabId, {
-    kind: 'action',
-    label: call.name,
-    status,
-    summary: status === 'ok' ? undefined : content,
-    at: Date.now()
-  })
 }
 
 /**
@@ -520,16 +790,17 @@ function maybeContinueLoop(tabId: string, messageId: string): void {
 
   loops.delete(messageId)
   const signatureCalls: { name: string; args: string; result: string }[] = []
+  const resultCap = perResultCap(loop.conversationBudget ?? 0)
   for (const c of calls) {
-    const content =
-      c.status === 'rejected'
-        ? 'User rejected this action.'
-        : c.error
-          ? `Error: ${c.error}`
-          : (c.result ?? 'Done.')
+    const raw = toolCallContent(c)
+    // Bound each result as it enters the conversation. Compaction runs before
+    // the next turn and would catch this too, but capping at the door keeps the
+    // model from ever seeing a reply so large it crowds out the instruction it
+    // was answering — and it applies to any tool, including an exec_command
+    // that happened to `cat` a log.
+    const content = raw.length > resultCap ? capToolResult(raw, resultCap) : raw
     loop.conversation.push({ role: 'tool', tool_call_id: c.id, content })
     signatureCalls.push({ name: c.name, args: c.args, result: content })
-    recordCallInTaskMemory(loop.tabId, c, content)
   }
 
   // Tool results are now captured: observe -> verify.
@@ -589,6 +860,23 @@ export function initAIService(): void {
   if (initialized) return
   initialized = true
 
+  // Replay whatever the user typed while the previous task was still running.
+  // Watching the busy flag covers every way a loop can end (final answer, guard
+  // trip, error, abort) without threading a callback through all of them.
+  useAIStore.subscribe((state, prev) => {
+    if (!prev.busy || state.busy) return
+    for (const [tabId, queue] of queuedPrompts) {
+      if (queue.length === 0) {
+        queuedPrompts.delete(tabId)
+        continue
+      }
+      const next = queue.shift() as string
+      if (queue.length === 0) queuedPrompts.delete(tabId)
+      void sendPrompt(next, tabId)
+      return
+    }
+  })
+
   window.api.ai.onChunk(({ requestId, delta }) => {
     const entry = pending.get(requestId)
     // Epilogue turns have no visible message yet; their text is dropped unless
@@ -603,7 +891,7 @@ export function initAIService(): void {
       useAIStore.getState().appendReasoning(entry.tabId, entry.messageId, delta)
     }
   })
-  window.api.ai.onDone(({ requestId, content, toolCalls }) => {
+  window.api.ai.onDone(({ requestId, content, toolCalls, usage }) => {
     const entry = pending.get(requestId)
     pending.delete(requestId)
     if (!entry) {
@@ -612,6 +900,10 @@ export function initAIService(): void {
     }
     const { tabId, messageId, loop, epilogue } = entry
     const ai = useAIStore.getState()
+
+    // Swap this turn's estimate for the provider's real count before the guard
+    // checks the task budget below.
+    if (usage && loop.guard) reconcileTokens(loop.guard, usage.total)
 
     if (!toolCalls || toolCalls.length === 0) {
       // An epilogue turn with no tool call is just a redundant restatement of
@@ -692,20 +984,32 @@ export function initAIService(): void {
     })
     advance(loop, 'toolCalls', tabId)
     loop.conversation.push({ role: 'assistant', content, tool_calls: toolCalls })
-    const views: ToolCallView[] = toolCalls.map((tc) => ({
+    const decisions = toolCalls.map((tc) => decideCall(tabId, tc.name, tc.arguments))
+    const views: ToolCallView[] = toolCalls.map((tc, i) => ({
       id: tc.id,
       name: tc.name,
       args: tc.arguments,
-      status: requiresToolApproval(tc.name, tc.arguments) ? 'pending' : 'running'
+      status: decisions[i] === 'auto' ? 'running' : 'pending'
     }))
     ai.setToolCalls(tabId, messageId, views)
     loops.set(messageId, loop)
 
     if (views.some((v) => v.status === 'pending')) advance(loop, 'needApproval', tabId)
 
-    for (const tc of toolCalls) {
-      if (!requiresToolApproval(tc.name, tc.arguments)) void runToolCall(tabId, messageId, tc.id)
-    }
+    // A 'deny' decision is refused outright rather than offered for approval:
+    // conservative mode exists precisely so a destructive command is never one
+    // stray click away.
+    toolCalls.forEach((tc, i) => {
+      if (decisions[i] !== 'deny') return
+      ai.updateToolCall(tabId, messageId, tc.id, {
+        status: 'rejected',
+        result: 'Blocked by the current autonomy policy: this command is destructive.',
+        digest: 'Blocked by the current autonomy policy: this command is destructive.'
+      })
+    })
+    const autoIds = toolCalls.filter((_, i) => decisions[i] === 'auto').map((tc) => tc.id)
+    if (autoIds.length > 0) void runAutoToolCalls(tabId, messageId, autoIds)
+    else maybeContinueLoop(tabId, messageId)
   })
   window.api.ai.onError(({ requestId, error }) => {
     const entry = pending.get(requestId)
@@ -767,11 +1071,11 @@ function buildTerminalContext(
  * Send a user prompt to the AI, attaching the active terminal's recent output
  * and host info as context. Ignored while another request is in flight.
  */
-export async function sendPrompt(text: string): Promise<void> {
+export async function sendPrompt(text: string, targetTabId?: string): Promise<void> {
   const prompt = text.trim()
   if (!prompt) return
 
-  const tabId = useAIStore.getState().activeChatTabId
+  const tabId = targetTabId ?? useAIStore.getState().activeChatTabId
   if (!tabId) return
 
   // A new instruction while tool actions await approval supersedes them: drop
@@ -779,7 +1083,16 @@ export async function sendPrompt(text: string): Promise<void> {
   if (hasPendingToolCalls(tabId)) cancelPendingApprovals(tabId)
 
   const ai = useAIStore.getState()
-  if (ai.busy) return
+
+  // A prompt sent mid-task is queued and replayed when the loop finishes.
+  // Dropping it (the old behaviour) looked identical to a broken Send button.
+  if (ai.busy) {
+    const queue = queuedPrompts.get(tabId) ?? []
+    queue.push(prompt)
+    queuedPrompts.set(tabId, queue)
+    ai.setNotice(tNotice('copilot.queued', { count: queue.length }))
+    return
+  }
 
   let tab = ai.chatTabs.find((t) => t.id === tabId)
   if (!tab) return
@@ -792,6 +1105,7 @@ export async function sendPrompt(text: string): Promise<void> {
 
   const settings = normalizeAISettings(await window.api.config.getAISettings())
   const limit = resolveActiveContextLength(settings)
+  refreshAutonomyMode(settings.copilotAutonomy)
   const contextMessage = buildContextMessage(context)
   const userRules = useUserRulesStore.getState().rules
   const budgetParams = {
@@ -801,9 +1115,12 @@ export async function sendPrompt(text: string): Promise<void> {
     limit
   }
 
+  // Size each message by everything it will actually replay — prose plus its
+  // tool arguments and result digests. Kept index-aligned with `tab.messages`
+  // so the compression decision below can be applied back by position.
   const existingDto: BudgetMessage[] = tab.messages.map((m) => ({
     role: m.role,
-    content: m.content
+    content: messageBudgetText(m)
   }))
 
   const { toCompress } = selectMessagesToCompress(existingDto, budgetParams)
@@ -839,10 +1156,10 @@ export async function sendPrompt(text: string): Promise<void> {
     }
   }
 
-  const history: ChatMessageDTO[] = tab.messages.map((m) => ({
-    role: m.role,
-    content: m.content
-  }))
+  // Replay the full chain (assistant tool_calls + their paired tool results),
+  // not just the visible prose: without it the model cannot see any command it
+  // ran, so every follow-up turn starts from amnesia.
+  const history = buildHistoryFromMessages(tab.messages)
   history.push({ role: 'user', content: prompt })
 
   const userId = crypto.randomUUID()
@@ -873,6 +1190,8 @@ export async function sendPrompt(text: string): Promise<void> {
     boundSessionId: mentionsTerminal ? activeTerminalTab?.sessionId : undefined,
     boundTabId: mentionsTerminal ? activeTerminalTab?.id : undefined,
     conversation: history,
+    contextLimit: limit,
+    toolTier: toolTierForProfile(settings.copilotModelProfile),
     guard: createGuardState(),
     // Raw instruction, kept for the Verify step's display-only stop decision.
     userIntent: prompt,
@@ -902,8 +1221,15 @@ export function askAboutSelection(selection: string): void {
   void sendPrompt(prompt)
 }
 
-/** Estimated token cost of the tool/function schemas sent every turn. */
-const TOOLS_DEFINITION_TEXT = JSON.stringify(AI_TOOLS)
+/**
+ * Estimated token cost of the tool/function schemas sent every turn. Which
+ * schemas are sent depends on the model tier, so the meter is charged for the
+ * tier actually in use rather than always for the full set.
+ */
+const TOOLS_DEFINITION_TEXT: Record<ToolTier, string> = {
+  core: JSON.stringify(buildAITools('core')),
+  full: JSON.stringify(buildAITools('full'))
+}
 
 /** Build context budget for the active chat tab (for UI meter). */
 export function computeActiveTabBudget(params: {
@@ -912,6 +1238,8 @@ export function computeActiveTabBudget(params: {
   context?: TerminalContext
   limit: number
   userRules?: string
+  /** Active copilot model profile; decides how large a tool schema is sent. */
+  profile?: ModelProfile
 }) {
   // Account for EVERY per-turn injection, not just the terminal context: the app
   // snapshot, skills catalog, task-memory ledger and the tool schemas are all
@@ -922,7 +1250,8 @@ export function computeActiveTabBudget(params: {
     buildToolContextMessage(),
     buildSkillsContextMessage(),
     activeChatTabId ? buildTaskMemoryMessage(activeChatTabId) : undefined,
-    TOOLS_DEFINITION_TEXT
+    buildPlanContextMessage(activeChatTabId ?? undefined),
+    TOOLS_DEFINITION_TEXT[toolTierForProfile(params.profile)]
   ]
     .filter(Boolean)
     .join('\n\n')

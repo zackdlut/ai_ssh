@@ -1,4 +1,5 @@
-import type { AISettings, ModelProfile } from './types'
+import type { AISettings, AutonomyMode, ModelProfile } from './types'
+import { DEFAULT_AUTONOMY_MODE } from './toolPolicy'
 
 export const MODEL_PROFILES: { id: ModelProfile; label: string }[] = [
   { id: 'default', label: 'Default' },
@@ -58,6 +59,10 @@ function isModelProfile(value: unknown): value is ModelProfile {
     value === 'high' ||
     value === 'custom'
   )
+}
+
+function isAutonomyMode(value: unknown): value is AutonomyMode {
+  return value === 'conservative' || value === 'balanced' || value === 'autonomous'
 }
 
 function clampContextLength(value: number, fallback: number): number {
@@ -173,7 +178,10 @@ export function normalizeAISettings(raw: unknown): AISettings {
     nlModelProfile: isModelProfile(input.nlModelProfile) ? input.nlModelProfile : 'fast',
     models,
     contextLengths: cloneContextLengths(input.contextLengths),
-    httpProxy
+    httpProxy,
+    copilotAutonomy: isAutonomyMode(input.copilotAutonomy)
+      ? input.copilotAutonomy
+      : DEFAULT_AUTONOMY_MODE
   }
 }
 
@@ -212,12 +220,96 @@ export function resolveActiveContextLength(settings: AISettings): number {
   return resolveContextLength(settings, settings.copilotModelProfile)
 }
 
-/** Resolve HTTP(S) proxy for AI API requests; falls back to env when unset. */
-export function resolveHttpProxy(settings: AISettings): string {
+function envVar(name: string): string {
+  if (typeof process === 'undefined' || !process.env) return ''
+  return (process.env[name] || '').trim()
+}
+
+function ipv4ToInt(host: string): number | null {
+  const parts = host.split('.')
+  if (parts.length !== 4) return null
+  let value = 0
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null
+    const octet = Number(part)
+    if (octet > 255) return null
+    value = value * 256 + octet
+  }
+  return value
+}
+
+function matchesNoProxyEntry(host: string, port: string, entry: string): boolean {
+  if (entry === '*') return true
+
+  let pattern = entry
+  // An entry may pin a port (`example.com:8080`); such an entry only applies to
+  // that port. Bare IPv6 literals contain colons too, so only split when the
+  // tail looks like a port number.
+  const portSplit = pattern.lastIndexOf(':')
+  if (portSplit > 0 && /^\d+$/.test(pattern.slice(portSplit + 1))) {
+    const wantPort = pattern.slice(portSplit + 1)
+    if (port && port !== wantPort) return false
+    pattern = pattern.slice(0, portSplit)
+  }
+
+  const slash = pattern.indexOf('/')
+  if (slash > 0) {
+    const prefixLen = Number(pattern.slice(slash + 1))
+    const network = ipv4ToInt(pattern.slice(0, slash))
+    const target = ipv4ToInt(host)
+    if (network === null || target === null) return false
+    if (!Number.isInteger(prefixLen) || prefixLen < 0 || prefixLen > 32) return false
+    if (prefixLen === 0) return true
+    const mask = (0xffffffff << (32 - prefixLen)) >>> 0
+    return ((network & mask) >>> 0) === ((target & mask) >>> 0)
+  }
+
+  const bare = pattern.replace(/^\./, '')
+  if (!bare) return false
+  return host === bare || host.endsWith(`.${bare}`)
+}
+
+/**
+ * Whether `targetUrl` is listed in the `NO_PROXY` environment variable.
+ *
+ * Follows the de-facto convention: comma-separated entries, `*` bypasses
+ * everything, a leading dot or bare domain matches subdomains, an optional
+ * `:port` suffix narrows the entry, and IPv4 CIDR blocks are honoured so the
+ * common `10.0.0.0/8` style entry works.
+ */
+export function shouldBypassProxy(targetUrl: string, noProxy?: string): boolean {
+  const raw = (noProxy ?? (envVar('NO_PROXY') || envVar('no_proxy'))).trim()
+  if (!raw) return false
+
+  let host: string
+  let port: string
+  try {
+    const parsed = new URL(targetUrl)
+    host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '')
+    port = parsed.port
+  } catch {
+    return false
+  }
+  if (!host) return false
+
+  return raw
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean)
+    .some((entry) => matchesNoProxyEntry(host, port, entry))
+}
+
+/**
+ * Resolve HTTP(S) proxy for AI API requests; falls back to env when unset.
+ *
+ * `targetUrl` is checked against `NO_PROXY` first. Skipping that check forces
+ * corporate-proxy traffic for endpoints the environment declares directly
+ * reachable — typically a LAN or loopback model server, which the proxy then
+ * refuses to CONNECT to.
+ */
+export function resolveHttpProxy(settings: AISettings, targetUrl?: string): string {
+  if (targetUrl && shouldBypassProxy(targetUrl)) return ''
   const configured = settings.httpProxy?.trim()
   if (configured) return configured
-  if (typeof process !== 'undefined' && process.env) {
-    return (process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '').trim()
-  }
-  return ''
+  return envVar('HTTPS_PROXY') || envVar('HTTP_PROXY') || envVar('https_proxy') || envVar('http_proxy')
 }

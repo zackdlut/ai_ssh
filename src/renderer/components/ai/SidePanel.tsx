@@ -11,7 +11,8 @@ import {
   computeActiveTabBudget,
   tryHandleToolApprovalFromInput,
   approveToolCall,
-  rejectToolCall
+  rejectToolCall,
+  abortLoop
 } from '../../lib/aiService'
 import { getPendingToolCalls, hasPendingToolCalls } from '../../lib/toolApproval'
 import { normalizeAISettings, DEFAULT_CONTEXT_LENGTHS } from '../../../shared/aiSettings'
@@ -26,6 +27,7 @@ import ChatTabBar from './ChatTabBar'
 import ChatHistoryPanel from './ChatHistoryPanel'
 import ModelSelect from './ModelSelect'
 import ContextMeter from './ContextMeter'
+import PlanCard from './PlanCard'
 import { COPILOT_CONTEXT_MAX_LINES, COPILOT_TERMINAL_MENTION_MAX_LINES, readTerminalOutput } from '../../lib/terminalRegistry'
 
 const TERMINAL_MENTION = /@terminal\b/i
@@ -45,7 +47,7 @@ export default function SidePanel(): JSX.Element {
   const activeChatTabId = useAIStore((s) => s.activeChatTabId)
   const activeChat = useAIStore((s) => s.chatTabs.find((t) => t.id === s.activeChatTabId))
   const busy = useAIStore((s) => s.busy)
-  const activeRequestId = useAIStore((s) => s.activeRequestId)
+  const busyTabId = useAIStore((s) => s.busyTabId)
   const panelWidth = useAIStore((s) => s.panelWidth)
   const notice = useAIStore((s) => s.notice)
   const setPanelWidth = useAIStore((s) => s.setPanelWidth)
@@ -112,7 +114,8 @@ export default function SidePanel(): JSX.Element {
       draft: input,
       context,
       limit,
-      userRules
+      userRules,
+      profile: copilotProfile
     })
   }, [messages, input, activeTab, copilotProfile, contextLengths, activeChatTabId, userRules])
 
@@ -307,8 +310,7 @@ export default function SidePanel(): JSX.Element {
   }
 
   const stop = (): void => {
-    if (activeRequestId) window.api.ai.cancel(activeRequestId)
-    setBusy(false)
+    if (activeChatTabId) abortLoop(activeChatTabId)
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -422,6 +424,8 @@ export default function SidePanel(): JSX.Element {
         )}
       </div>
 
+      <PlanCard />
+
       {pendingApprovals.length > 1 && (
         <div className="tool-approval-batch">
           <span className="tool-approval-batch-label">
@@ -478,7 +482,7 @@ export default function SidePanel(): JSX.Element {
               disabled={busy}
               onChange={onProfileChange}
             />
-            {busy && activeRequestId ? (
+            {busy && busyTabId === activeChatTabId ? (
               <button
                 type="button"
                 className="composer-send danger"

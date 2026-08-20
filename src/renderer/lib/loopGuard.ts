@@ -20,10 +20,12 @@ export const TASK_TOKEN_BUDGET = 1_500_000
 export interface GuardState {
   /** Number of LLM turns taken in this task so far. */
   stepCount: number
-  /** Cumulative estimated tokens sent across all turns of this task. */
+  /** Cumulative tokens spent across all turns of this task. */
   tokenSpent: number
   /** Signatures of completed tool turns, for no-progress detection. */
   turnHistory: string[]
+  /** Estimate charged for the turn in flight, refunded once usage arrives. */
+  pendingEstimate?: number
 }
 
 export type GuardReason = 'max_steps' | 'repeat_no_progress' | 'token_budget'
@@ -34,11 +36,29 @@ export function createGuardState(): GuardState {
   return { stepCount: 0, tokenSpent: 0, turnHistory: [] }
 }
 
-/** Add the estimated token cost of a turn's outgoing messages. */
+/**
+ * Charge a turn's outgoing messages against the budget up front, using an
+ * estimate. Charging before the request is what makes the budget enforceable
+ * at all — a turn that never returns still cost something.
+ */
 export function accountTokens(state: GuardState, texts: string[]): void {
   let sum = 0
   for (const t of texts) sum += estimateTokens(t)
   state.tokenSpent += sum
+  state.pendingEstimate = sum
+}
+
+/**
+ * Replace the estimate for the turn just finished with the provider's own
+ * count. The estimate is a characters-per-token ratio, which is off by a wide
+ * margin for CJK text and for tool-heavy prompts, so a task could hit its
+ * budget far early or far late.
+ */
+export function reconcileTokens(state: GuardState, actualTotal: number): void {
+  if (!Number.isFinite(actualTotal) || actualTotal <= 0) return
+  state.tokenSpent -= state.pendingEstimate ?? 0
+  state.tokenSpent += actualTotal
+  state.pendingEstimate = undefined
 }
 
 /** Small, stable string hash (djb2) used to fold tool results into a signature. */

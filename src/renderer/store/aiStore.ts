@@ -4,12 +4,12 @@ import type {
   CopilotChatMessage,
   CopilotChatState,
   CopilotChatTab,
+  PlanItem,
   ToolCallView
 } from '../../shared/types'
 import { getCopilotStartupOpen } from './startupStore'
 import { useLocaleStore } from './localeStore'
 import { translate } from '../lib/i18n/translations'
-import { clearTaskMemory } from '../lib/taskMemory'
 
 export interface ChatMessage extends CopilotChatMessage {
   streaming?: boolean
@@ -136,6 +136,7 @@ function toPersistedState(
       draft: tab.draft,
       updatedAt: tab.updatedAt,
       archived: tab.archived ?? false,
+      plan: tab.plan,
       messages: tab.messages.slice(-MAX_MESSAGES_PER_TAB).map((m) => ({
         id: m.id,
         role: m.role,
@@ -269,6 +270,7 @@ interface AIState {
   appendToMessage: (tabId: string, id: string, delta: string) => void
   appendReasoning: (tabId: string, id: string, delta: string) => void
   finishMessage: (tabId: string, id: string) => void
+  setPlan: (tabId: string, plan: PlanItem[]) => void
   setToolCalls: (tabId: string, messageId: string, toolCalls: ToolCallView[]) => void
   updateToolCall: (
     tabId: string,
@@ -377,7 +379,6 @@ export const useAIStore = create<AIState>((set, get) => ({
     return true
   },
   deleteChatTab: (id) => {
-    clearTaskMemory(id)
     set((s) => {
       const tab = s.chatTabs.find((t) => t.id === id)
       if (!tab) return s
@@ -433,9 +434,10 @@ export const useAIStore = create<AIState>((set, get) => ({
   clearActiveTab: () => {
     const activeId = get().activeChatTabId
     if (!activeId) return
-    clearTaskMemory(activeId)
+    // Task memory and the plan are derived from / stored on the tab, so
+    // clearing the messages is all that is needed to reset the agent's memory.
     set((s) => ({
-      chatTabs: updateTab(s.chatTabs, activeId, { messages: [], draft: '' })
+      chatTabs: updateTab(s.chatTabs, activeId, { messages: [], draft: '', plan: undefined })
     }))
     schedulePersist(get)
   },
@@ -531,6 +533,12 @@ export const useAIStore = create<AIState>((set, get) => ({
           })
         }
       })
+    }))
+    schedulePersist(get)
+  },
+  setPlan: (tabId, plan) => {
+    set((s) => ({
+      chatTabs: updateTab(s.chatTabs, tabId, { plan: plan.length > 0 ? plan : undefined })
     }))
     schedulePersist(get)
   },

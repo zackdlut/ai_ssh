@@ -105,7 +105,7 @@ export function hasPendingToolCalls(tabId: string): boolean {
  */
 export function hasDangerousPending(tabId: string): boolean {
   return getPendingToolCalls(tabId).some(({ call }) => {
-    if (call.name === 'exec_command') {
+    if (call.name === 'exec_command' || call.name === 'run_in_terminal') {
       try {
         const args = JSON.parse(call.args || '{}') as { command?: unknown }
         return isDangerous(String(args.command ?? ''))

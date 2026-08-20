@@ -32,6 +32,8 @@ import type {
   SftpListResult,
   SftpOpResult,
   SftpRealpathResult,
+  SftpReadTextResult,
+  SftpStatResult,
   SftpTransferResult,
   SftpBatchTransferResult,
   SftpTransferProgressEvent,
@@ -41,6 +43,8 @@ import type {
   PickDirectoryResult,
   SaveFileResult,
   SshDataEvent,
+  SshExecOptions,
+  SshExecResult,
   SshStatusEvent,
   WslConnectOptions,
   WslDistro
@@ -67,6 +71,14 @@ const api = {
     resize: (sessionId: string, cols: number, rows: number): void =>
       ipcRenderer.send('ssh:resize', sessionId, cols, rows),
     close: (sessionId: string): void => ipcRenderer.send('ssh:close', sessionId),
+    exec: (
+      sessionId: string,
+      execId: string,
+      command: string,
+      opts?: SshExecOptions
+    ): Promise<SshExecResult> =>
+      ipcRenderer.invoke('ssh:exec', sessionId, execId, command, opts),
+    abortExec: (execId: string): void => ipcRenderer.send('ssh:execAbort', execId),
     onData: (cb: (e: SshDataEvent) => void): Unsubscribe => on('ssh:data', cb),
     onStatus: (cb: (e: SshStatusEvent) => void): Unsubscribe => on('ssh:status', cb)
   },
@@ -90,6 +102,15 @@ const api = {
       ipcRenderer.invoke('sftp:list', sessionId, path),
     realpath: (sessionId: string, path: string): Promise<SftpRealpathResult> =>
       ipcRenderer.invoke('sftp:realpath', sessionId, path),
+    stat: (sessionId: string, path: string): Promise<SftpStatResult> =>
+      ipcRenderer.invoke('sftp:stat', sessionId, path),
+    readText: (
+      sessionId: string,
+      path: string,
+      opts?: { startByte?: number; maxBytes?: number }
+    ): Promise<SftpReadTextResult> => ipcRenderer.invoke('sftp:readText', sessionId, path, opts),
+    writeText: (sessionId: string, path: string, content: string): Promise<SftpOpResult> =>
+      ipcRenderer.invoke('sftp:writeText', sessionId, path, content),
     mkdir: (sessionId: string, path: string): Promise<SftpOpResult> =>
       ipcRenderer.invoke('sftp:mkdir', sessionId, path),
     rename: (sessionId: string, from: string, to: string): Promise<SftpOpResult> =>

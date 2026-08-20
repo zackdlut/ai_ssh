@@ -369,27 +369,33 @@ export default function TabBar({
         )}
       </div>
       {wslDistros.length > 0 && (
-        <div className="tab-add-wrap wsl-launch-wrap">
+        <div className="wsl-launch">
           <button
-            className={`toolbar-btn tab-wsl-btn ${wslMenuOpen ? 'active' : ''}`}
+            className={`wsl-btn ${wslMenuOpen ? 'active' : ''}`}
             onClick={(e) => {
               e.stopPropagation()
               handleWslClick()
             }}
-            title={t('tabbar.openWsl')}
+            title={
+              wslDistros.length === 1
+                ? `${t('tabbar.openWsl')} · ${wslDistros[0].name}`
+                : t('tabbar.openWsl')
+            }
+            aria-haspopup={wslDistros.length > 1 ? 'menu' : undefined}
+            aria-expanded={wslDistros.length > 1 ? wslMenuOpen : undefined}
           >
-            <UiIcon name="terminal" />
-            <span>WSL</span>
+            <UiIcon name="terminal" className="wsl-btn-icon" />
+            <span className="wsl-btn-label">WSL</span>
             {wslDistros.length > 1 && (
               <UiIcon
                 name="caret-down"
-                className={`tab-add-caret-glyph ${wslMenuOpen ? 'open' : ''}`}
+                className={`wsl-btn-caret ${wslMenuOpen ? 'open' : ''}`}
                 size="sm"
               />
             )}
           </button>
           {wslMenuOpen && wslDistros.length > 1 && (
-            <div className="recent-menu" onClick={(e) => e.stopPropagation()}>
+            <div className="recent-menu wsl-menu" role="menu" onClick={(e) => e.stopPropagation()}>
               <div className="recent-menu-title">
                 <UiIcon name="terminal" size="sm" className="menu-item-icon" />
                 {t('tabbar.openWsl')}
@@ -398,6 +404,7 @@ export default function TabBar({
                 <button
                   key={d.name}
                   className="recent-menu-item"
+                  role="menuitem"
                   onClick={() => openWsl(d.name)}
                   title={d.name}
                 >

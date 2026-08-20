@@ -28,7 +28,7 @@ import {
   resolveApiKey,
   resolveHttpProxy
 } from '../../shared/aiSettings'
-import { AI_TOOLS } from '../../shared/aiTools'
+import { buildAITools, toolTierForProfile } from '../../shared/aiTools'
 import type {
   AISettings,
   ModelProfile,
@@ -38,7 +38,8 @@ import type {
   AISummarizeRequest,
   AICompressHistoryRequest,
   ChatMessageDTO,
-  ToolCallDTO
+  ToolCallDTO,
+  AITokenUsage
 } from '../../shared/types'
 import {
   buildCopilotSystemPrompt,
@@ -124,12 +125,100 @@ const CHART_SPEC_JSON_SCHEMA = {
  */
 const CHAT_STREAM_STALL_MS = 120000
 
+/** Upper bound for a single HTTP attempt against the model endpoint. */
+const REQUEST_TIMEOUT_MS = 120000
+
 export interface StreamCallbacks {
   onChunk: (delta: string) => void
   /** Streamed reasoning/thinking tokens, kept separate from the answer body. */
   onReasoning?: (delta: string) => void
-  onDone: (content: string, toolCalls?: ToolCallDTO[]) => void
+  onDone: (content: string, toolCalls?: ToolCallDTO[], usage?: AITokenUsage) => void
   onError: (error: string) => void
+}
+
+/**
+ * A 4xx means the server understood us and refused — which is how a backend
+ * that does not support `tools` or `stream_options` reports it. Anything else
+ * (a connection failure, a 5xx, a timeout) says nothing about the parameters.
+ */
+function isParameterRejection(e: unknown): boolean {
+  const status = (e as { status?: unknown } | null)?.status
+  return typeof status === 'number' && status >= 400 && status < 500
+}
+
+/**
+ * Turn a request failure into something a user can act on.
+ *
+ * The OpenAI SDK reports every transport failure as the bare string
+ * "Connection error.", which names neither the endpoint nor the reason. The
+ * real cause is two levels down (`APIConnectionError.cause` is undici's
+ * `TypeError: fetch failed`, whose own `cause` carries the syscall code), so
+ * unwrap the chain and put the endpoint back in the message. A proxy rejecting
+ * the tunnel looks identical from the outside, so name the proxy when one is in
+ * play — that failure needs a completely different fix from an unreachable host.
+ */
+function describeRequestError(e: unknown, url: string, proxyUrl = ''): string {
+  const message = e instanceof Error ? e.message : String(e)
+  if (!/connection error/i.test(message)) return message
+
+  const codes: string[] = []
+  let lastMessage = ''
+  const seen = new Set<unknown>()
+  let cursor: unknown = (e as { cause?: unknown } | null)?.cause
+  while (cursor && !seen.has(cursor)) {
+    seen.add(cursor)
+    const node = cursor as { code?: unknown; message?: unknown; errors?: unknown; cause?: unknown }
+    if (typeof node.code === 'string') codes.push(node.code)
+    if (typeof node.message === 'string' && node.message) lastMessage = node.message
+    // Happy Eyeballs surfaces one AggregateError holding one error per address.
+    if (Array.isArray(node.errors)) {
+      for (const inner of node.errors as { code?: unknown }[]) {
+        if (typeof inner?.code === 'string') codes.push(inner.code)
+      }
+    }
+    cursor = node.cause
+  }
+
+  // Proxy agents reject tunnels with a plain message and no syscall code, so
+  // fall back to that text rather than dropping the only available detail.
+  const detail = codes.length > 0 ? [...new Set(codes)].join(', ') : lastMessage
+  const suffix = detail ? ` (${detail})` : ''
+  if (proxyUrl) {
+    return `Cannot reach the model endpoint ${url} through proxy ${proxyUrl}${suffix}. If the endpoint is on your LAN, add its host to NO_PROXY or clear the proxy in Settings.`
+  }
+  return `Cannot reach the model endpoint ${url}${suffix}. Check that the service is running and reachable from this machine, and that the Base URL / proxy in Settings are correct.`
+}
+
+/** Flatten an error's `cause` chain for the debug log. */
+function causeChain(e: unknown): string[] {
+  const chain: string[] = []
+  const seen = new Set<unknown>()
+  let cursor: unknown = e
+  while (cursor && !seen.has(cursor) && chain.length < 6) {
+    seen.add(cursor)
+    const node = cursor as { name?: unknown; code?: unknown; message?: unknown; cause?: unknown }
+    chain.push(
+      [node.name, node.code, node.message].filter((v) => typeof v === 'string').join(': ') ||
+        String(cursor)
+    )
+    cursor = node.cause
+  }
+  return chain
+}
+
+/**
+ * Read the usage block a provider appends to the final stream chunk. Requires
+ * `stream_options.include_usage`; providers that ignore it simply never send
+ * one, so the caller falls back to its own estimate.
+ */
+function readUsage(part: OpenAI.Chat.ChatCompletionChunk): AITokenUsage | undefined {
+  const usage = part.usage
+  if (!usage) return undefined
+  return {
+    prompt: usage.prompt_tokens ?? 0,
+    completion: usage.completion_tokens ?? 0,
+    total: usage.total_tokens ?? (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0)
+  }
 }
 
 /**
@@ -334,11 +423,17 @@ export class AIProvider {
   private async createClient(profile: ModelProfile): Promise<OpenAI> {
     const settings = this.getSettings()
     const OpenAIClient = await loadOpenAI()
-    const proxyUrl = resolveHttpProxy(settings)
+    const baseURL = normalizeBaseURL(resolveBaseURL(settings, profile))
+    const proxyUrl = resolveHttpProxy(settings, baseURL)
     const proxyAgent = proxyUrl ? await this.getProxyAgent(proxyUrl) : undefined
     return new OpenAIClient({
       apiKey: resolveApiKey(settings, profile),
-      baseURL: normalizeBaseURL(resolveBaseURL(settings, profile)),
+      baseURL,
+      // The SDK's default is 10 minutes per attempt, so an endpoint that
+      // black-holes packets (a wrong host, a firewall that drops instead of
+      // refusing) leaves the panel spinning far past the point the user has
+      // given up. Bound it to the same budget as the stream watchdog.
+      timeout: REQUEST_TIMEOUT_MS,
       ...(proxyAgent ? { httpAgent: proxyAgent } : {})
     })
   }
@@ -357,8 +452,16 @@ export class AIProvider {
     const controller = new AbortController()
     this.controllers.set(req.requestId, controller)
 
+    const tier = toolTierForProfile(profile)
+    const tools = buildAITools(tier)
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: buildCopilotSystemPrompt(req.promptSections ?? {}) }
+      {
+        role: 'system',
+        content: buildCopilotSystemPrompt({
+          ...(req.promptSections ?? {}),
+          toolNames: tools.map((t) => t.function.name)
+        })
+      }
     ]
     const userRulesMessage = buildUserRulesSystemMessage(req.userRules ?? '')
     if (userRulesMessage) {
@@ -371,10 +474,18 @@ export class AIProvider {
     messages.push(...toSdkMessages(req.messages))
 
     const model = resolveActiveModel(settings)
-    const baseBody = { model, messages, stream: true as const }
+    const baseBody = {
+      model,
+      messages,
+      stream: true as const,
+      // Ask for real token counts on the final chunk; the loop's budget guard
+      // otherwise runs on a character-ratio estimate that drifts badly on CJK
+      // text and on prompts the provider caches.
+      stream_options: { include_usage: true }
+    }
     const toolBody = {
       ...baseBody,
-      tools: AI_TOOLS as unknown as OpenAI.Chat.ChatCompletionTool[],
+      tools: tools as unknown as OpenAI.Chat.ChatCompletionTool[],
       tool_choice: 'auto' as const
     }
 
@@ -415,18 +526,23 @@ export class AIProvider {
           { signal: controller.signal }
         )
       } catch (e) {
-        if (req.enableTools && !controller.signal.aborted) {
-          stream = await client.chat.completions.create(baseBody, {
-            signal: controller.signal
-          })
-        } else {
-          throw e
-        }
+        // Retry bare ONLY when the server actively rejected the request, which
+        // is how a backend that does not understand `tools` / `stream_options`
+        // answers. A connection failure must NOT be retried here: the SDK has
+        // already retried it internally, and doing it again only doubles how
+        // long the user waits before seeing an error that never changes.
+        if (!isParameterRejection(e) || controller.signal.aborted) throw e
+        stream = await client.chat.completions.create(
+          { model, messages, stream: true },
+          { signal: controller.signal }
+        )
       }
 
+      let usage: AITokenUsage | undefined
       for await (const part of stream as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>) {
         armStall()
         chunkCount++
+        usage = readUsage(part) ?? usage
         const { content, reasoning } = splitStreamDelta(part)
         // Reasoning is streamed to a separate channel and intentionally NOT
         // added to `full`, so it never leaks into the answer or the history.
@@ -462,9 +578,10 @@ export class AIProvider {
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         reasoning: reasoningFull || undefined,
         chunkCount,
-        totalChars: full.length
+        totalChars: full.length,
+        usage
       }, Date.now() - started)
-      cb.onDone(full, toolCalls.length > 0 ? toolCalls : undefined)
+      cb.onDone(full, toolCalls.length > 0 ? toolCalls : undefined, usage)
     } catch (e) {
       if (timedOut) {
         // Watchdog fired: the model produced nothing for CHAT_STREAM_STALL_MS.
@@ -488,12 +605,18 @@ export class AIProvider {
         }, Date.now() - started)
         cb.onDone(full)
       } else {
+        const endpoint = llmBaseUrl(settings, profile)
+        const proxyUrl = resolveHttpProxy(settings, endpoint)
+        const described = describeRequestError(e, endpoint, proxyUrl)
         logLlmError(req.requestId, 'chat.error', {
-          error: e instanceof Error ? e.message : String(e),
+          error: described,
+          rawError: e instanceof Error ? e.message : String(e),
+          causeChain: causeChain(e),
+          proxyUrl: proxyUrl || undefined,
           content: full,
           chunkCount
         }, Date.now() - started)
-        cb.onError(e instanceof Error ? e.message : String(e))
+        cb.onError(described)
       }
     } finally {
       if (stallTimer) clearTimeout(stallTimer)

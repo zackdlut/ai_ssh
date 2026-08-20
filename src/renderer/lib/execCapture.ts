@@ -144,6 +144,25 @@ export function parseMarker(
 }
 
 /**
+ * Clamp long output by keeping its head AND its tail.
+ *
+ * Cutting from the start alone is exactly backwards for command output: a build
+ * log, a `systemctl status`, a failing test run all put the verdict at the end,
+ * so a head-only cut reliably discards the one part that answers the question.
+ * The elision is labelled with a concrete next step, because a model that can
+ * see it lost lines will otherwise re-run the same command verbatim.
+ */
+export function clampOutput(text: string, max = EXEC_OUTPUT_MAX): string {
+  if (text.length <= max) return text
+  const headLen = Math.floor(max * 0.55)
+  const tailLen = max - headLen
+  const head = text.slice(0, headLen)
+  const tail = text.slice(-tailLen)
+  const droppedLines = text.slice(headLen, text.length - tailLen).split('\n').length
+  return `${head}\n…[truncated ${droppedLines} lines — re-run with grep/head/tail to narrow the output]…\n${tail}`
+}
+
+/**
  * Clean captured output: strip ANSI, drop every marker line (the echoed helper
  * and the printed sentinel), drop the echoed command line(s) at the top and any
  * trailing shell prompt, then clamp.
@@ -161,7 +180,7 @@ export function cleanCapturedOutput(raw: string, command: string, marker: string
     if (last === '' || promptRe.test(last)) lines.pop()
     else break
   }
-  return lines.join('\n').trim().slice(0, EXEC_OUTPUT_MAX)
+  return clampOutput(lines.join('\n').trim())
 }
 
 /**

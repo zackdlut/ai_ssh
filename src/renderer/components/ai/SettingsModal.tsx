@@ -7,9 +7,13 @@ import {
   MODEL_PROFILES,
   normalizeAISettings
 } from '../../../shared/aiSettings'
-import type { AISettings, ModelProfile } from '../../../shared/types'
-import { modelProfileLabel, useT } from '../../lib/i18n'
+import { DEFAULT_AUTONOMY_MODE } from '../../../shared/toolPolicy'
+import type { AISettings, AutonomyMode, ModelProfile } from '../../../shared/types'
+import { modelProfileLabel, useT, type TranslationKey } from '../../lib/i18n'
 import { useLocaleStore } from '../../store/localeStore'
+import { refreshAutonomyMode } from '../../lib/aiService'
+
+const AUTONOMY_MODES: AutonomyMode[] = ['conservative', 'balanced', 'autonomous']
 
 interface Props {
   onClose: () => void
@@ -27,6 +31,7 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
     ...DEFAULT_CONTEXT_LENGTHS
   })
   const [httpProxy, setHttpProxy] = useState('')
+  const [copilotAutonomy, setCopilotAutonomy] = useState<AutonomyMode>(DEFAULT_AUTONOMY_MODE)
   const [loaded, setLoaded] = useState(false)
   const locale = useLocaleStore((s) => s.locale)
 
@@ -40,6 +45,7 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
       setModels({ ...normalized.models })
       setContextLengths({ ...normalized.contextLengths })
       setHttpProxy(normalized.httpProxy)
+      setCopilotAutonomy(normalized.copilotAutonomy)
       setLoaded(true)
     })
   }, [])
@@ -74,8 +80,13 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
       nlModelProfile,
       models: { ...models },
       contextLengths: { ...contextLengths },
-      httpProxy
+      httpProxy,
+      copilotAutonomy
     })
+    // The agent loop caches the mode so its approval decision can run inside a
+    // synchronous stream callback; push the new value through immediately
+    // rather than waiting for the next prompt to reload settings.
+    refreshAutonomyMode(copilotAutonomy)
     onClose()
   }
 
@@ -180,6 +191,24 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
                   {modelProfileLabel(locale, profile.id)}
                 </button>
               ))}
+            </div>
+          </div>
+          <div className="field">
+            <label>{t('settings.ai.autonomy')}</label>
+            <div className="seg seg-profile">
+              {AUTONOMY_MODES.map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={copilotAutonomy === mode ? 'active' : ''}
+                  onClick={() => setCopilotAutonomy(mode)}
+                >
+                  {t(`settings.ai.autonomy.${mode}` as TranslationKey)}
+                </button>
+              ))}
+            </div>
+            <div className="context-hint">
+              {t(`settings.ai.autonomy.${copilotAutonomy}.hint` as TranslationKey)}
             </div>
           </div>
           <div className="context-hint">{t('settings.ai.hint')}</div>

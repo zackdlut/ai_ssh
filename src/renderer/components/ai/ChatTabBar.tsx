@@ -7,6 +7,7 @@ import {
   type ChatTab
 } from '../../store/aiStore'
 import { useT } from '../../lib/i18n'
+import { abortLoop } from '../../lib/aiService'
 
 function tabLabel(tab: ChatTab, newChatLabel: string): string {
   return tab.title === DEFAULT_CHAT_TAB_TITLE ? newChatLabel : tab.title
@@ -25,9 +26,7 @@ export default function ChatTabBar({ onOpenHistory }: Props): JSX.Element {
     addChatTab,
     archiveChatTab,
     setActiveChatTab,
-    clearActiveTab,
-    activeRequestId,
-    setBusy
+    clearActiveTab
   } = useAIStore()
   const t = useT()
 
@@ -81,10 +80,7 @@ export default function ChatTabBar({ onOpenHistory }: Props): JSX.Element {
 
   const handleClose = (e: React.MouseEvent, tab: ChatTab): void => {
     e.stopPropagation()
-    if (busy && busyTabId === tab.id && activeRequestId) {
-      window.api.ai.cancel(activeRequestId)
-      setBusy(false)
-    }
+    if (busy && busyTabId === tab.id) abortLoop(tab.id)
     archiveChatTab(tab.id)
   }
 

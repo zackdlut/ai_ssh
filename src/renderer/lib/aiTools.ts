@@ -14,7 +14,10 @@ import { useStartupStore } from '../store/startupStore'
 import { useSkillsStore } from '../store/skillsStore'
 import { useUserRulesStore } from '../store/userRulesStore'
 import { connect, connectFromConfig } from './connect'
-import { runCapturedCommand, formatCaptureElapsed } from './execCapture'
+import { editFile, globFiles, grepFiles, readFile, writeFile } from './fileTools'
+import { updatePlan } from './planTool'
+import { formatCaptureElapsed } from './execCapture'
+import { runAgentCommand } from './agentExec'
 import { getTabObservation, setTabObservation } from './terminalObservation'
 import { verifyCommand } from '../../shared/verify'
 import { normalizeAISettings } from '../../shared/aiSettings'
@@ -32,6 +35,12 @@ export interface ToolResult {
   /** Result text (JSON or plain) fed back to the model on success. */
   result?: string
   error?: string
+  /**
+   * The failure looks transient (a timeout, a dropped connection, a resource
+   * temporarily unavailable), so the loop may re-run this call once instead of
+   * spending a whole model turn to decide the same thing.
+   */
+  retryable?: boolean
 }
 
 function genId(): string {
@@ -319,7 +328,8 @@ async function moveConnectionToFolder(args: Record<string, unknown>): Promise<To
 
 async function execCommand(
   args: Record<string, unknown>,
-  ctx?: { onCaptureProgress?: (elapsedMs: number) => void }
+  ctx?: ToolExecContext,
+  opts?: { visible?: boolean }
 ): Promise<ToolResult> {
   const tabId = str(args.tab_id)
   const command = str(args.command)
@@ -330,22 +340,30 @@ async function execCommand(
     return { ok: false, error: `Tab "${tabId}" is not connected (status: ${tab.status}).` }
   }
 
-  const cap = await runCapturedCommand(tab.sessionId, command, {
-    onProgress: ctx?.onCaptureProgress
+  const cap = await runAgentCommand(tab, command, {
+    onProgress: ctx?.onCaptureProgress,
+    onStart: ctx?.onAbortHandle,
+    visible: opts?.visible
   })
 
   // A dropped session mid-command is a recoverable transient failure: surface it
   // as an error (not a "successful" empty result) so the loop can reconnect or
   // ask the user, instead of the model assuming the command succeeded.
   if (cap.disconnected) {
+    const detail = cap.error ? ` (${cap.error})` : ''
     return {
       ok: false,
-      error: `SSH session for tab "${tabId}" disconnected while running the command. The command may not have completed; reconnect the tab and retry if needed.`
+      error: `SSH session for tab "${tabId}" disconnected while running the command${detail}. The command may not have completed; reconnect the tab and retry if needed.`
     }
+  }
+  if (cap.aborted) {
+    return { ok: false, error: 'The user interrupted this command before it finished.' }
   }
 
   // Record the observed environment so later turns' snapshot can show it without
-  // re-running pwd (Observe: structured cwd + last command + exit code).
+  // re-running pwd (Observe: structured cwd + last command + exit code). This
+  // also carries the working directory into the NEXT command, which runs on its
+  // own channel and would otherwise start back in the login directory.
   setTabObservation(tab.id, {
     cwd: cap.cwd ?? undefined,
     lastCommand: command,
@@ -367,12 +385,18 @@ async function execCommand(
   }
   if (cap.timedOut) {
     lines.push(
-      'note: capture timed out before the command signalled completion; output may be partial or the command may still be running.'
+      'note: the command hit its execution timeout and was terminated; output may be partial. Re-run it in the background or narrow its scope.'
     )
   }
   lines.push('output:')
   lines.push(cap.output || '(no output captured)')
-  return { ok: true, result: lines.join('\n') }
+  // A transient failure is reported as a successful tool call (the command DID
+  // run and its output matters), with the retry hint carried out of band.
+  return {
+    ok: true,
+    result: lines.join('\n'),
+    retryable: verdict.status === 'failed' && verdict.retryable
+  }
 }
 
 function listSshConfigs(): ToolResult {
@@ -596,22 +620,51 @@ async function readSkill(args: Record<string, unknown>): Promise<ToolResult> {
   return { ok: true, result: res.content || '(empty skill).' }
 }
 
-/** Parse the raw JSON arguments string a model emits for a tool call. */
-export function parseToolArgs(raw: string): Record<string, unknown> {
-  if (!raw || !raw.trim()) return {}
+export type ParsedToolArgs =
+  | { ok: true; args: Record<string, unknown> }
+  | { ok: false; error: string }
+
+/**
+ * Parse the raw JSON arguments string a model emits for a tool call.
+ *
+ * Malformed JSON used to fall back to `{}`, so the model was told "tab_id is
+ * required" for a call where it HAD passed tab_id — and it would faithfully
+ * re-send the same broken JSON. Reporting the parse failure verbatim is the
+ * only feedback that leads to a corrected retry.
+ */
+export function parseToolArgs(raw: string): ParsedToolArgs {
+  if (!raw || !raw.trim()) return { ok: true, args: {} }
   try {
     const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
-  } catch {
-    return {}
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {
+        ok: false,
+        error: `Tool arguments must be a JSON object, received: ${raw}. Re-emit the call with valid JSON.`
+      }
+    }
+    return { ok: true, args: parsed as Record<string, unknown> }
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e)
+    return {
+      ok: false,
+      error: `Invalid JSON arguments (${detail}): ${raw}. Re-emit the call with valid JSON.`
+    }
   }
+}
+
+export interface ToolExecContext {
+  /** Chat tab the call belongs to; needed by chat-scoped tools like update_plan. */
+  chatTabId?: string
+  onCaptureProgress?: (elapsedMs: number) => void
+  /** Receives a canceller once a long-running command starts, for Stop. */
+  onAbortHandle?: (abort: () => void) => void
 }
 
 /** Dispatch a single tool call to its handler. */
 export async function executeToolCall(
   name: string,
   args: Record<string, unknown>,
-  ctx?: { onCaptureProgress?: (elapsedMs: number) => void }
+  ctx?: ToolExecContext
 ): Promise<ToolResult> {
   switch (name) {
     case 'open_ssh':
@@ -630,6 +683,20 @@ export async function executeToolCall(
       return moveConnectionToFolder(args)
     case 'exec_command':
       return execCommand(args, ctx)
+    case 'run_in_terminal':
+      return execCommand(args, ctx, { visible: true })
+    case 'read_file':
+      return readFile(args)
+    case 'edit_file':
+      return editFile(args)
+    case 'write_file':
+      return writeFile(args)
+    case 'grep':
+      return grepFiles(args)
+    case 'glob':
+      return globFiles(args)
+    case 'update_plan':
+      return updatePlan(ctx?.chatTabId, args)
     case 'list_ssh_configs':
       return listSshConfigs()
     case 'list_folders':

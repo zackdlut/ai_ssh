@@ -4,7 +4,51 @@ export const TARGET_RATIO_AFTER_COMPRESS = 0.5
 export const MIN_KEEP_MESSAGES = 8
 const MIN_COMPRESS_TOKENS = 100
 
-const CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g
+/**
+ * Characters per token for prose, and for machine output (logs, JSON, paths,
+ * code). Measured against this project's own model endpoint: English prose runs
+ * ~5.4 chars/token, dnf log lines ~2.0, tool schemas ~3.8. A single ratio
+ * cannot span that, and picking the prose end is what let a log-heavy turn sail
+ * past the context window — the estimate said 5k tokens where the tokenizer
+ * charged 10k, so nothing compacted and the server truncated the prompt from
+ * the front, taking the user's question with it.
+ */
+const PROSE_CHARS_PER_TOKEN = 4.3
+const DENSE_CHARS_PER_TOKEN = 2
+/**
+ * Share of visible characters that are digits, punctuation or symbols at which
+ * text is treated as fully machine output. Those are the characters a BPE
+ * tokenizer splits on, so their density is what separates a paragraph from a
+ * log line.
+ */
+const FULLY_DENSE_SHARE = 0.35
+
+function isCJK(code: number): boolean {
+  return (
+    (code >= 0x4e00 && code <= 0x9fff) ||
+    (code >= 0x3400 && code <= 0x4dbf) ||
+    (code >= 0xf900 && code <= 0xfaff)
+  )
+}
+
+/** Single pass over the text: CJK count, dense-character count, visible count. */
+function classify(text: string): { cjk: number; dense: number; visible: number } {
+  let cjk = 0
+  let dense = 0
+  let visible = 0
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    if (code === 32 || code === 9 || code === 10 || code === 13) continue
+    visible++
+    if (isCJK(code)) {
+      cjk++
+      continue
+    }
+    const isLetter = (code >= 97 && code <= 122) || (code >= 65 && code <= 90)
+    if (!isLetter) dense++
+  }
+  return { cjk, dense, visible }
+}
 
 export interface BudgetMessage {
   role: 'user' | 'assistant'
@@ -25,13 +69,21 @@ export interface ChatPayloadBudget {
   usageRatio: number
 }
 
-/** Heuristic token estimate: CJK ~1.5 chars/token, Latin ~4 chars/token. */
+/**
+ * Heuristic token estimate. CJK is charged at ~1.5 chars/token; everything else
+ * is charged on a ratio interpolated from how dense the text is, so a log or a
+ * JSON blob costs roughly what the tokenizer will actually charge for it.
+ */
 export function estimateTokens(text: string): number {
   if (!text) return 0
-  const cjkMatches = text.match(CJK_RE)
-  const cjkChars = cjkMatches?.length ?? 0
-  const otherChars = text.length - cjkChars
-  return Math.ceil(cjkChars / 1.5 + otherChars / 4)
+  const { cjk, dense, visible } = classify(text)
+  const other = text.length - cjk
+  if (other <= 0) return Math.ceil(cjk / 1.5)
+
+  const share = visible > 0 ? dense / visible : 0
+  const weight = Math.min(1, share / FULLY_DENSE_SHARE)
+  const ratio = PROSE_CHARS_PER_TOKEN + (DENSE_CHARS_PER_TOKEN - PROSE_CHARS_PER_TOKEN) * weight
+  return Math.ceil(cjk / 1.5 + other / ratio)
 }
 
 export function formatTokenCount(n: number): string {

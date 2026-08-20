@@ -7,6 +7,7 @@ import {
   DEFAULT_BASE_URLS,
   DEFAULT_API_KEYS
 } from '../../../shared/aiSettings'
+import { DEFAULT_AUTONOMY_MODE } from '../../../shared/toolPolicy'
 import type { ModelProfile } from '../../../shared/types'
 import { modelProfileLabel, useT, type AppLocale } from '../../lib/i18n'
 
@@ -41,7 +42,8 @@ export default function ModelSelect({
     nlModelProfile: 'fast' as const,
     models: modelNames,
     contextLengths: { ...DEFAULT_CONTEXT_LENGTHS },
-    httpProxy: ''
+    httpProxy: '',
+    copilotAutonomy: DEFAULT_AUTONOMY_MODE
   }
   const activeModelName = resolveModel(settings, value)
 

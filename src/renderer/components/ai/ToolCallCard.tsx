@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { approveToolCall, rejectToolCall } from '../../lib/aiService'
+import { allowToolForSession, approveToolCall, rejectToolCall } from '../../lib/aiService'
 import { isDangerous } from '../../lib/commands'
 import { formatCaptureElapsed } from '../../lib/execCapture'
 import { isDangerousTool } from '../../../shared/aiTools'
 import { useT, type TranslationKey } from '../../lib/i18n'
 import { useAIStore } from '../../store/aiStore'
 import AppSettingsToolPanel from './AppSettingsToolPanel'
-import type { ToolCallView } from '../../../shared/types'
+import FileDiffPreview from './FileDiffPreview'
+import type { PlanItemStatus, ToolCallView } from '../../../shared/types'
 
 interface Props {
   tabId: string
@@ -16,7 +17,7 @@ interface Props {
 
 const SECRET_KEYS = new Set(['password', 'privateKey', 'passphrase', 'apiKey'])
 
-type ToolCategory = 'connection' | 'config' | 'command' | 'settings' | 'read'
+type ToolCategory = 'connection' | 'config' | 'command' | 'settings' | 'read' | 'file' | 'plan'
 
 const TOOL_CATEGORY: Record<string, ToolCategory> = {
   open_ssh: 'connection',
@@ -30,10 +31,20 @@ const TOOL_CATEGORY: Record<string, ToolCategory> = {
   list_ssh_configs: 'read',
   list_folders: 'read',
   exec_command: 'command',
+  run_in_terminal: 'command',
   get_app_settings: 'settings',
   update_app_settings: 'settings',
-  read_skill: 'read'
+  read_skill: 'read',
+  read_file: 'file',
+  edit_file: 'file',
+  write_file: 'file',
+  grep: 'read',
+  glob: 'read',
+  update_plan: 'plan'
 }
+
+/** Tools whose pending card shows a live diff of the proposed change. */
+const FILE_WRITE_TOOLS = new Set(['edit_file', 'write_file'])
 
 function parseArgs(raw: string): Record<string, unknown> {
   if (!raw || !raw.trim()) return {}
@@ -117,6 +128,28 @@ function ToolGlyph({ category }: { category: ToolCategory }): JSX.Element {
             stroke="currentColor"
             strokeWidth="1.5"
             strokeLinecap="round"
+          />
+        </svg>
+      )}
+      {category === 'file' && (
+        <svg viewBox="0 0 20 20" fill="none">
+          <path
+            d="M5 2.5h6l4 4V17a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 5 17V3a.5.5 0 0 1 .5-.5Z"
+            stroke="currentColor"
+            strokeWidth="1.4"
+            strokeLinejoin="round"
+          />
+          <path d="M11 2.5v4h4" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+        </svg>
+      )}
+      {category === 'plan' && (
+        <svg viewBox="0 0 20 20" fill="none">
+          <path
+            d="M4 5.5 5.4 7l2.4-2.6M4 12.5 5.4 14l2.4-2.6M10.5 6h5.5M10.5 13H16"
+            stroke="currentColor"
+            strokeWidth="1.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
           />
         </svg>
       )}
@@ -359,9 +392,61 @@ function paramLabel(t: (key: TranslationKey) => string, key: string): string {
 function formatParamValue(key: string, value: unknown): string {
   if (SECRET_KEYS.has(key)) return '••••••'
   if (key === 'all') return value === true ? '✓' : '—'
-  if (Array.isArray(value)) return value.map(String).join(', ')
+  if (Array.isArray(value)) {
+    return value
+      .map((v) => (typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)))
+      .join(', ')
+  }
   if (typeof value === 'object' && value !== null) return JSON.stringify(value)
   return String(value)
+}
+
+type PlanArgItem = { title: string; status: PlanItemStatus }
+
+const PLAN_STATUSES: PlanItemStatus[] = ['pending', 'in_progress', 'completed', 'cancelled']
+
+const PLAN_MARK: Record<PlanItemStatus, string> = {
+  pending: '○',
+  in_progress: '●',
+  completed: '✓',
+  cancelled: '✕'
+}
+
+/**
+ * The plan arrives as `items: [{ title, status }]`; rendered as a plain
+ * key/value row it collapses into "[object Object]", so the steps get their
+ * own checklist instead.
+ */
+function parsePlanItems(value: unknown): PlanArgItem[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null
+  const items: PlanArgItem[] = []
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
+    const { title, status } = entry as { title?: unknown; status?: unknown }
+    if (typeof title !== 'string' || !title.trim()) return null
+    items.push({
+      title: title.trim(),
+      status: PLAN_STATUSES.includes(status as PlanItemStatus)
+        ? (status as PlanItemStatus)
+        : 'pending'
+    })
+  }
+  return items
+}
+
+function PlanItemsPreview({ items }: { items: PlanArgItem[] }): JSX.Element {
+  return (
+    <ol className="tool-plan-list">
+      {items.map((item, i) => (
+        <li key={i} className={`plan-item plan-item--${item.status}`}>
+          <span className="plan-item-mark" aria-hidden>
+            {PLAN_MARK[item.status]}
+          </span>
+          <span className="plan-item-text">{item.title}</span>
+        </li>
+      ))}
+    </ol>
+  )
 }
 
 function DetailGrid({
@@ -464,7 +549,15 @@ function ToolResult({ name, result }: { name: string; result?: string }): JSX.El
   }
   if (!result) return null
 
-  if (name === 'exec_command' || name === 'read_skill') {
+  if (
+    name === 'exec_command' ||
+    name === 'run_in_terminal' ||
+    name === 'read_skill' ||
+    name === 'read_file' ||
+    name === 'grep' ||
+    name === 'glob' ||
+    name === 'update_plan'
+  ) {
     return <LongTextOutput text={result} />
   }
 
@@ -506,9 +599,9 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
   const t = useT()
   const updateToolCall = useAIStore((s) => s.updateToolCall)
   const args = parseArgs(call.args)
-  const command = call.name === 'exec_command' ? String(args.command ?? '') : null
-  const dangerous =
-    call.name === 'exec_command' ? isDangerous(command ?? '') : isDangerousTool(call.name)
+  const isCommandTool = call.name === 'exec_command' || call.name === 'run_in_terminal'
+  const command = isCommandTool ? String(args.command ?? '') : null
+  const dangerous = isCommandTool ? isDangerous(command ?? '') : isDangerousTool(call.name)
   const pending = call.status === 'pending'
   const category = TOOL_CATEGORY[call.name] ?? 'read'
   const actionLabel = t(`tool.action.${call.name}` as TranslationKey)
@@ -520,7 +613,7 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
   const cardRef = useRef<HTMLDivElement>(null)
 
   const statusLabel =
-    call.status === 'running' && call.name === 'exec_command' && call.progressMs
+    call.status === 'running' && isCommandTool && call.progressMs
       ? t('tool.runningWithWait', { elapsed: formatCaptureElapsed(call.progressMs) })
       : call.status === 'running'
         ? t('tool.running')
@@ -542,6 +635,18 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
     isSettingsUpdateTool && args.updates && typeof args.updates === 'object'
       ? (args.updates as Record<string, unknown>)
       : null
+  const planItems = call.name === 'update_plan' ? parsePlanItems(args.items) : null
+
+  // The diff is only meaningful before the write lands: afterwards the file on
+  // the host already holds the new contents, so re-reading it would render an
+  // empty diff. The completed card falls back to the tool result's diff stat.
+  const filePath = typeof args.path === 'string' ? args.path : null
+  const fileTargetTab = typeof args.tab_id === 'string' ? args.tab_id : null
+  const showDiff =
+    FILE_WRITE_TOOLS.has(call.name) &&
+    !!filePath &&
+    !!fileTargetTab &&
+    (call.status === 'pending' || call.status === 'rejected')
 
   const hasBody =
     !isListTool &&
@@ -606,10 +711,22 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
             <>
               {!isSettingsUpdateTool && <SectionLabel>{t('tool.section.details')}</SectionLabel>}
               {command === null ? (
-                updates ? (
+                planItems ? (
+                  <PlanItemsPreview items={planItems} />
+                ) : updates ? (
                   <UpdateAppSettingsBody
                     initialUpdates={updates}
                     onDraftChange={setDraftSettingsUpdates}
+                  />
+                ) : FILE_WRITE_TOOLS.has(call.name) ? (
+                  // The raw old_string/new_string/content blobs are unreadable
+                  // as key-value rows; the diff below is the real preview.
+                  <ParamRows
+                    args={Object.fromEntries(
+                      Object.entries(args).filter(
+                        ([k]) => !['old_string', 'new_string', 'content'].includes(k)
+                      )
+                    )}
                   />
                 ) : (
                   <ParamRows args={args} />
@@ -624,6 +741,20 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
               )}
             </>
           )}
+        </div>
+      )}
+
+      {showDiff && filePath && fileTargetTab && (
+        <div className="tool-call-body tool-call-body--diff">
+          <SectionLabel>{t('tool.section.diff')}</SectionLabel>
+          <FileDiffPreview
+            tabId={fileTargetTab}
+            path={filePath}
+            oldString={typeof args.old_string === 'string' ? args.old_string : undefined}
+            newString={typeof args.new_string === 'string' ? args.new_string : undefined}
+            replaceAll={args.replace_all === true}
+            content={typeof args.content === 'string' ? args.content : undefined}
+          />
         </div>
       )}
 
@@ -654,6 +785,22 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
             >
               {t('tool.approve')}
             </button>
+            {/* Blanket approval is offered only for calls that are not
+                destructive — "always allow rm -rf" is not a choice worth
+                making one click easier. */}
+            {!dangerous && (
+              <button
+                type="button"
+                className="tool-btn-allow-session"
+                title={t('tool.allowSessionHint')}
+                onClick={() => {
+                  allowToolForSession(tabId, call.name)
+                  handleApprove()
+                }}
+              >
+                {t('tool.allowSession')}
+              </button>
+            )}
             <button
               type="button"
               className="tool-btn-reject"

@@ -34,6 +34,8 @@ import type {
   BookmarkTransferFormat,
   ConnectionConfig,
   ConnectOptions,
+  SshExecOptions,
+  SshExecResult,
   WslConnectOptions,
   CopilotChatState,
   ExportSessionsResult,
@@ -43,6 +45,8 @@ import type {
   SftpListResult,
   SftpOpResult,
   SftpRealpathResult,
+  SftpReadTextResult,
+  SftpStatResult,
   SftpTransferResult,
   SftpBatchTransferResult,
   SftpTransferProgress,
@@ -108,6 +112,31 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
     if (wsl.has(sessionId)) wsl.resize(sessionId, cols, rows)
     else ssh.resize(sessionId, cols, rows)
   })
+  // Agent commands run on their own channel so they never share the user's
+  // interactive shell (see SshManager.execCommand).
+  ipcMain.handle(
+    'ssh:exec',
+    async (
+      _e,
+      sessionId: string,
+      execId: string,
+      command: string,
+      opts?: SshExecOptions
+    ): Promise<SshExecResult> => {
+      logDebug({
+        category: 'ipc',
+        message: 'ssh:exec',
+        sessionId_ssh: sessionId,
+        traceId: execId,
+        data: { command: truncateForDebug(command), cwd: opts?.cwd }
+      })
+      return ssh.execCommand(sessionId, execId, command, opts)
+    }
+  )
+  ipcMain.on('ssh:execAbort', (_e, execId: string) => {
+    logDebug({ category: 'ipc', message: 'ssh:execAbort', traceId: execId })
+    ssh.abortExec(execId)
+  })
   ipcMain.on('ssh:close', (_e, sessionId: string) => {
     logDebug({ category: 'ipc', message: 'ssh:close', sessionId_ssh: sessionId })
     if (wsl.has(sessionId)) wsl.close(sessionId)
@@ -141,11 +170,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
           requestId: req.requestId,
           delta
         } satisfies AIReasoningEvent),
-      onDone: (content, toolCalls) =>
+      onDone: (content, toolCalls, usage) =>
         e.sender.send('ai:done', {
           requestId: req.requestId,
           content,
-          toolCalls
+          toolCalls,
+          usage
         } satisfies AIDoneEvent),
       onError: (error) =>
         e.sender.send('ai:error', { requestId: req.requestId, error } satisfies AIErrorEvent)
@@ -281,6 +311,42 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
     async (_e, sessionId: string, path: string): Promise<SftpRealpathResult> => {
       try {
         return { path: await ssh.sftpRealpath(sessionId, path) }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
+  ipcMain.handle(
+    'sftp:stat',
+    async (_e, sessionId: string, path: string): Promise<SftpStatResult> => {
+      try {
+        return { stat: await ssh.sftpStat(sessionId, path) }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
+  ipcMain.handle(
+    'sftp:readText',
+    async (
+      _e,
+      sessionId: string,
+      path: string,
+      opts?: { startByte?: number; maxBytes?: number }
+    ): Promise<SftpReadTextResult> => {
+      try {
+        return { read: await ssh.sftpReadText(sessionId, path, opts) }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
+  ipcMain.handle(
+    'sftp:writeText',
+    async (_e, sessionId: string, path: string, content: string): Promise<SftpOpResult> => {
+      try {
+        await ssh.sftpWriteText(sessionId, path, content)
+        return { ok: true }
       } catch (err) {
         return { error: errMessage(err) }
       }

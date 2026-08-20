@@ -17,11 +17,43 @@ import type {
   ConnectResult,
   SftpEntry,
   SftpEntryType,
+  SftpReadText,
+  SftpStat,
   SftpTransferProgress,
   SshDataEvent,
+  SshExecResult,
   SshStatusEvent
 } from '../../shared/types'
 import { countLocalTransferFiles } from '../local/fs'
+
+/** Default cap for a single `sftpReadText` window. */
+const SFTP_READ_MAX_BYTES = 512 * 1024
+
+/** Largest stdout/stderr buffer retained for one exec (tail-biased). */
+const EXEC_BUFFER_MAX = 512 * 1024
+
+/** Sentinel used to carry the post-command working directory out of stdout. */
+const EXEC_CWD_MARKER = '__AISSH_CWD__:'
+
+/** How long an abort flag waits for a channel that may still be opening. */
+const ABORT_FLAG_TTL_MS = 30_000
+
+/** Quote a value for safe interpolation into a POSIX shell command. */
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+/** Pull the trailing cwd sentinel out of captured stdout. */
+function splitCwdMarker(stdout: string): { text: string; cwd?: string } {
+  const idx = stdout.lastIndexOf(EXEC_CWD_MARKER)
+  if (idx === -1) return { text: stdout }
+  const after = stdout.slice(idx + EXEC_CWD_MARKER.length)
+  const cwd = after.split('\n')[0]?.trim()
+  return {
+    text: stdout.slice(0, idx).replace(/\n$/, ''),
+    cwd: cwd || undefined
+  }
+}
 
 interface TransferProgressTracker {
   startFile: (fileName: string, bytesTotal: number) => void
@@ -60,6 +92,10 @@ interface Session {
  */
 export class SshManager {
   private sessions = new Map<string, Session>()
+  /** In-flight exec channels, keyed by the renderer's exec id, for abort. */
+  private execChannels = new Map<string, ClientChannel>()
+  /** Exec ids aborted before (or while) their channel opened. */
+  private abortedExecs = new Set<string>()
 
   constructor(private getWindow: () => BrowserWindow | null) {}
 
@@ -172,6 +208,127 @@ export class SshManager {
     this.cleanup(sessionId)
   }
 
+  // --- Non-interactive exec ---------------------------------------------
+
+  /**
+   * Run a command on its own SSH channel and return the captured result.
+   *
+   * The agent used to run commands by typing them into the user's interactive
+   * shell and watching the terminal stream. That shared one shell between two
+   * writers: a keystroke typed while the agent was mid-capture landed inside
+   * the agent's command, and the agent's own output scrolled through the user's
+   * terminal as noise. A dedicated channel gives each call isolated stdout,
+   * stderr, and a real exit status from the protocol itself.
+   *
+   * The channel starts in the login directory, so `opts.cwd` re-enters the
+   * directory the agent believes it is in — otherwise a `cd` in one call would
+   * silently not apply to the next.
+   */
+  execCommand(
+    sessionId: string,
+    execId: string,
+    command: string,
+    opts?: { cwd?: string; timeoutMs?: number }
+  ): Promise<SshExecResult> {
+    const session = this.sessions.get(sessionId)
+    if (!session) return Promise.resolve({ stdout: '', stderr: '', code: null, error: 'Session not found.' })
+
+    const prefix = opts?.cwd ? `cd ${shellSingleQuote(opts.cwd)} 2>/dev/null; ` : ''
+    const wrapped = `${prefix}${command}\n__aissh_ec=$?; printf '\\n${EXEC_CWD_MARKER}%s\\n' "$(pwd 2>/dev/null)"; exit $__aissh_ec`
+
+    return new Promise<SshExecResult>((resolve) => {
+      let settled = false
+      let stdout = ''
+      let stderr = ''
+      let code: number | null = null
+      let timedOut = false
+      let timer: ReturnType<typeof setTimeout> | undefined
+
+      const finish = (extra?: Partial<SshExecResult>): void => {
+        if (settled) return
+        settled = true
+        if (timer) clearTimeout(timer)
+        this.execChannels.delete(execId)
+        const { text, cwd } = splitCwdMarker(stdout)
+        resolve({
+          stdout: text,
+          stderr,
+          code,
+          cwd,
+          timedOut,
+          aborted: this.abortedExecs.delete(execId) || undefined,
+          ...extra
+        })
+      }
+
+      session.client.exec(wrapped, { pty: false }, (err, stream) => {
+        if (err) return finish({ error: err.message })
+        // An abort that raced the channel opening would otherwise be lost.
+        if (this.abortedExecs.has(execId)) {
+          try {
+            stream.close()
+          } catch {
+            // ignore
+          }
+          return finish()
+        }
+        this.execChannels.set(execId, stream)
+
+        stream.on('data', (chunk: Buffer) => {
+          stdout += chunk.toString('utf8')
+          if (stdout.length > EXEC_BUFFER_MAX) stdout = stdout.slice(-EXEC_BUFFER_MAX)
+        })
+        stream.stderr.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString('utf8')
+          if (stderr.length > EXEC_BUFFER_MAX) stderr = stderr.slice(-EXEC_BUFFER_MAX)
+        })
+        stream.on('exit', (exitCode: number | null) => {
+          code = typeof exitCode === 'number' ? exitCode : null
+        })
+        stream.on('close', () => finish())
+        stream.on('error', (streamErr: Error) => finish({ error: streamErr.message }))
+
+        const timeoutMs = opts?.timeoutMs
+        if (timeoutMs && timeoutMs > 0) {
+          timer = setTimeout(() => {
+            timedOut = true
+            try {
+              stream.close()
+            } catch {
+              // ignore
+            }
+          }, timeoutMs)
+        }
+      })
+    })
+  }
+
+  /**
+   * Interrupt a running exec. `signal()` is best-effort — OpenSSH declines
+   * signal requests by default — so the channel is closed as well, which drops
+   * the remote process's controlling channel and terminates it in practice.
+   */
+  abortExec(execId: string): void {
+    this.abortedExecs.add(execId)
+    const stream = this.execChannels.get(execId)
+    if (!stream) {
+      // Either the channel is still opening (the flag will be consumed there)
+      // or the exec already finished, in which case nothing consumes it.
+      setTimeout(() => this.abortedExecs.delete(execId), ABORT_FLAG_TTL_MS)
+      return
+    }
+    try {
+      stream.signal('INT')
+    } catch {
+      // ignore
+    }
+    try {
+      stream.close()
+    } catch {
+      // ignore
+    }
+  }
+
   private cleanup(sessionId: string): void {
     const session = this.sessions.get(sessionId)
     try {
@@ -240,6 +397,91 @@ export class SshManager {
     return new Promise((resolve, reject) => {
       sftp.mkdir(path, (err) => (err ? reject(err) : resolve()))
     })
+  }
+
+  async sftpStat(sessionId: string, path: string): Promise<SftpStat> {
+    const sftp = await this.getSftp(sessionId)
+    return new Promise((resolve, reject) => {
+      sftp.stat(path, (err, stats) => {
+        if (err) return reject(err)
+        const mode = stats.mode ?? 0
+        resolve({
+          size: stats.size ?? 0,
+          mode,
+          mtime: (stats.mtime ?? 0) * 1000,
+          type: fileTypeFromMode(mode)
+        })
+      })
+    })
+  }
+
+  /**
+   * Read a bounded byte window of a remote file as UTF-8 text.
+   *
+   * The agent's file tools need contents in memory, not on local disk, so this
+   * streams a `[startByte, startByte + maxBytes)` range rather than reusing
+   * `fastGet`. The window is capped so a stray `read_file` on a multi-gigabyte
+   * log can never blow up the renderer or the model's context.
+   */
+  async sftpReadText(
+    sessionId: string,
+    path: string,
+    opts?: { startByte?: number; maxBytes?: number }
+  ): Promise<SftpReadText> {
+    const info = await this.sftpStat(sessionId, path)
+    if (info.type === 'dir') {
+      throw new Error(`"${path}" is a directory, not a file.`)
+    }
+    const start = Math.max(0, Math.trunc(opts?.startByte ?? 0))
+    const maxBytes = Math.max(1, Math.trunc(opts?.maxBytes ?? SFTP_READ_MAX_BYTES))
+    if (start >= info.size) {
+      return { text: '', size: info.size, startByte: start, bytesRead: 0, truncated: false }
+    }
+
+    const sftp = await this.getSftp(sessionId)
+    const end = Math.min(info.size - 1, start + maxBytes - 1)
+    const chunks: Buffer[] = await new Promise((resolve, reject) => {
+      const acc: Buffer[] = []
+      const stream = sftp.createReadStream(path, { start, end })
+      stream.on('data', (chunk: Buffer | string) => {
+        acc.push(typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk)
+      })
+      stream.on('error', reject)
+      stream.on('close', () => resolve(acc))
+    })
+
+    const buffer = Buffer.concat(chunks)
+    return {
+      text: buffer.toString('utf8'),
+      size: info.size,
+      startByte: start,
+      bytesRead: buffer.length,
+      truncated: start + buffer.length < info.size
+    }
+  }
+
+  /**
+   * Overwrite a remote file with UTF-8 text, preserving its existing permission
+   * bits. Without the explicit chmod, editing something like `/etc/nginx/*.conf`
+   * or a shell script would silently reset it to the SFTP default mode.
+   */
+  async sftpWriteText(sessionId: string, path: string, content: string): Promise<void> {
+    const sftp = await this.getSftp(sessionId)
+    const previousMode = await this.sftpStat(sessionId, path)
+      .then((s) => s.mode & 0o7777)
+      .catch(() => null)
+
+    await new Promise<void>((resolve, reject) => {
+      sftp.writeFile(path, content, { encoding: 'utf8' }, (err) =>
+        err ? reject(err) : resolve()
+      )
+    })
+
+    if (previousMode !== null) {
+      await new Promise<void>((resolve) => {
+        sftp.chmod(path, previousMode, () => resolve())
+      })
+    }
   }
 
   async sftpRename(sessionId: string, from: string, to: string): Promise<void> {

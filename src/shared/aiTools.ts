@@ -1,5 +1,3 @@
-import { isDangerous } from './dangerousCommands'
-
 /**
  * Function-calling tool definitions shared between the main process (passed to
  * the OpenAI-compatible Chat Completions API) and the renderer (the dispatcher
@@ -24,7 +22,11 @@ export const READONLY_TOOLS = new Set([
   'list_open_tabs',
   'list_folders',
   'get_app_settings',
-  'read_skill'
+  'read_skill',
+  'read_file',
+  'grep',
+  'glob',
+  'update_plan'
 ])
 
 /**
@@ -41,7 +43,12 @@ export const DISPLAY_TOOLS = new Set([
 ])
 
 /** Action tools whose effect is destructive and deserves a stronger warning. */
-export const DANGEROUS_TOOLS = new Set(['exec_command', 'close_tab', 'close_tabs'])
+export const DANGEROUS_TOOLS = new Set([
+  'exec_command',
+  'run_in_terminal',
+  'close_tab',
+  'close_tabs'
+])
 
 export function isReadonlyTool(name: string): boolean {
   return READONLY_TOOLS.has(name)
@@ -55,18 +62,43 @@ export function isDangerousTool(name: string): boolean {
   return DANGEROUS_TOOLS.has(name)
 }
 
-/** Whether an action tool call must wait for explicit user approval before running. */
-export function requiresToolApproval(name: string, argsJson = '{}'): boolean {
-  if (isReadonlyTool(name)) return false
-  if (name === 'exec_command') {
-    try {
-      const args = JSON.parse(argsJson) as { command?: unknown }
-      return isDangerous(String(args.command ?? ''))
-    } catch {
-      return true
-    }
-  }
-  return true
+/**
+ * Tools exposed on the `core` tier.
+ *
+ * Every tool schema costs tokens on every single turn, and the full set runs to
+ * several thousand — affordable for a hosted frontier model, ruinous for a
+ * local 32k-context one, which also degrades sharply as the tool list grows.
+ * The core tier keeps exactly what a task needs end to end (inspect, read,
+ * search, edit, execute, plan) and drops the app-management tools, which a
+ * small model can neither drive reliably nor is usually asked to.
+ */
+const CORE_TIER_TOOLS = new Set([
+  'exec_command',
+  'read_file',
+  'edit_file',
+  'grep',
+  'glob',
+  'list_open_tabs',
+  'update_plan',
+  'read_skill'
+])
+
+/** Size of the tool surface handed to the model. */
+export type ToolTier = 'core' | 'full'
+
+/**
+ * Local/small models run on the `fast` profile in this app, so that is the tier
+ * that gets the trimmed schema. The renderer dispatcher always accepts every
+ * tool regardless of tier, so an older chat whose history references a
+ * now-hidden tool still replays correctly.
+ */
+export function toolTierForProfile(profile: string | undefined): ToolTier {
+  return profile === 'fast' ? 'core' : 'full'
+}
+
+export function buildAITools(tier: ToolTier): AIToolDefinition[] {
+  if (tier === 'full') return AI_TOOLS
+  return AI_TOOLS.filter((t) => CORE_TIER_TOOLS.has(t.function.name))
 }
 
 export const AI_TOOLS: AIToolDefinition[] = [
@@ -270,7 +302,7 @@ export const AI_TOOLS: AIToolDefinition[] = [
     function: {
       name: 'exec_command',
       description:
-        'Run a shell command in an open, connected SSH terminal tab and return the captured output. Requires a tab_id (resolve via list_open_tabs).',
+        'Run a shell command on the host behind an open, connected terminal tab and return its output and exit code. Runs on a private channel, so it neither disturbs nor is disturbed by what the user is typing. Requires a tab_id (resolve via list_open_tabs).',
       parameters: {
         type: 'object',
         properties: {
@@ -278,6 +310,163 @@ export const AI_TOOLS: AIToolDefinition[] = [
           command: { type: 'string', description: 'The shell command to execute.' }
         },
         required: ['tab_id', 'command'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'run_in_terminal',
+      description:
+        "Run a command in the user's visible terminal session, so they watch it execute and keep its output in their scrollback. Use ONLY when being seen matters (a demo, a long build the user asked to watch, or a command that leaves the shell in a state later commands depend on, like an interactive login). For everything else use exec_command.",
+      parameters: {
+        type: 'object',
+        properties: {
+          tab_id: { type: 'string', description: 'Id of the connected tab to run the command in.' },
+          command: { type: 'string', description: 'The shell command to execute.' }
+        },
+        required: ['tab_id', 'command'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description:
+        'Read a file on the host over SFTP and return it with line numbers. Prefer this over `cat` via exec_command: it does not disturb the terminal, is not clamped by the shell capture buffer, and supports paging. Read a file BEFORE editing it so edit_file can match exact text.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tab_id: { type: 'string', description: 'Id of the connected tab whose host to read from.' },
+          path: { type: 'string', description: 'Absolute path of the file to read.' },
+          offset: {
+            type: 'number',
+            description: '1-based line to start at (default 1). Use the value suggested by a previous truncated read.'
+          },
+          limit: { type: 'number', description: 'Maximum number of lines to return (default 800, max 3000).' }
+        },
+        required: ['tab_id', 'path'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'edit_file',
+      description:
+        'Replace an exact block of text in a file on the host. old_string must appear EXACTLY ONCE unless replace_all is true, so read_file first and copy the target text verbatim (including indentation). This is the preferred way to change a config or script — never use `sed -i` for a targeted edit. The previous contents are backed up automatically.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tab_id: { type: 'string', description: 'Id of the connected tab whose host to edit on.' },
+          path: { type: 'string', description: 'Absolute path of the file to edit.' },
+          old_string: {
+            type: 'string',
+            description: 'Exact text to replace, copied verbatim from read_file output (WITHOUT the line-number prefix).'
+          },
+          new_string: { type: 'string', description: 'Replacement text. Pass an empty string to delete.' },
+          replace_all: {
+            type: 'boolean',
+            description: 'Replace every occurrence instead of requiring a unique match (default false).'
+          }
+        },
+        required: ['tab_id', 'path', 'old_string', 'new_string'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'write_file',
+      description:
+        'Create a file on the host, or overwrite one completely with new contents. Use edit_file for targeted changes to an existing file; use this only for new files or full rewrites. Existing contents are backed up automatically.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tab_id: { type: 'string', description: 'Id of the connected tab whose host to write to.' },
+          path: { type: 'string', description: 'Absolute path of the file to write.' },
+          content: { type: 'string', description: 'Full contents of the file.' }
+        },
+        required: ['tab_id', 'path', 'content'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'grep',
+      description:
+        'Search file CONTENTS on the host with an extended regular expression, returning path:line:text matches. Use this to locate a config directive or log entry instead of paging whole files with read_file.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tab_id: { type: 'string', description: 'Id of the connected tab whose host to search.' },
+          pattern: { type: 'string', description: 'Extended regular expression (grep -E syntax).' },
+          path: { type: 'string', description: 'Directory or file to search (default: current directory).' },
+          glob: { type: 'string', description: 'Only search files whose name matches this glob, e.g. "*.conf".' },
+          max_results: { type: 'number', description: 'Maximum matches to return (default 100, max 500).' }
+        },
+        required: ['tab_id', 'pattern'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'glob',
+      description:
+        'Find files by NAME or path pattern on the host. Use this to discover where something lives before reading it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tab_id: { type: 'string', description: 'Id of the connected tab whose host to search.' },
+          pattern: {
+            type: 'string',
+            description: 'Name pattern such as "*.conf", or a path pattern containing "/" such as "*/sites-enabled/*".'
+          },
+          path: { type: 'string', description: 'Directory to search under (default: current directory).' },
+          max_results: { type: 'number', description: 'Maximum paths to return (default 100, max 500).' }
+        },
+        required: ['tab_id', 'pattern'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_plan',
+      description:
+        "Create or update the task plan shown to the user. Call this FIRST for any task needing more than one or two steps, then call it again to mark each step completed as you go. Send the COMPLETE list every time — it replaces the previous plan. Exactly one step should be in_progress at a time. Single-step requests need no plan.",
+      parameters: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array',
+            description: 'The full ordered list of plan steps.',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', description: 'Short imperative description of the step.' },
+                status: {
+                  type: 'string',
+                  enum: ['pending', 'in_progress', 'completed', 'cancelled'],
+                  description: 'Current state of this step.'
+                }
+              },
+              required: ['title', 'status'],
+              additionalProperties: false
+            }
+          }
+        },
+        required: ['items'],
         additionalProperties: false
       }
     }

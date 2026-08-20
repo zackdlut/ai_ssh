@@ -9,21 +9,24 @@
  */
 import { AI_TOOLS, READONLY_TOOLS } from '../aiTools'
 
-// The "Available tools:" line is generated from AI_TOOLS so it never drifts out
-// of sync with the real schema when a tool is added/removed/renamed.
-const toolNames = AI_TOOLS.map((t) => t.function.name)
-const actionTools = toolNames.filter((n) => !READONLY_TOOLS.has(n))
-const readonlyTools = toolNames.filter((n) => READONLY_TOOLS.has(n))
-const TOOL_LIST_LINE = `Available tools: ${actionTools.join(', ')}; plus read-only ${readonlyTools.join(
-  ', '
-)}.`
+// The "Available tools:" line is generated from the schema actually sent for
+// this turn, so it never drifts out of sync — including when a smaller model
+// tier is served a trimmed tool set.
+const ALL_TOOL_NAMES = AI_TOOLS.map((t) => t.function.name)
+
+function toolListLine(names: readonly string[]): string {
+  const actionTools = names.filter((n) => !READONLY_TOOLS.has(n))
+  const readonlyTools = names.filter((n) => READONLY_TOOLS.has(n))
+  return `Available tools: ${actionTools.join(', ')}; plus read-only ${readonlyTools.join(', ')}.`
+}
 
 /**
  * The always-present core prompt. `concise` (continuation turns) drops the
  * first-turn-only examples but keeps every Tool rule / Verify / Constraint
  * verbatim, so the model never loses a safety or tool-emission rule mid-task.
  */
-function promptCore(concise = false): string {
+function promptCore(concise = false, toolNames: readonly string[] = ALL_TOOL_NAMES): string {
+  const TOOL_LIST_LINE = toolListLine(toolNames)
   const workflowExample = concise
     ? ''
     : `
@@ -64,7 +67,7 @@ Use the snapshot to resolve tab_id / config_id / folder_id directly. NEVER inven
 If the user sends a NEW instruction while a proposed action is still awaiting approval, that pending action is dropped — treat the newest message as the current intent instead of repeating the old action.${workflowExample}
 
 ## Plan, Verify & Recovery
-Plan (multi-step tasks only): for a task that needs several commands (deploy, diagnose, migrate), FIRST state a brief numbered plan (2-6 steps) and the concrete success criteria, then execute step by step. Keep single-step requests direct — no plan needed. As the Task execution history grows (injected each turn), do not redo steps already completed there unless you need fresh state.
+Plan (multi-step tasks only): for a task that needs several steps (deploy, diagnose, migrate, edit-then-verify), FIRST call update_plan with 2-6 concrete steps, then work through them. Mark the step you are starting as in_progress and call update_plan again to mark it completed before moving on — exactly one step is in_progress at a time. The current plan is injected every turn, so it is your memory of what remains: keep executing until every step is resolved, and never stop mid-plan to ask the user to say "continue". Keep single-step requests direct — no plan needed. As the Task execution history grows (injected each turn), do not redo steps already completed there unless you need fresh state.
 
 Verify (never trust a command's own output alone): every exec_command result now returns a structured header — status (success/failed/unknown), exit_code, cwd, and an optional verify hint. Read it.
 - signal: treat exit_code / status as the primary success signal, not prose in the output. Remember some tools exit non-zero legitimately (grep = no match, test = false) — judge in context.
@@ -86,9 +89,17 @@ Emitting calls:
 - CRITICAL: deciding to act in your reasoning is NOT enough — you MUST emit the tool call in the response itself. Never answer with only a sentence like "I will now close the tab" / "我现在来关闭" and stop; a message without a tool call does nothing. Do not promise to act later or wait for the user to say "continue" — either call the tool now, or ask a clarifying question if something is genuinely missing.
 - Each action tool call is shown as an approval card before it runs (exception: non-destructive exec_command runs immediately; destructive commands like rm -rf/shutdown and other action tools like close_tab are flagged and require approval). Do not ask for permission in prose first — just issue the call and let the user approve/reject on the card.
 
-exec_command vs bash card:
-- exec_command runs on a tab_id and returns its output; prefer it when the user wants you to execute and use the result yourself.
+exec_command vs run_in_terminal vs bash card:
+- exec_command is the default: it runs on a tab_id over a private channel and returns stdout, stderr, and a real exit code. It is unaffected by what the user types, and each call starts fresh in the last observed cwd, so \`cd\` does not persist — pass an absolute path or chain \`cd /x && cmd\` in one call.
+- run_in_terminal runs in the user's VISIBLE shell instead. Use it only when being watched is the point (a demo, a long build the user asked to see) or when the command must leave that shell in a new state. Its output is captured from the terminal, so it is noisier and less reliable.
 - For merely suggesting a command the user runs manually, use a bash code block instead.
+
+Files (read_file / edit_file / write_file / grep / glob):
+- These run over SFTP on the tab's host. Use them instead of shelling out: read_file beats \`cat\` (paged, line-numbered, does not disturb the terminal), grep beats a hand-rolled \`grep | head\` pipeline, and edit_file beats \`sed -i\`.
+- ALWAYS read_file (or grep) the target region BEFORE edit_file. old_string must match the file EXACTLY ONCE — copy it verbatim from the read output, WITHOUT the \`  12|\` line-number prefix, keeping original indentation and line breaks. If the edit is rejected as ambiguous, include more surrounding lines rather than switching to sed.
+- edit_file for a targeted change to an existing file; write_file only for a new file or a full rewrite. Both back up the previous contents automatically, so you do not need to \`cp file file.bak\` first.
+- Editing a file is NOT verification. After changing a config, run the tool's own check (\`nginx -t\`, \`sshd -t\`, \`visudo -c\`) or re-read the region before reporting success.
+- These tools do not work on local WSL tabs (no SFTP channel); use exec_command there.
 
 Folders & connections:
 - Folders organize saved connections in the sidebar tree. create_folder makes one (optional parent_folder_id/parent_folder_name to nest; omit both for top level). move_connection_to_folder moves a saved connection: identify it by config_id or connection_name, and the destination by folder_id or folder_name (omit both to move to top level).
@@ -152,6 +163,12 @@ export interface PromptSections {
   mermaid?: boolean
   /** Continuation turn: drop first-turn-only examples (safety/tool rules stay verbatim). */
   concise?: boolean
+  /**
+   * Tools actually sent with this turn. Defaults to the full set; a trimmed
+   * model tier passes its subset so the prompt never advertises a tool the
+   * model cannot call.
+   */
+  toolNames?: readonly string[]
 }
 
 /**
@@ -159,7 +176,7 @@ export interface PromptSections {
  * chart and/or mermaid sections only when that turn needs them.
  */
 export function buildCopilotSystemPrompt(opts: PromptSections = {}): string {
-  const parts = [promptCore(opts.concise)]
+  const parts = [promptCore(opts.concise, opts.toolNames)]
   if (opts.chart) parts.push(PROMPT_CHART)
   if (opts.mermaid) parts.push(PROMPT_MERMAID)
   return parts.join('\n\n')

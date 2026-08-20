@@ -3,6 +3,7 @@ import Store from 'electron-store'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { readCopilotChats, writeCopilotChats } from './copilotChatsStore'
+import { DEFAULT_AUTONOMY_MODE } from '../../shared/toolPolicy'
 import {
   DEFAULT_MODELS,
   DEFAULT_CONTEXT_LENGTHS,
@@ -87,7 +88,8 @@ function store(): Store<StoreSchema> {
           nlModelProfile: 'fast',
           models: { ...DEFAULT_MODELS },
           contextLengths: { ...DEFAULT_CONTEXT_LENGTHS },
-          httpProxy: ''
+          httpProxy: '',
+          copilotAutonomy: DEFAULT_AUTONOMY_MODE
         },
         theme: 'dawn',
         locale: 'zh',

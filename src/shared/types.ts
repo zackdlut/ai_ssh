@@ -104,6 +104,28 @@ export interface SshDataEvent {
   data: string
 }
 
+/** Result of running a command on its own (non-interactive) SSH channel. */
+export interface SshExecResult {
+  stdout: string
+  stderr: string
+  /** Exit status reported by the channel, or null when unavailable. */
+  code: number | null
+  /** Working directory after the command ran, when it could be determined. */
+  cwd?: string
+  /** True when the command was killed by the exec timeout. */
+  timedOut?: boolean
+  /** True when the user interrupted the command. */
+  aborted?: boolean
+  /** Transport-level failure (channel could not be opened, etc.). */
+  error?: string
+}
+
+export interface SshExecOptions {
+  /** Directory to enter before running the command. */
+  cwd?: string
+  timeoutMs?: number
+}
+
 export type ModelProfile = 'default' | 'fast' | 'medium' | 'high' | 'custom'
 
 export interface AISettings {
@@ -121,7 +143,12 @@ export interface AISettings {
   contextLengths: Record<ModelProfile, number>
   /** HTTP(S) proxy URL for AI API requests, e.g. http://127.0.0.1:7890 */
   httpProxy: string
+  /** How much the Copilot agent may do without asking for approval. */
+  copilotAutonomy: AutonomyMode
 }
+
+/** How much the agent may do without stopping to ask. See shared/toolPolicy. */
+export type AutonomyMode = 'conservative' | 'balanced' | 'autonomous'
 
 /** Application color theme. `dawn` is the default light palette. */
 export type AppTheme = 'aurora' | 'dawn'
@@ -167,6 +194,13 @@ export interface ToolCallView {
   status: ToolCallStatus
   /** Captured result text fed back to the model (truncated when persisted). */
   result?: string
+  /**
+   * Compact form of the result used when this call is replayed as part of the
+   * conversation on a later user turn. The full `result` can run to thousands
+   * of characters, which is fine to show in a card once but ruinous to resend
+   * every turn for the rest of the session.
+   */
+  digest?: string
   error?: string
   /** Elapsed ms while a long-running tool (e.g. exec_command) is in flight. */
   progressMs?: number
@@ -197,6 +231,19 @@ export interface CopilotChatMessage {
   toolCalls?: ToolCallView[]
 }
 
+export type PlanItemStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
+
+/**
+ * One step of the agent's task plan. The plan is structured rather than prose
+ * so it survives history compression, can be re-injected verbatim each turn,
+ * and can be rendered as live progress instead of scrolling away.
+ */
+export interface PlanItem {
+  id: string
+  title: string
+  status: PlanItemStatus
+}
+
 /** One conversation topic in the Copilot side panel. */
 export interface CopilotChatTab {
   id: string
@@ -206,6 +253,8 @@ export interface CopilotChatTab {
   updatedAt: number
   /** When true, tab is hidden from the tab bar and listed in chat history. */
   archived?: boolean
+  /** Current agent task plan for this chat (maintained via the update_plan tool). */
+  plan?: PlanItem[]
 }
 
 /** Persisted Copilot multi-tab chat state. */
@@ -331,6 +380,38 @@ export interface SftpRealpathResult {
   error?: string
 }
 
+/** Metadata of a remote path, used by the agent's file tools. */
+export interface SftpStat {
+  size: number
+  /** POSIX mode bits. */
+  mode: number
+  /** Last modified time (ms since epoch). */
+  mtime: number
+  type: SftpEntryType
+}
+
+export interface SftpStatResult {
+  stat?: SftpStat
+  error?: string
+}
+
+/** A bounded byte window of a remote file, decoded as UTF-8. */
+export interface SftpReadText {
+  text: string
+  /** Total size of the file in bytes. */
+  size: number
+  /** Byte offset this window starts at. */
+  startByte: number
+  bytesRead: number
+  /** True when bytes remain after this window. */
+  truncated: boolean
+}
+
+export interface SftpReadTextResult {
+  read?: SftpReadText
+  error?: string
+}
+
 export interface SftpOpResult {
   ok?: true
   error?: string
@@ -416,11 +497,20 @@ export interface AIReasoningEvent {
   delta: string
 }
 
+/** Token counts reported by the provider for one completed request. */
+export interface AITokenUsage {
+  prompt: number
+  completion: number
+  total: number
+}
+
 export interface AIDoneEvent {
   requestId: string
   content: string
   /** Tool calls the model requested, when function calling was enabled. */
   toolCalls?: ToolCallDTO[]
+  /** Real usage from the provider, when it reports it. */
+  usage?: AITokenUsage
 }
 
 export interface AIErrorEvent {
