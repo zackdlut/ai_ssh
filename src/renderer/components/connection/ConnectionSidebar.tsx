@@ -11,7 +11,7 @@ import { connectFromConfig } from '../../lib/connect'
 import { useT } from '../../lib/i18n'
 import ContextMenuItem from '../ContextMenuItem'
 import UiIcon from '../UiIcon'
-import type { ConnectionConfig } from '../../../shared/types'
+import type { BookmarkTransferFormat, ConnectionConfig } from '../../../shared/types'
 
 interface Props {
   onNewConnection: (parentId: string | null) => void
@@ -25,6 +25,8 @@ interface Menu {
   x: number
   y: number
   node: TreeNode | null // null => background (root)
+  /** Import/export menu opened from the toolbar rather than a right-click. */
+  transfer?: boolean
 }
 
 export default function ConnectionSidebar({
@@ -40,6 +42,7 @@ export default function ConnectionSidebar({
     renameFolder,
     deleteFolder,
     deleteConnection,
+    importSessions,
     move
   } = useBookmarksStore()
   // Subscribe to the raw arrays so the tree re-renders on any change.
@@ -58,11 +61,19 @@ export default function ConnectionSidebar({
   const [renameValue, setRenameValue] = useState('')
   const [dragId, setDragId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<{ id: string; pos: DropPos } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null)
   const renameRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (renamingId) renameRef.current?.focus()
   }, [renamingId])
+
+  useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => setNotice(null), 8000)
+    return () => window.clearTimeout(timer)
+  }, [notice])
 
   useEffect(() => {
     if (!menu) return
@@ -124,6 +135,59 @@ export default function ConnectionSidebar({
         null
       )
     if (created) beginRename(created.id, created.name)
+  }
+
+  const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
+  const runImport = async (format: BookmarkTransferFormat): Promise<void> => {
+    setMenu(null)
+    if (busy) return
+    setBusy(true)
+    try {
+      const result = await importSessions(format)
+      if (result.cancelled) return
+      if (result.error) {
+        setNotice({ text: t('sidebar.importFailed', { error: result.error }), error: true })
+        return
+      }
+      setNotice({
+        text: t('sidebar.importDone', {
+          imported: result.imported ?? 0,
+          updated: result.updated ?? 0,
+          skipped: result.skipped ?? 0
+        })
+      })
+    } catch (e) {
+      // A rejected invoke (missing IPC handler, stale preload) would otherwise
+      // disappear into an unhandled rejection and look like a dead button.
+      setNotice({ text: t('sidebar.importFailed', { error: errText(e) }), error: true })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const runExport = async (format: BookmarkTransferFormat): Promise<void> => {
+    setMenu(null)
+    if (busy) return
+    setBusy(true)
+    try {
+      const result = await window.api.config.exportSessions(format)
+      if (result.cancelled) return
+      if (result.error) {
+        setNotice({ text: t('sidebar.exportFailed', { error: result.error }), error: true })
+        return
+      }
+      setNotice({
+        text: t('sidebar.exportDone', {
+          exported: result.exported ?? 0,
+          path: result.path ?? ''
+        })
+      })
+    } catch (e) {
+      setNotice({ text: t('sidebar.exportFailed', { error: errText(e) }), error: true })
+    } finally {
+      setBusy(false)
+    }
   }
 
   // --- drag & drop ---
@@ -310,11 +374,40 @@ export default function ConnectionSidebar({
           <button className="toolbar-btn toolbar-btn--icon" title={t('sidebar.newFolder')} onClick={() => void newFolder(null)}>
             <UiIcon name="folder-plus" />
           </button>
+          <button
+            className="toolbar-btn toolbar-btn--icon"
+            title={t('sidebar.transfer')}
+            disabled={busy}
+            onClick={(e) => {
+              // Every other menu here opens from `contextmenu`, so the dismiss
+              // listener on `window` never saw the opening event. Keep this
+              // click off `window` so it can't race that listener.
+              e.stopPropagation()
+              if (menu?.transfer) {
+                setMenu(null)
+                return
+              }
+              const rect = e.currentTarget.getBoundingClientRect()
+              setMenu({ x: rect.left, y: rect.bottom + 4, node: null, transfer: true })
+            }}
+          >
+            <UiIcon name="import" />
+          </button>
           <button className="toolbar-btn toolbar-btn--icon" title={t('sidebar.hide')} onClick={onClose}>
             <UiIcon name="panel-close" />
           </button>
         </div>
       </div>
+
+      {notice && (
+        <div
+          className={`conn-notice ${notice.error ? 'error' : ''}`}
+          role="status"
+          onClick={() => setNotice(null)}
+        >
+          {notice.text}
+        </div>
+      )}
 
       <div
         className="conn-tree"
@@ -353,13 +446,38 @@ export default function ConnectionSidebar({
 
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
-          {menu.node === null && (
+          {menu.node === null && !menu.transfer && (
             <>
               <ContextMenuItem icon="connect" onClick={() => onNewConnection(null)}>
                 {t('sidebar.newConnection')}
               </ContextMenuItem>
               <ContextMenuItem icon="folder-new" onClick={() => void newFolder(null)}>
                 {t('sidebar.newFolder')}
+              </ContextMenuItem>
+            </>
+          )}
+          {menu.transfer && (
+            <>
+              <ContextMenuItem icon="import" onClick={() => void runImport('xml')}>
+                {t('sidebar.importXml')}
+              </ContextMenuItem>
+              <ContextMenuItem
+                icon="export"
+                disabled={connections.length === 0}
+                onClick={() => void runExport('xml')}
+              >
+                {t('sidebar.exportXml')}
+              </ContextMenuItem>
+              <div className="context-menu-divider" role="separator" />
+              <ContextMenuItem icon="import" onClick={() => void runImport('json')}>
+                {t('sidebar.importJson')}
+              </ContextMenuItem>
+              <ContextMenuItem
+                icon="export"
+                disabled={connections.length === 0}
+                onClick={() => void runExport('json')}
+              >
+                {t('sidebar.exportJson')}
               </ContextMenuItem>
             </>
           )}

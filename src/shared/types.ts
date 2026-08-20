@@ -27,6 +27,43 @@ export interface BookmarkFolder {
   order: number
 }
 
+/**
+ * File format for transferring saved connections. `xml` is SuperPuTTY's
+ * Sessions.XML; `json` is this app's own lossless format.
+ */
+export type BookmarkTransferFormat = 'xml' | 'json'
+
+/** Outcome of importing saved sessions from an external client's export file. */
+export interface ImportSessionsResult {
+  /** Connections created by this import. */
+  imported?: number
+  /** Previously imported connections refreshed from the file. */
+  updated?: number
+  /** Entries left untouched: duplicates, non-SSH protocols, or missing a host. */
+  skipped?: number
+  /** Folders created to mirror the source tree. */
+  foldersCreated?: number
+  /** The file that was read. */
+  path?: string
+  /** Full bookmark state after the import, so the renderer can refresh. */
+  folders?: BookmarkFolder[]
+  connections?: ConnectionConfig[]
+  /** True when the user dismissed the file picker. */
+  cancelled?: boolean
+  error?: string
+}
+
+/** Outcome of writing saved connections out to an external client's format. */
+export interface ExportSessionsResult {
+  /** Connections written to the file. */
+  exported?: number
+  /** The file that was written. */
+  path?: string
+  /** True when the user dismissed the file picker. */
+  cancelled?: boolean
+  error?: string
+}
+
 export interface ConnectOptions {
   host: string
   port: number

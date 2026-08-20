@@ -5955,6 +5955,24 @@ select:focus {
   background-clip: padding-box;
 }
 
+.conn-notice {
+  margin: 6px 8px 0;
+  padding: 7px 10px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--signal);
+  background: var(--badge-bg);
+  border: 1px solid var(--badge-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.conn-notice.error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+  background: var(--danger-hover-bg);
+}
+
 .conn-empty {
   color: var(--text-faint);
   font-size: 12px;
@@ -6872,6 +6890,50 @@ select:focus {
   border-right: 1.5px solid currentColor;
   border-top: 1.5px solid currentColor;
   border-radius: 2px 2px 0 0;
+}
+
+/* Chevron dropping into an open tray: pull sessions in from a file. */
+.ui-icon--import::before {
+  left: 50%;
+  top: 2px;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+.ui-icon--import::after {
+  left: 1px;
+  bottom: 1px;
+  width: 12px;
+  height: 4px;
+  border-left: 1.5px solid currentColor;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  border-radius: 0 0 2px 2px;
+}
+
+/* Chevron lifting out of a tray: push sessions out to a file. */
+.ui-icon--export::before {
+  left: 50%;
+  top: 3px;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
+  border-left: 1.5px solid currentColor;
+  border-top: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+.ui-icon--export::after {
+  left: 1px;
+  bottom: 1px;
+  width: 12px;
+  height: 4px;
+  border-left: 1.5px solid currentColor;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  border-radius: 0 0 2px 2px;
 }
 
 .ui-icon--browse::before {

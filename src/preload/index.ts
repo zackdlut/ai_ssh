@@ -17,10 +17,13 @@ import type {
   AITranslateResult,
   AISummarizeRequest,
   BookmarkFolder,
+  BookmarkTransferFormat,
   ConnectionConfig,
   ConnectOptions,
   CopilotChatState,
   ConnectResult,
+  ExportSessionsResult,
+  ImportSessionsResult,
   InstalledSkill,
   SkillInstallResult,
   SkillReadResult,
@@ -167,6 +170,18 @@ const api = {
       id: string
     ): Promise<{ folders: BookmarkFolder[]; connections: ConnectionConfig[] }> =>
       ipcRenderer.invoke('config:deleteFolder', id),
+    /** Read saved connections from a SuperPuTTY XML or a native JSON export. */
+    importSessions: (
+      format: BookmarkTransferFormat,
+      filePath?: string
+    ): Promise<ImportSessionsResult> =>
+      ipcRenderer.invoke('config:importSessions', format, filePath),
+    /** Write saved connections out in the given format. */
+    exportSessions: (
+      format: BookmarkTransferFormat,
+      filePath?: string
+    ): Promise<ExportSessionsResult> =>
+      ipcRenderer.invoke('config:exportSessions', format, filePath),
     getCopilotChats: (): Promise<CopilotChatState | null> =>
       ipcRenderer.invoke('config:getCopilotChats'),
     setCopilotChats: (state: CopilotChatState | null): Promise<CopilotChatState | null> =>

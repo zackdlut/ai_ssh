@@ -33,12 +33,16 @@ npm run typecheck
    - 私钥栏可填**文件路径**（如 `~/.ssh/id_ed25519`）或直接粘贴**私钥内容**。
    - 勾选 “Save this connection locally” 可保存连接，下次快速载入。
 2. 顶部 tab 栏支持多会话：`+` 新建连接，`×` 关闭，状态点显示连接状态。
-3. 右侧 **AI Copilot** 面板（顶栏按钮可开关）：
+3. 左侧 **连接** 侧栏管理已保存的连接与分组；工具栏的 **导入 / 导出** 按钮支持两种格式：
+   - **XML**：SuperPuTTY 的 `Sessions.XML`。导入时 `SessionId` 中的路径（如 `build_servers/host_a`）会还原成同名分组，`ExtraArgs` 里的 `-pw` / `-i` 映射为密码与私钥，非 SSH 协议和缺少 Host 的条目会跳过；导出时反向拼回并输出 CRLF，可直接被 SuperPuTTY 读取。该格式没有 `RemotePath` / `LocalPath` 之外的扩展位，口令短语与使用统计会丢失。
+   - **JSON**：本项目自有格式，无损保存全部字段（含 `passphrase`、排序、使用次数），适合做备份与跨机器迁移。
+   - 两种格式导入时都按**分组名**复用已有分组，并按稳定 id 更新已有连接 —— 重复导入同一文件只会刷新条目，不会产生副本。
+4. 右侧 **AI Copilot** 面板（顶栏按钮可开关）：
    - 输入自然语言，例如「查看占用 8080 端口的进程」「show disk usage by directory」。
    - AI 回答中的命令会渲染成**命令卡片**，可 **Run / Edit / Copy**。
    - 点 **Run** 会把命令注入当前活动终端执行；命中危险模式（`rm -rf`、`mkfs`、`dd` 等）会标红并二次确认。
    - 面板会自动附带当前终端最近 ~40 行输出与主机信息作为上下文。
-4. 顶栏 **Settings** 配置 AI 的 `baseURL` / `apiKey` / `model`（仅保存在本地，仅主进程使用）。
+5. 顶栏 **Settings** 配置 AI 的 `baseURL` / `apiKey` / `model`（仅保存在本地，仅主进程使用）。
 
 ## 架构
 

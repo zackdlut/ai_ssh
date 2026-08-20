@@ -1,11 +1,12 @@
 import { app, ipcMain, dialog, type BrowserWindow } from 'electron'
-import { writeFile } from 'fs/promises'
+import { readFile, writeFile } from 'fs/promises'
 import { basename, join } from 'path'
 import { SshManager } from './ssh/manager'
 import { WslManager } from './wsl/manager'
 import { deleteLocal, listLocal, localHome, renameLocal } from './local/fs'
 import { AIProvider } from './ai/provider'
 import * as config from './config/store'
+import { exportBookmarks, importBookmarks } from './config/transfer'
 import * as skills from './skills/store'
 import { initDebugLogger, logDebug } from './debug/logger'
 import { truncateForDebug } from '../shared/debugSanitize'
@@ -30,10 +31,13 @@ import type {
   SkillInstallResult,
   SkillReadResult,
   BookmarkFolder,
+  BookmarkTransferFormat,
   ConnectionConfig,
   ConnectOptions,
   WslConnectOptions,
   CopilotChatState,
+  ExportSessionsResult,
+  ImportSessionsResult,
   KeybindingsSettings,
   TerminalAppearanceSettings,
   SftpListResult,
@@ -52,6 +56,12 @@ import type {
 
 function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
+}
+
+function transferFilter(format: BookmarkTransferFormat): Electron.FileFilter {
+  return format === 'json'
+    ? { name: 'Connections (JSON)', extensions: ['json'] }
+    : { name: 'SuperPuTTY Sessions', extensions: ['xml', 'XML'] }
 }
 
 export interface IpcManagers {
@@ -479,6 +489,55 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
   ipcMain.handle('config:saveFolder', (_e, folder: BookmarkFolder) => config.saveFolder(folder))
   ipcMain.handle('config:setFolders', (_e, list: BookmarkFolder[]) => config.setFolders(list))
   ipcMain.handle('config:deleteFolder', (_e, id: string) => config.deleteFolder(id))
+  ipcMain.handle(
+    'config:importSessions',
+    async (_e, format: BookmarkTransferFormat, filePath?: string): Promise<ImportSessionsResult> => {
+      let path = filePath
+      if (!path) {
+        const win = getWindow()
+        const dialogOpts = {
+          properties: ['openFile' as const],
+          filters: [transferFilter(format), { name: 'All Files', extensions: ['*'] }]
+        }
+        const result = win
+          ? await dialog.showOpenDialog(win, dialogOpts)
+          : await dialog.showOpenDialog(dialogOpts)
+        if (result.canceled || result.filePaths.length === 0) return { cancelled: true }
+        path = result.filePaths[0]
+      }
+      try {
+        const text = await readFile(path, 'utf8')
+        return { ...importBookmarks(format, text), path }
+      } catch (err) {
+        return { error: errMessage(err), path }
+      }
+    }
+  )
+  ipcMain.handle(
+    'config:exportSessions',
+    async (_e, format: BookmarkTransferFormat, filePath?: string): Promise<ExportSessionsResult> => {
+      let path = filePath
+      if (!path) {
+        const win = getWindow()
+        const dialogOpts = {
+          defaultPath: format === 'json' ? 'connections.json' : 'Sessions.XML',
+          filters: [transferFilter(format), { name: 'All Files', extensions: ['*'] }]
+        }
+        const result = win
+          ? await dialog.showSaveDialog(win, dialogOpts)
+          : await dialog.showSaveDialog(dialogOpts)
+        if (result.canceled || !result.filePath) return { cancelled: true }
+        path = result.filePath
+      }
+      try {
+        const { text, exported } = exportBookmarks(format)
+        await writeFile(path, text, 'utf8')
+        return { exported, path }
+      } catch (err) {
+        return { error: errMessage(err), path }
+      }
+    }
+  )
   ipcMain.handle('config:getCopilotChats', () => config.getCopilotChats())
   ipcMain.handle('config:setCopilotChats', (_e, state: CopilotChatState | null) =>
     config.setCopilotChats(state)

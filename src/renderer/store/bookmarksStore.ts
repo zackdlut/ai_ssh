@@ -1,5 +1,10 @@
 import { create } from 'zustand'
-import type { BookmarkFolder, ConnectionConfig } from '../../shared/types'
+import type {
+  BookmarkFolder,
+  BookmarkTransferFormat,
+  ConnectionConfig,
+  ImportSessionsResult
+} from '../../shared/types'
 
 export type NodeKind = 'folder' | 'connection'
 
@@ -23,6 +28,9 @@ interface BookmarksState {
 
   upsertConnection: (conn: ConnectionConfig) => Promise<void>
   deleteConnection: (id: string) => Promise<void>
+
+  /** Import saved connections from a file the user picks. */
+  importSessions: (format: BookmarkTransferFormat) => Promise<ImportSessionsResult>
 
   /** Move a folder or connection under newParentId, optionally before a sibling. */
   move: (nodeId: string, newParentId: string | null, beforeId?: string | null) => Promise<void>
@@ -134,6 +142,14 @@ export const useBookmarksStore = create<BookmarksState>((set, get) => ({
   deleteConnection: async (id) => {
     const connections = await window.api.config.deleteConnection(id)
     set({ connections })
+  },
+
+  importSessions: async (format) => {
+    const result = await window.api.config.importSessions(format)
+    if (result.folders && result.connections) {
+      set({ folders: result.folders, connections: result.connections })
+    }
+    return result
   },
 
   move: async (nodeId, newParentId, beforeId) => {

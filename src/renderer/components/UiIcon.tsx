@@ -30,6 +30,8 @@ export type UiIconName =
   | 'download'
   | 'upload'
   | 'rename'
+  | 'import'
+  | 'export'
 
 interface Props {
   name: UiIconName
