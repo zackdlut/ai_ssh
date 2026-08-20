@@ -7358,6 +7358,23 @@ select:focus {
   border-radius: 2px 2px 0 0;
 }
 
+.ui-icon--open::before {
+  left: 1px;
+  bottom: 1px;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+.ui-icon--open::after {
+  right: 1px;
+  top: 1px;
+  width: 5px;
+  height: 5px;
+  border-top: 1.5px solid currentColor;
+  border-right: 1.5px solid currentColor;
+}
+
 .ui-icon--rename::before {
   left: 6px;
   top: 1px;
@@ -7621,6 +7638,18 @@ select:focus {
   background: rgba(255, 122, 147, 0.12);
   border: 1px solid rgba(255, 122, 147, 0.32);
   color: var(--danger);
+  font-size: 12.5px;
+  word-break: break-word;
+  flex: none;
+}
+
+.sftp-notice {
+  margin: 10px 12px 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 34%, transparent);
+  color: var(--warn);
   font-size: 12.5px;
   word-break: break-word;
   flex: none;

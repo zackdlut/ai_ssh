@@ -1,15 +1,16 @@
-import { app, ipcMain, dialog, type BrowserWindow } from 'electron'
-import { readFile, writeFile } from 'fs/promises'
-import { basename, join } from 'path'
+import { app, ipcMain, dialog, shell, type BrowserWindow } from 'electron'
+import { mkdir, readFile, writeFile } from 'fs/promises'
+import { basename, dirname, join } from 'path'
 import { SshManager } from './ssh/manager'
 import { WslManager } from './wsl/manager'
-import { deleteLocal, listLocal, localHome, renameLocal } from './local/fs'
+import { deleteLocal, listLocal, localHome, renameLocal, resolveLocal } from './local/fs'
 import { AIProvider } from './ai/provider'
 import * as config from './config/store'
 import { exportBookmarks, importBookmarks } from './config/transfer'
 import * as skills from './skills/store'
 import { initDebugLogger, logDebug } from './debug/logger'
 import { truncateForDebug } from '../shared/debugSanitize'
+import { remoteTempPath } from '../shared/sftpTempPath'
 import type { DebugLogPayload } from '../shared/debugLog'
 import type {
   AIChatRequest,
@@ -55,9 +56,13 @@ import type {
   SftpTransferDoneEvent,
   LocalListResult,
   LocalHomeResult,
+  OpenPathResult,
   PickDirectoryResult,
   SaveFileResult
 } from '../shared/types'
+
+/** Temp subdirectory holding the local copies of remote files opened externally. */
+const SFTP_OPEN_TEMP_DIR = 'ai-augmented-terminal-sftp'
 
 function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
@@ -324,6 +329,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
       }
     }
   )
+  ipcMain.handle('local:openPath', async (_e, path: string): Promise<OpenPathResult> => {
+    try {
+      const resolved = resolveLocal(path)
+      const failure = await shell.openPath(resolved)
+      if (failure) return { error: failure }
+      return { path: resolved }
+    } catch (err) {
+      return { error: errMessage(err) }
+    }
+  })
 
   // --- SFTP ---
   ipcMain.handle('sftp:list', async (_e, sessionId: string, path: string): Promise<SftpListResult> => {
@@ -491,6 +506,51 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
       }
       if (count === 0 && errors.length > 0) return { count: 0, errors, error: errors[0] }
       return { count, errors: errors.length > 0 ? errors : undefined }
+    }
+  )
+  ipcMain.handle(
+    'sftp:openFile',
+    async (
+      e,
+      sessionId: string,
+      remotePath: string,
+      transferId?: string
+    ): Promise<OpenPathResult> => {
+      const fileName = basename(remotePath)
+      const onStep = transferId
+        ? (bytesDone: number, bytesTotal: number): void => {
+            e.sender.send('sftp:transferProgress', {
+              fileName,
+              fileIndex: 1,
+              fileTotal: 1,
+              bytesDone,
+              bytesTotal,
+              transferId,
+              direction: 'download'
+            } satisfies SftpTransferProgressEvent)
+          }
+        : undefined
+      try {
+        const target = remoteTempPath(
+          join(app.getPath('temp'), SFTP_OPEN_TEMP_DIR),
+          sessionId,
+          remotePath
+        )
+        await mkdir(dirname(target), { recursive: true })
+        await ssh.sftpDownload(sessionId, remotePath, target, onStep)
+        const failure = await shell.openPath(target)
+        if (failure) return { path: target, error: failure }
+        return { path: target }
+      } catch (err) {
+        return { error: errMessage(err) }
+      } finally {
+        if (transferId) {
+          e.sender.send('sftp:transferDone', {
+            transferId,
+            direction: 'download'
+          } satisfies SftpTransferDoneEvent)
+        }
+      }
     }
   )
   ipcMain.handle(

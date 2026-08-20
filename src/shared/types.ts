@@ -493,6 +493,13 @@ export interface SftpTransferDoneEvent {
   direction: 'upload' | 'download'
 }
 
+/** Result of handing a file to the OS default application. */
+export interface OpenPathResult {
+  /** Local path that was opened; for a remote file this is the temp copy. */
+  path?: string
+  error?: string
+}
+
 export interface SaveFileResult {
   /** Path written when save succeeded. */
   path?: string

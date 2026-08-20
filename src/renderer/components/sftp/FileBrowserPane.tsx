@@ -33,6 +33,8 @@ export interface FileBrowserPaneProps {
   }
   renderRowActions?: (entry: FileEntry) => React.ReactNode
   onRowContextMenu?: (entry: FileEntry, e: React.MouseEvent) => void
+  /** Called when a non-directory row is double-clicked. */
+  onOpenFile?: (entry: FileEntry) => void
   emptyMessage?: string
 }
 
@@ -52,6 +54,7 @@ export default function FileBrowserPane({
   titleResize,
   renderRowActions,
   onRowContextMenu,
+  onOpenFile,
   emptyMessage
 }: FileBrowserPaneProps): JSX.Element {
   const t = useT()
@@ -106,6 +109,7 @@ export default function FileBrowserPane({
   const handleRowDoubleClick = (entry: FileEntry): void => {
     if (disabled) return
     if (entry.type === 'dir' || entry.type === 'link') onNavigate(entry.path)
+    else onOpenFile?.(entry)
   }
 
   return (

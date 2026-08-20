@@ -32,6 +32,7 @@ export type UiIconName =
   | 'rename'
   | 'import'
   | 'export'
+  | 'open'
 
 interface Props {
   name: UiIconName

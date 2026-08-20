@@ -40,6 +40,7 @@ import type {
   SftpTransferDoneEvent,
   LocalListResult,
   LocalHomeResult,
+  OpenPathResult,
   PickDirectoryResult,
   SaveFileResult,
   SamplerDataEvent,
@@ -105,7 +106,9 @@ const api = {
     rename: (from: string, to: string): Promise<SftpOpResult> =>
       ipcRenderer.invoke('local:rename', from, to),
     delete: (path: string, isDir: boolean): Promise<SftpOpResult> =>
-      ipcRenderer.invoke('local:delete', path, isDir)
+      ipcRenderer.invoke('local:delete', path, isDir),
+    openPath: (path: string): Promise<OpenPathResult> =>
+      ipcRenderer.invoke('local:openPath', path)
   },
   sftp: {
     list: (sessionId: string, path: string): Promise<SftpListResult> =>
@@ -129,6 +132,13 @@ const api = {
       ipcRenderer.invoke('sftp:delete', sessionId, path, isDir),
     download: (sessionId: string, remotePath: string): Promise<SftpTransferResult> =>
       ipcRenderer.invoke('sftp:download', sessionId, remotePath),
+    /** Copy a remote file to temp and hand it to the OS default application. */
+    openFile: (
+      sessionId: string,
+      remotePath: string,
+      transferId?: string
+    ): Promise<OpenPathResult> =>
+      ipcRenderer.invoke('sftp:openFile', sessionId, remotePath, transferId),
     upload: (sessionId: string, remoteDir: string): Promise<SftpTransferResult> =>
       ipcRenderer.invoke('sftp:upload', sessionId, remoteDir),
     uploadPaths: (

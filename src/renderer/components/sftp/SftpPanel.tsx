@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { clampPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from '../../store/aiStore'
 import { useSftpStore } from '../../store/sftpStore'
 import { useTabsStore } from '../../store/tabsStore'
+import { getContextMenuPosition } from '../../lib/contextMenuPosition'
 import { useT } from '../../lib/i18n'
 import type { LocalEntry, SftpEntry, SftpTransferProgress } from '../../../shared/types'
 import ContextMenuItem from '../ContextMenuItem'
@@ -9,7 +10,7 @@ import UiIcon from '../UiIcon'
 import FileBrowserPane, { selectedTransferPaths } from './FileBrowserPane'
 import RemotePathPicker from './RemotePathPicker'
 import SftpPathField from './SftpPathField'
-import { joinPath } from './utils'
+import { formatSize, joinPath } from './utils'
 import type { FileEntry } from './utils'
 
 const LOCAL_PANE_HEIGHT_KEY = 'sftp.localPaneHeight'
@@ -71,10 +72,17 @@ function persistLocalPaneOpen(open: boolean): void {
 
 type SftpContextMenu = {
   pane: 'local' | 'remote'
+  entry: FileEntry
   x: number
   y: number
   selectionCount: number
 }
+
+/**
+ * Opening a remote file copies it locally first, so above this size we ask
+ * rather than silently starting a long transfer.
+ */
+const OPEN_CONFIRM_BYTES = 32 * 1024 * 1024
 
 function transferOverallPercent(progress: SftpTransferProgress): number {
   if (progress.fileTotal <= 0) return 0
@@ -122,22 +130,26 @@ export default function SftpPanel(): JSX.Element {
   const [remoteSelected, setRemoteSelected] = useState<Set<string>>(() => new Set())
 
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [resizing, setResizing] = useState(false)
   const [splitResizing, setSplitResizing] = useState(false)
   const [localPaneHeight, setLocalPaneHeight] = useState(loadLocalPaneHeight)
   const [localPaneOpen, setLocalPaneOpen] = useState(loadLocalPaneOpen)
   const [menu, setMenu] = useState<SftpContextMenu | null>(null)
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
   const [remotePathPickerOpen, setRemotePathPickerOpen] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<SftpTransferProgress | null>(null)
   const [downloadProgress, setDownloadProgress] = useState<SftpTransferProgress | null>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
   const uploadTransferId = useRef<string | null>(null)
   const downloadTransferId = useRef<string | null>(null)
 
   const loadLocal = useCallback(async (path: string): Promise<boolean> => {
     setLocalLoading(true)
     setError(null)
+    setNotice(null)
     const res = await window.api.local.list(path)
     if (res.error) {
       setError(res.error)
@@ -157,6 +169,7 @@ export default function SftpPanel(): JSX.Element {
       if (!sessionId) return false
       setRemoteLoading(true)
       setError(null)
+      setNotice(null)
       const res = await window.api.sftp.list(sessionId, path)
       if (res.error) {
         setError(res.error)
@@ -316,6 +329,62 @@ export default function SftpPanel(): JSX.Element {
     await downloadFiles([entry.path])
   }
 
+  /**
+   * Hand an entry to the OS default application. Directories and links stay
+   * navigation, matching what a double-click on them already does.
+   */
+  const openEntry = async (pane: 'local' | 'remote', entry: FileEntry): Promise<void> => {
+    if (entry.type === 'dir' || entry.type === 'link') {
+      if (pane === 'remote') void loadRemote(entry.path)
+      else void loadLocal(entry.path)
+      return
+    }
+    if (
+      entry.size > OPEN_CONFIRM_BYTES &&
+      !window.confirm(
+        t('sftp.confirmOpenLarge', { name: entry.name, size: formatSize(entry.size) })
+      )
+    )
+      return
+
+    setError(null)
+    setNotice(null)
+
+    if (pane === 'local') {
+      setBusy(true)
+      try {
+        const res = await window.api.local.openPath(entry.path)
+        if (res.error) setError(res.error)
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
+
+    if (!sessionId) return
+    const transferId = crypto.randomUUID()
+    downloadTransferId.current = transferId
+    setBusy(true)
+    setDownloadProgress({
+      fileName: entry.name,
+      fileIndex: 1,
+      fileTotal: 1,
+      bytesDone: 0,
+      bytesTotal: entry.size
+    })
+    try {
+      const res = await window.api.sftp.openFile(sessionId, entry.path, transferId)
+      if (res.error) setError(res.error)
+      else setNotice(t('sftp.openedRemoteCopy', { name: entry.name }))
+    } finally {
+      if (downloadTransferId.current === transferId) {
+        downloadTransferId.current = null
+        setDownloadProgress(null)
+      }
+      setBusy(false)
+    }
+  }
+
   const renameRemote = async (entry: { name: string; path: string }): Promise<void> => {
     if (!sessionId || !remoteCwd) return
     const name = window.prompt(t('sftp.promptRename'), entry.name)
@@ -452,7 +521,10 @@ export default function SftpPanel(): JSX.Element {
 
   useEffect(() => {
     if (!menu) return
-    const close = (): void => setMenu(null)
+    const close = (): void => {
+      setMenu(null)
+      setMenuPos(null)
+    }
     window.addEventListener('click', close)
     window.addEventListener('scroll', close, true)
     window.addEventListener('wheel', close)
@@ -463,6 +535,15 @@ export default function SftpPanel(): JSX.Element {
       window.removeEventListener('wheel', close)
       window.removeEventListener('resize', close)
     }
+  }, [menu])
+
+  useLayoutEffect(() => {
+    if (!menu || !menuRef.current) {
+      setMenuPos(null)
+      return
+    }
+    const rect = menuRef.current.getBoundingClientRect()
+    setMenuPos(getContextMenuPosition(menu.x, menu.y, rect.width, rect.height))
   }, [menu])
 
   const openRowContextMenu = (
@@ -476,8 +557,10 @@ export default function SftpPanel(): JSX.Element {
     e.stopPropagation()
     const nextSelected = selected.has(entry.path) ? selected : new Set([entry.path])
     if (!selected.has(entry.path)) onSelectedChange(nextSelected)
+    setMenuPos(null)
     setMenu({
       pane,
+      entry,
       x: e.clientX,
       y: e.clientY,
       selectionCount: selectedTransferPaths(nextSelected, entries).length
@@ -487,6 +570,8 @@ export default function SftpPanel(): JSX.Element {
   const canUploadFromMenu =
     !busy && !!sessionId && !!remoteCwd && localPaneOpen && (menu?.selectionCount ?? 0) > 0
   const canDownloadFromMenu = !busy && !!sessionId && !!localCwd && (menu?.selectionCount ?? 0) > 0
+  const menuEntryIsDir = menu ? menu.entry.type === 'dir' || menu.entry.type === 'link' : false
+  const canOpenFromMenu = !busy && (menu?.pane === 'local' || !!sessionId)
 
   return (
     <div className="side-panel" style={{ width: panelWidth }}>
@@ -526,6 +611,7 @@ export default function SftpPanel(): JSX.Element {
       </div>
 
       {error && <div className="sftp-error">{error}</div>}
+      {notice && <div className="sftp-notice">{notice}</div>}
 
       <div className="sftp-body" ref={bodyRef}>
         <div className="sftp-pane-slot sftp-pane-slot-remote">
@@ -559,6 +645,7 @@ export default function SftpPanel(): JSX.Element {
               onRowContextMenu={(entry, e) =>
                 openRowContextMenu('remote', entry, remoteSelected, remoteEntries, setRemoteSelected, e)
               }
+              onOpenFile={(entry) => void openEntry('remote', entry)}
               renderRowActions={(entry) => (
                 <>
                   <button
@@ -616,6 +703,7 @@ export default function SftpPanel(): JSX.Element {
               onRowContextMenu={(entry, e) =>
                 openRowContextMenu('local', entry, localSelected, localEntries, setLocalSelected, e)
               }
+              onOpenFile={(entry) => void openEntry('local', entry)}
               titleResize={{
                 resizing: splitResizing,
                 tip: t('sftp.paneSplitTip'),
@@ -696,7 +784,25 @@ export default function SftpPanel(): JSX.Element {
       </div>
 
       {menu && (
-        <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
+        <div
+          ref={menuRef}
+          className="context-menu"
+          style={{
+            left: menuPos?.x ?? menu.x,
+            top: menuPos?.y ?? menu.y,
+            visibility: menuPos ? 'visible' : 'hidden'
+          }}
+        >
+          <ContextMenuItem
+            icon={menuEntryIsDir ? 'folder' : 'open'}
+            disabled={!canOpenFromMenu}
+            onClick={() => {
+              setMenu(null)
+              void openEntry(menu.pane, menu.entry)
+            }}
+          >
+            {menuEntryIsDir ? t('sftp.openFolder') : t('sftp.open')}
+          </ContextMenuItem>
           {menu.pane === 'local' && (
             <ContextMenuItem
               icon="upload"
