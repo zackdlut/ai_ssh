@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto'
 import type { BrowserWindow } from 'electron'
 import type {
   ConnectResult,
+  SamplerStartResult,
   SshDataEvent,
   SshStatusEvent,
   WslConnectOptions,
@@ -25,6 +26,9 @@ interface PtyLike {
 
 interface Session {
   proc: PtyLike
+  /** Launch options, replayed when a chart sampler needs its own process. */
+  distro?: string
+  user?: string
 }
 
 /**
@@ -34,6 +38,8 @@ interface Session {
  */
 export class WslManager {
   private sessions = new Map<string, Session>()
+  /** Long-running chart sampler processes, keyed by sampler id. */
+  private samplers = new Map<string, PtyLike>()
 
   constructor(private getWindow: () => BrowserWindow | null) {}
 
@@ -100,7 +106,7 @@ export class WslManager {
         env: process.env as Record<string, string>
       })
 
-      this.sessions.set(sessionId, { proc })
+      this.sessions.set(sessionId, { proc, distro: opts.distro, user: opts.user })
 
       proc.onData((data: string) => {
         this.emitData({ sessionId, data })
@@ -144,11 +150,73 @@ export class WslManager {
     this.cleanup(sessionId)
   }
 
+  // --- Chart samplers ----------------------------------------------------
+
+  /**
+   * Run a metric collector in a separate WSL process, mirroring
+   * `SshManager.startSampler`: the chart gets its own stream instead of sharing
+   * the user's visible shell. A pty (rather than a plain pipe) is used for the
+   * same reason as over SSH — a piped stdout makes `vmstat 1` block-buffer,
+   * which would stall the live chart for seconds at a time.
+   */
+  async startSampler(
+    sessionId: string,
+    samplerId: string,
+    command: string
+  ): Promise<SamplerStartResult> {
+    const session = this.sessions.get(sessionId)
+    if (!session) return { error: 'Session not found.' }
+    if (this.samplers.has(samplerId)) this.stopSampler(samplerId)
+
+    try {
+      const pty = await loadPty()
+      const args: string[] = []
+      if (session.distro) args.push('-d', session.distro)
+      if (session.user) args.push('-u', session.user)
+      args.push('--', 'sh', '-c', command)
+
+      const proc = pty.spawn('wsl.exe', args, {
+        name: 'dumb',
+        // Wide enough that column layouts never wrap.
+        cols: 250,
+        rows: 40,
+        cwd: process.env.USERPROFILE || process.env.HOME || undefined,
+        env: process.env as Record<string, string>
+      })
+      this.samplers.set(samplerId, proc)
+
+      proc.onData((data: string) => this.send('sampler:data', { samplerId, data }))
+      proc.onExit(() => {
+        this.samplers.delete(samplerId)
+        this.send('sampler:end', { samplerId })
+      })
+      return {}
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      this.send('sampler:end', { samplerId, error: message })
+      return { error: message }
+    }
+  }
+
+  stopSampler(samplerId: string): void {
+    const proc = this.samplers.get(samplerId)
+    if (!proc) return
+    this.samplers.delete(samplerId)
+    try {
+      proc.kill()
+    } catch {
+      // already exited
+    }
+  }
+
   private cleanup(sessionId: string): void {
     this.sessions.delete(sessionId)
   }
 
   disposeAll(): void {
+    for (const id of [...this.samplers.keys()]) {
+      this.stopSampler(id)
+    }
     for (const id of [...this.sessions.keys()]) {
       this.close(id)
     }

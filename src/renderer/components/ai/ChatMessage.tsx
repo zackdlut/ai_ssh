@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import CommandCard from './CommandCard'
 import ToolCallCard from './ToolCallCard'
 import Markdown from './Markdown'
@@ -200,6 +200,30 @@ export default function ChatMessage({ message }: Props): JSX.Element {
   const setChartSnapshot = useAIStore((s) => s.setChartSnapshot)
   const t = useT()
 
+  /**
+   * One stable callback per (tab, message) instead of a fresh closure per
+   * segment on every render: ChartBlock keys its capture lifecycle off this
+   * prop, so an unstable identity restarted every live chart whenever anything
+   * in the store changed.
+   */
+  const chartSnapshotSetters = useRef(new Map<string, (s: ChartSnapshot) => void>())
+  const snapshotSetter = useCallback(
+    (key: string): ((s: ChartSnapshot) => void) | undefined => {
+      if (!activeChatTabId) return undefined
+      const cache = chartSnapshotSetters.current
+      let fn = cache.get(key)
+      if (!fn) {
+        fn = (snap: ChartSnapshot) => setChartSnapshot(activeChatTabId, message.id, key, snap)
+        cache.set(key, fn)
+      }
+      return fn
+    },
+    [activeChatTabId, message.id, setChartSnapshot]
+  )
+  useEffect(() => {
+    chartSnapshotSetters.current.clear()
+  }, [activeChatTabId, message.id])
+
   if (message.isContextSummary) {
     return (
       <div className="chat-msg assistant context-summary-msg">
@@ -293,9 +317,7 @@ export default function ChatMessage({ message }: Props): JSX.Element {
               message.boundTabId,
               message.streaming,
               message.chartSnapshots?.[String(i)],
-              activeChatTabId
-                ? (snapshot) => setChartSnapshot(activeChatTabId, message.id, String(i), snapshot)
-                : undefined
+              snapshotSetter(String(i))
             )
           )
         )}

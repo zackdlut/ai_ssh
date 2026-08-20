@@ -42,6 +42,9 @@ import type {
   LocalHomeResult,
   PickDirectoryResult,
   SaveFileResult,
+  SamplerDataEvent,
+  SamplerEndEvent,
+  SamplerStartResult,
   SshDataEvent,
   SshExecOptions,
   SshExecResult,
@@ -81,6 +84,13 @@ const api = {
     abortExec: (execId: string): void => ipcRenderer.send('ssh:execAbort', execId),
     onData: (cb: (e: SshDataEvent) => void): Unsubscribe => on('ssh:data', cb),
     onStatus: (cb: (e: SshStatusEvent) => void): Unsubscribe => on('ssh:status', cb)
+  },
+  sampler: {
+    start: (sessionId: string, samplerId: string, command: string): Promise<SamplerStartResult> =>
+      ipcRenderer.invoke('sampler:start', sessionId, samplerId, command),
+    stop: (samplerId: string): void => ipcRenderer.send('sampler:stop', samplerId),
+    onData: (cb: (e: SamplerDataEvent) => void): Unsubscribe => on('sampler:data', cb),
+    onEnd: (cb: (e: SamplerEndEvent) => void): Unsubscribe => on('sampler:end', cb)
   },
   wsl: {
     list: (): Promise<WslDistro[]> => ipcRenderer.invoke('wsl:list'),

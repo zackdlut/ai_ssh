@@ -126,6 +126,27 @@ export interface SshExecOptions {
   timeoutMs?: number
 }
 
+/**
+ * A chart sampler runs a metric collector (vmstat, ping, …) on a channel of its
+ * own so its output never touches the user's interactive shell. Chunks stream
+ * back keyed by sampler id rather than session id, because one session can back
+ * several charts at once.
+ */
+export interface SamplerDataEvent {
+  samplerId: string
+  data: string
+}
+
+/** The sampler's process exited (normally, on stop, or on transport failure). */
+export interface SamplerEndEvent {
+  samplerId: string
+  error?: string
+}
+
+export interface SamplerStartResult {
+  error?: string
+}
+
 export type ModelProfile = 'default' | 'fast' | 'medium' | 'high' | 'custom'
 
 export interface AISettings {

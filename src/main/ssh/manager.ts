@@ -20,6 +20,7 @@ import type {
   SftpReadText,
   SftpStat,
   SftpTransferProgress,
+  SamplerStartResult,
   SshDataEvent,
   SshExecResult,
   SshStatusEvent
@@ -94,6 +95,8 @@ export class SshManager {
   private sessions = new Map<string, Session>()
   /** In-flight exec channels, keyed by the renderer's exec id, for abort. */
   private execChannels = new Map<string, ClientChannel>()
+  /** Long-running chart sampler channels, keyed by sampler id. */
+  private samplers = new Map<string, ClientChannel>()
   /** Exec ids aborted before (or while) their channel opened. */
   private abortedExecs = new Set<string>()
 
@@ -317,6 +320,72 @@ export class SshManager {
       setTimeout(() => this.abortedExecs.delete(execId), ABORT_FLAG_TTL_MS)
       return
     }
+    try {
+      stream.signal('INT')
+    } catch {
+      // ignore
+    }
+    try {
+      stream.close()
+    } catch {
+      // ignore
+    }
+  }
+
+  // --- Chart samplers ----------------------------------------------------
+
+  /**
+   * Start a long-running metric collector on its own channel and stream its
+   * output back as `sampler:data`.
+   *
+   * Charts used to be fed by typing the collection command into the user's
+   * interactive shell and listening to the terminal stream. That polluted the
+   * visible terminal, fought with the user's keystrokes, and required sending
+   * Ctrl-C to stop — which could kill whatever the user had in the foreground.
+   * A private channel keeps the collector invisible and independently killable.
+   *
+   * A pty is requested deliberately: with a pipe on stdout, glibc switches to
+   * full buffering and `vmstat 1` would arrive in 4 KB bursts many seconds
+   * apart, which defeats the point of a live chart. A tty is line-buffered.
+   */
+  startSampler(sessionId: string, samplerId: string, command: string): Promise<SamplerStartResult> {
+    const session = this.sessions.get(sessionId)
+    if (!session) return Promise.resolve({ error: 'Session not found.' })
+    if (this.samplers.has(samplerId)) this.stopSampler(samplerId)
+
+    return new Promise<SamplerStartResult>((resolve) => {
+      session.client.exec(
+        command,
+        // A wide, dumb terminal: no line wrapping to break up column layouts,
+        // and no cursor addressing to strip back out.
+        { pty: { rows: 40, cols: 250, term: 'dumb', height: 0, width: 0 } },
+        (err, stream) => {
+          if (err) return resolve({ error: err.message })
+          this.samplers.set(samplerId, stream)
+
+          const emit = (chunk: Buffer): void =>
+            this.send('sampler:data', { samplerId, data: chunk.toString('utf8') })
+          stream.on('data', emit)
+          stream.stderr.on('data', emit)
+          stream.on('close', () => {
+            this.samplers.delete(samplerId)
+            this.send('sampler:end', { samplerId })
+          })
+          stream.on('error', (streamErr: Error) => {
+            this.samplers.delete(samplerId)
+            this.send('sampler:end', { samplerId, error: streamErr.message })
+          })
+          resolve({})
+        }
+      )
+    })
+  }
+
+  /** Stop a sampler. Same best-effort signal-then-close dance as `abortExec`. */
+  stopSampler(samplerId: string): void {
+    const stream = this.samplers.get(samplerId)
+    if (!stream) return
+    this.samplers.delete(samplerId)
     try {
       stream.signal('INT')
     } catch {
@@ -721,6 +790,9 @@ export class SshManager {
   }
 
   disposeAll(): void {
+    for (const id of [...this.samplers.keys()]) {
+      this.stopSampler(id)
+    }
     for (const id of [...this.sessions.keys()]) {
       this.close(id)
     }

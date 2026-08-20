@@ -3917,6 +3917,30 @@ select:focus {
   color: var(--text-faint);
   border-top: 1px solid var(--line);
 }
+.chart-hint.chart-warn {
+  color: var(--warn);
+}
+.chart-raw-toggle {
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.chart-raw {
+  margin: 6px 0 0;
+  max-height: 140px;
+  padding: 6px 8px;
+  overflow: auto;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-dim);
+  background: var(--md-pre-bg);
+  border-radius: 4px;
+}
 .preview-error {
   padding: 0;
 }

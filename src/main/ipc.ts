@@ -34,6 +34,7 @@ import type {
   BookmarkTransferFormat,
   ConnectionConfig,
   ConnectOptions,
+  SamplerStartResult,
   SshExecOptions,
   SshExecResult,
   WslConnectOptions,
@@ -141,6 +142,32 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
     logDebug({ category: 'ipc', message: 'ssh:close', sessionId_ssh: sessionId })
     if (wsl.has(sessionId)) wsl.close(sessionId)
     else ssh.close(sessionId)
+  })
+
+  // --- Chart samplers ---
+  // Live charts collect metrics on a private channel so the user's visible
+  // shell is never written to (see SshManager.startSampler).
+  ipcMain.handle(
+    'sampler:start',
+    (_e, sessionId: string, samplerId: string, command: string): Promise<SamplerStartResult> => {
+      logDebug({
+        category: 'ipc',
+        message: 'sampler:start',
+        sessionId_ssh: sessionId,
+        traceId: samplerId,
+        data: { command: truncateForDebug(command) }
+      })
+      return wsl.has(sessionId)
+        ? wsl.startSampler(sessionId, samplerId, command)
+        : ssh.startSampler(sessionId, samplerId, command)
+    }
+  )
+  ipcMain.on('sampler:stop', (_e, samplerId: string) => {
+    logDebug({ category: 'ipc', message: 'sampler:stop', traceId: samplerId })
+    // The id is unique across both managers, so stopping an unknown id is a
+    // no-op on the other one.
+    ssh.stopSampler(samplerId)
+    wsl.stopSampler(samplerId)
   })
 
   // --- WSL (local pseudo-terminal) ---

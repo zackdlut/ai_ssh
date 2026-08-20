@@ -530,8 +530,8 @@ const zh = {
   'chart.renderError': '无法渲染该图表配置：{error}',
   'chart.noBinding': '未绑定终端。请在输入中使用 @terminal 引用当前终端，再让图表订阅其实时输出。',
   'chart.liveHint': '实时图表：在绑定的终端中运行采集命令即可持续刷新。',
-  'chart.autoRunHint': '已自动在终端运行采集命令，正在实时绘制…',
-  'chart.manualStartHint': '该命令可能有风险，未自动运行。点击「开始」在终端执行采集命令。',
+  'chart.autoRunHint': '正在独立通道运行采集命令并实时绘制（不会写入你的终端）…',
+  'chart.manualStartHint': '该命令可能有风险，未自动运行。点击「开始」在独立通道执行采集命令。',
   'chart.stopped': '已停止采集。点击「重新开始」再次运行采集命令。',
   'chart.start': '开始',
   'chart.stop': '停止',
@@ -539,11 +539,17 @@ const zh = {
   'chart.recapture': '重新采集',
   'chart.refresh': '刷新',
   'chart.staticHint': '快照图表：在终端运行上方命令后会自动更新，也可点击「刷新」重新解析。',
-  'chart.staticAutoHint': '快照图表：已自动运行采集命令并解析本次输出，点击「重新采集」可重新运行。',
-  'chart.dangerStart': '该命令可能有风险：\n\n{command}\n\n确定在终端中运行以采集图表数据吗？',
+  'chart.staticAutoHint':
+    '快照图表：已在独立通道运行采集命令并解析本次输出，点击「重新采集」可重新运行。',
+  'chart.dangerStart': '该命令可能有风险：\n\n{command}\n\n确定运行它来采集图表数据吗？',
   'chart.generating': '正在生成图表配置…',
   'chart.genError': '生成图表配置失败：{error}',
   'chart.genTimeout': '生成图表配置超时（模型无响应）。请重试，或确认 AI 服务可用。',
+  'chart.samplerError': '采集通道启动失败：{error}',
+  'chart.stats': '已接收 {lines} 行 · 绘制 {points} 点。',
+  'chart.noMatch': '没有一行输出匹配上取数规则，请检查采集命令的列名是否与规则一致。',
+  'chart.showRaw': '查看原始行',
+  'chart.matchRule': '取数规则：{rules}',
 
   'chat.preview': '预览',
   'chat.source': '源码',
@@ -1094,9 +1100,10 @@ const en: Record<keyof typeof zh, string> = {
   'chart.noBinding':
     'No terminal bound. Use @terminal in your message to reference the active terminal, then let the chart subscribe to its live output.',
   'chart.liveHint': 'Live chart: run a collection command in the bound terminal to keep refreshing.',
-  'chart.autoRunHint': 'Auto-ran the collection command in the terminal; drawing live…',
+  'chart.autoRunHint':
+    'Running the collection command on a private channel (your terminal is untouched); drawing live…',
   'chart.manualStartHint':
-    'This command may be risky, so it was not auto-run. Click "Start" to run it in the terminal.',
+    'This command may be risky, so it was not auto-run. Click "Start" to run it on a private channel.',
   'chart.stopped': 'Capture stopped. Click "Restart" to run the collection command again.',
   'chart.start': 'Start',
   'chart.stop': 'Stop',
@@ -1106,12 +1113,17 @@ const en: Record<keyof typeof zh, string> = {
   'chart.staticHint':
     'Snapshot chart: it updates automatically after you run the command above in the terminal, or click "Refresh" to re-parse.',
   'chart.staticAutoHint':
-    'Snapshot chart: auto-ran the collection command and parsed this run\'s output. Click "Re-capture" to run it again.',
-  'chart.dangerStart':
-    'This command may be risky:\n\n{command}\n\nRun it in the terminal to collect chart data?',
+    'Snapshot chart: ran the collection command on a private channel and parsed its output. Click "Re-capture" to run it again.',
+  'chart.dangerStart': 'This command may be risky:\n\n{command}\n\nRun it to collect chart data?',
   'chart.generating': 'Generating chart config…',
   'chart.genError': 'Failed to generate chart config: {error}',
   'chart.genTimeout': 'Chart config generation timed out (no model response). Retry, or check the AI service.',
+  'chart.samplerError': 'Could not start the collection channel: {error}',
+  'chart.stats': 'Received {lines} lines · plotted {points} points.',
+  'chart.noMatch':
+    'No output line matched the extraction rules — check that the command prints the columns the rules reference.',
+  'chart.showRaw': 'Show raw lines',
+  'chart.matchRule': 'Extraction rules: {rules}',
 
   'chat.preview': 'Preview',
   'chat.source': 'Source',
