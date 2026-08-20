@@ -49,7 +49,11 @@ npm run typecheck
 
 ## 环境注意事项
 
+- **原生模块**：`postinstall` 会执行 `electron-builder install-app-deps`，把 `node-pty`、`cpu-features` 按 Electron 的 ABI 重新编译。跳过这步会让 `cpu-features` 静默加载失败，`ssh2` 退化到较慢的加密路径。
+- **`ssh2` 的可选加密绑定在 Electron 下不可用**（`bindingAvailable === false`），这是预期行为：Electron 用 BoringSSL，缺少该绑定依赖的 OpenSSL 符号（如 `ERR_set_mark`）。请勿强行为 Electron 编译它——能加载但一调用就会崩溃整个进程。`ssh2` 已自动回退到 Node 内置 crypto，并把 BoringSSL 不支持的 `chacha20-poly1305` 从协商列表中排除，实际使用 AES-GCM / AES-CTR。
 - **WSL2 / 无头环境**：已在主进程调用 `app.disableHardwareAcceleration()` 以规避 GPU 进程崩溃。
+  - Electron 二进制依赖系统库，缺失时会报 `libnss3.so: cannot open shared object file`：
+    `sudo apt-get install -y libnss3 libnspr4 libasound2t64`
 - 若环境中设置了 `ELECTRON_RUN_AS_NODE=1`（部分远程/容器环境会注入），Electron 会以纯 Node 模式运行导致 `app` 为 undefined。运行前请确保未设置该变量：`env -u ELECTRON_RUN_AS_NODE npm run dev`。
 
 
