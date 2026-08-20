@@ -1,5 +1,6 @@
 import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'path'
+import { readBootWindowBackground } from './config/bootTheme'
 import type { IpcManagers } from './ipc'
 
 // A terminal app needs no GPU acceleration; disabling it avoids GPU process
@@ -23,7 +24,9 @@ function createWindow(): void {
     show: false,
     title: 'AI Terminal',
     icon: iconPath,
-    backgroundColor: '#0c0f18',
+    // The renderer paints over this, but it is what the user sees while the
+    // first frame is still pending — so it has to follow the saved theme.
+    backgroundColor: readBootWindowBackground(),
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

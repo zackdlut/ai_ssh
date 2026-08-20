@@ -10,11 +10,13 @@
     <link rel="icon" type="image/svg+xml" href="./icon.svg" />
     <title>AI Terminal</title>
     <style>
+      /* No background here on purpose: until main.tsx applies the saved theme
+         the page stays transparent so the window's own colour shows through,
+         which avoids flashing one theme's background over the other's. */
       html,
       body {
         margin: 0;
         height: 100%;
-        background: #0c0f18;
       }
       #root {
         min-height: 100%;
@@ -24,7 +26,8 @@
         align-items: center;
         justify-content: center;
         min-height: 100vh;
-        color: #8b95a8;
+        /* Mid grey so the boot label stays legible on either theme's base. */
+        color: #6f7789;
         font: 500 14px/1.4 system-ui, sans-serif;
         letter-spacing: 0.04em;
       }

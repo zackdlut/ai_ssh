@@ -282,6 +282,14 @@ body {
   background-attachment: fixed;
 }
 
+/* The variables above default to Aurora, but main.tsx may not have applied the
+   saved theme yet when the first frame paints. Staying transparent until then
+   lets the window background — derived from the same setting in the main
+   process — show through, instead of flashing dark ink at Dawn users. */
+html:not([data-theme]) body {
+  background: none;
+}
+
 /* Faint film grain so flat panels gain texture instead of looking plastic. */
 body::before {
   content: '';
