@@ -4,23 +4,36 @@ directories:
   output: release
   buildResources: build
 npmRebuild: false
-# Renderer deps are bundled into out/ by electron-vite; only ship main-process runtime deps.
+# `npm run build` writes platform-agnostic out/. `build:win` / `build:linux` pack it.
+#
+# Include only out/ + package.json + the window icon. Production node_modules are
+# collected separately. Every `!` pattern is also applied to that collector —
+# never add `!**/*` or native deps will be dropped.
 files:
-  - '!**/*'
   - out/**/*
   - package.json
-  - node_modules/**/*
-  # Shipped inside the app so BrowserWindow resolves the same relative path in
-  # dev and when packaged.
   - build/icon.png
+  - '!src/**'
+  - '!docs/**'
+  - '!scripts/**'
+  - '!**/node_gyp_bins/**'
+  - '!**/obj.target/**'
+  - '!**/node_modules/openai/src/**'
+  - '!**/node_modules/node-pty/{src,deps,third_party,scripts,typings}/**'
+  - '!**/node_modules/cpu-features/{src,test,deps}/**'
+  - '!**/node_modules/{sharp,@img,png-to-ico,pngjs}/**'
+asarUnpack:
+  - '**/*.{node,dll,exe}'
 electronLanguages:
   - en-US
   - zh-CN
-asarUnpack:
-  - "**/node_modules/ssh2/**"
-  - "**/node_modules/cpu-features/**"
 linux:
   icon: build/icon.png
+  # A positive pattern is required: linux.files is merged as matcher[0], and an
+  # excludes-only matcher would make electron-builder inject `**/*` (shipping src/).
+  files:
+    - package.json
+    - '!**/node_modules/node-pty/prebuilds/**'
   target:
     - target: zip
       arch:
@@ -30,6 +43,11 @@ linux:
 win:
   icon: build/icon.ico
   signAndEditExecutable: false
+  files:
+    - package.json
+    - '!**/node_modules/node-pty/prebuilds/darwin-*/**'
+    - '!**/node_modules/node-pty/prebuilds/win32-arm64/**'
+    - '!**/node_modules/node-pty/build/**'
   target:
     - target: zip
       arch:

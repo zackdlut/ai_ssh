@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ECharts } from 'echarts'
+import { init, use } from 'echarts/core'
+import type { ECharts } from 'echarts/core'
+import { LineChart, BarChart, PieChart, ScatterChart } from 'echarts/charts'
+import {
+  TitleComponent,
+  TooltipComponent,
+  GridComponent,
+  LegendComponent
+} from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
 import { parseChartSpec, type ChartSpec } from '../../lib/chartSpec'
 import { createIngestor, type IngestStats } from '../../lib/chartIngest'
 import { matchChartTemplate } from '../../lib/chartTemplates'
@@ -11,32 +20,17 @@ import { useTabsStore } from '../../store/tabsStore'
 import { useT } from '../../lib/i18n'
 import type { ChartSnapshot } from '../../../shared/types'
 
-type EchartsApi = typeof import('echarts/core')
-let echartsPromise: Promise<EchartsApi> | null = null
-async function loadEcharts(): Promise<EchartsApi> {
-  if (!echartsPromise) {
-    echartsPromise = Promise.all([
-      import('echarts/core'),
-      import('echarts/charts'),
-      import('echarts/components'),
-      import('echarts/renderers')
-    ]).then(([core, charts, components, renderers]) => {
-      core.use([
-        charts.LineChart,
-        charts.BarChart,
-        charts.PieChart,
-        charts.ScatterChart,
-        components.TitleComponent,
-        components.TooltipComponent,
-        components.GridComponent,
-        components.LegendComponent,
-        renderers.CanvasRenderer
-      ])
-      return core
-    })
-  }
-  return echartsPromise
-}
+use([
+  LineChart,
+  BarChart,
+  PieChart,
+  ScatterChart,
+  TitleComponent,
+  TooltipComponent,
+  GridComponent,
+  LegendComponent,
+  CanvasRenderer
+])
 
 interface Props {
   /**
@@ -490,35 +484,25 @@ export default function ChartBlock({
   useEffect(() => {
     const el = containerRef.current
     if (!el || !canvasVisible) return
-    let cancelled = false
-    let chart: ECharts | null = null
-    let resizeObserver: ResizeObserver | null = null
-    let visibilityObserver: IntersectionObserver | null = null
+    const chart = init(el, appTheme === 'dawn' ? undefined : 'dark', { renderer: 'canvas' })
+    chartRef.current = chart
 
-    void (async () => {
-      const echarts = await loadEcharts()
-      if (cancelled || !containerRef.current) return
-      chart = echarts.init(el, appTheme === 'dawn' ? undefined : 'dark', { renderer: 'canvas' })
-      chartRef.current = chart
-
-      const resize = (): void => {
-        if (el.clientWidth > 0) chart?.resize()
-      }
-      requestAnimationFrame(resize)
-      resizeObserver = new ResizeObserver(resize)
-      resizeObserver.observe(el)
-      visibilityObserver = new IntersectionObserver((entries) => {
-        if (entries[0]?.isIntersecting) resize()
-      })
-      visibilityObserver.observe(el)
-      setChartEpoch((n) => n + 1)
-    })()
+    const resize = (): void => {
+      if (el.clientWidth > 0) chart.resize()
+    }
+    requestAnimationFrame(resize)
+    const resizeObserver = new ResizeObserver(resize)
+    resizeObserver.observe(el)
+    const visibilityObserver = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting) resize()
+    })
+    visibilityObserver.observe(el)
+    setChartEpoch((n) => n + 1)
 
     return () => {
-      cancelled = true
-      visibilityObserver?.disconnect()
-      resizeObserver?.disconnect()
-      chart?.dispose()
+      visibilityObserver.disconnect()
+      resizeObserver.disconnect()
+      chart.dispose()
       chartRef.current = null
     }
   }, [appTheme, canvasVisible])

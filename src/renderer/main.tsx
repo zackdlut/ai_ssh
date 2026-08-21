@@ -1,24 +1,24 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
-// Load only the regular weight at boot; heavier weights are fetched after first paint.
-import '@fontsource/sora/400.css'
-import '@fontsource/jetbrains-mono/400.css'
+// Latin-only subsets: UI is en/zh, terminal CJK comes from Noto. Skip greek /
+// cyrillic / vietnamese / latin-ext that the full @fontsource CSS would ship.
+import '@fontsource/sora/latin-400.css'
+import '@fontsource/jetbrains-mono/latin-400.css'
 import './styles/global.css'
 import { applyTheme, readCachedTheme } from './lib/themes'
 import { readCachedLocale } from './lib/i18n/locale'
 
-void import('@fontsource/sora/500.css')
-void import('@fontsource/sora/600.css')
-void import('@fontsource/sora/700.css')
-void import('@fontsource/jetbrains-mono/500.css')
-void import('@fontsource/jetbrains-mono/700.css')
+void import('@fontsource/sora/latin-500.css')
+void import('@fontsource/sora/latin-600.css')
+void import('@fontsource/sora/latin-700.css')
+void import('@fontsource/jetbrains-mono/latin-500.css')
+void import('@fontsource/jetbrains-mono/latin-700.css')
 
 const locale = readCachedLocale()
-// Load CJK fonts only when the UI is in Chinese — saves ~6 MB in the default bundle.
+// CJK only when the UI is Chinese. One weight: 500 is synthesized from 400.
 if (locale === 'zh') {
   void import('@fontsource/noto-sans-sc/chinese-simplified-400.css')
-  void import('@fontsource/noto-sans-sc/chinese-simplified-500.css')
 }
 
 applyTheme(readCachedTheme())
