@@ -6,13 +6,14 @@ directories:
 npmRebuild: false
 # `npm run build` writes platform-agnostic out/. `build:win` / `build:linux` pack it.
 #
-# Include only out/ + package.json + the window icon. Production node_modules are
+# Include only out/ + package.json + window icons. Production node_modules are
 # collected separately. Every `!` pattern is also applied to that collector —
 # never add `!**/*` or native deps will be dropped.
 files:
   - out/**/*
   - package.json
   - build/icon.png
+  - build/icon.ico
   - '!src/**'
   - '!docs/**'
   - '!scripts/**'
@@ -40,6 +41,8 @@ linux:
         - x64
   artifactName: ${productName}-${version}-linux-${arch}.${ext}
   category: Utility
+# Wine is unavailable on this WSL host, so rcedit cannot run. Keep
+# signAndEditExecutable false and stamp build/icon.ico in afterPack instead.
 win:
   icon: build/icon.ico
   signAndEditExecutable: false
@@ -57,3 +60,4 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+afterPack: ./scripts/win-set-icon.cjs

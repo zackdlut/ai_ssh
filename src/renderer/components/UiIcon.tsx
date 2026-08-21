@@ -10,6 +10,7 @@ export type UiIconName =
   | 'terminal'
   | 'language'
   | 'ai'
+  | 'skills'
   | 'about'
   | 'plus'
   | 'folder-plus'

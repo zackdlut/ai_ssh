@@ -10,10 +10,13 @@ app.disableHardwareAcceleration()
 let mainWindow: BrowserWindow | null = null
 let ipcManagers: IpcManagers | null = null
 
-// Resolves to <root>/build/icon.png in dev and inside the asar when packaged,
-// because out/main sits at the same depth in both layouts. Windows and Linux
-// read the window icon from here; macOS uses the bundle icon instead.
-const iconPath = join(__dirname, '../../build/icon.png')
+// Resolves to <root>/build/icon.* in dev and inside the asar when packaged,
+// because out/main sits at the same depth in both layouts. Windows prefers ICO
+// for the window / taskbar; Linux uses PNG. macOS uses the bundle icon instead.
+const iconPath = join(
+  __dirname,
+  process.platform === 'win32' ? '../../build/icon.ico' : '../../build/icon.png'
+)
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({

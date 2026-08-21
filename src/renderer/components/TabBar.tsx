@@ -490,7 +490,7 @@ export default function TabBar({
                 {t('tabbar.aiSettings')}
               </DropdownMenuItem>
               <DropdownMenuItem
-                icon="copilot"
+                icon="skills"
                 onClick={() => {
                   setSettingsOpen(false)
                   onSettingsSelect('skills')

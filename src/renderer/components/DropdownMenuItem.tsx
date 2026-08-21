@@ -16,7 +16,7 @@ export default function DropdownMenuItem({
 }: Props): JSX.Element {
   return (
     <button type="button" className="toolbar-dropdown-item" onClick={onClick} disabled={disabled}>
-      {icon ? <UiIcon name={icon} className="menu-item-icon" /> : null}
+      {icon ? <UiIcon name={icon} tone="menu" className="menu-item-icon" /> : null}
       <span className="menu-item-label">{children}</span>
     </button>
   )

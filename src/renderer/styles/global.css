@@ -7005,6 +7005,27 @@ select:focus {
     8px 0 0 currentColor;
 }
 
+/* Skills — instruction sheet */
+.ui-icon--skills::before {
+  left: 2px;
+  top: 1px;
+  width: 10px;
+  height: 12px;
+  border: 1.5px solid currentColor;
+  border-radius: 1.5px;
+}
+.ui-icon--skills::after {
+  left: 4px;
+  top: 4px;
+  width: 6px;
+  height: 1.5px;
+  background: currentColor;
+  border-radius: 1px;
+  box-shadow:
+    0 3px 0 currentColor,
+    0 6px 0 currentColor;
+}
+
 .ui-icon--about::before {
   left: 1px;
   top: 1px;
