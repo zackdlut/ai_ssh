@@ -9,7 +9,7 @@ import { COPILOT_CONTEXT_MAX_LINES, registerNlToggle, registerTerminal, unregist
 import { askAboutSelection } from '../lib/aiService'
 import { extractCommands, isDangerous } from '../lib/commands'
 import { stripAnsi } from '../lib/streamParse'
-import { buildMarkerCommand, parseMarker, runCapturedCommand, getCaptureTiming, hasCaptureMarker, formatCaptureElapsed, isSessionCaptureActive } from '../lib/execCapture'
+import { buildMarkerCommand, parseMarker, runCapturedCommand, getCaptureTiming, hasCaptureMarker, formatCaptureElapsed, isSessionCaptureActive, stripCaptureArtifacts } from '../lib/execCapture'
 import { getTabObservation, setTabObservation } from '../lib/terminalObservation'
 import { describeTabOs } from '../../shared/prompts'
 import {
@@ -910,7 +910,8 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
       // such as the prompt redraw so the terminal stays a clean AI prompt.
       if (nl.mode === 'nl') return
 
-      term.write(e.data)
+      const visible = stripCaptureArtifacts(e.data)
+      if (visible) term.write(visible)
     })
 
     registerTerminal(tab.id, (maxLines = COPILOT_CONTEXT_MAX_LINES) =>

@@ -6,9 +6,8 @@
  * could never recover an exit code. This module instead wraps the command with
  * a unique sentinel marker that prints the shell exit code and cwd AFTER the
  * command finishes, then watches the raw SSH stream until that marker appears
- * (or the stream goes idle / a hard timeout / the session drops). This yields a
- * precise output boundary plus a real exit code — the signal the Verify phase
- * needs.
+ * (or a hard timeout / the session drops). This yields a precise output
+ * boundary plus a real exit code — the signal the Verify phase needs.
  */
 import { stripAnsi } from './streamParse'
 
@@ -27,8 +26,6 @@ export interface CommandCapture {
   waitMs: number
 }
 
-/** Treat output as complete after this idle period when the marker is absent. */
-const EXEC_IDLE_MS = 800
 /** Absolute safety cap for a typical command's capture. */
 const EXEC_HARD_TIMEOUT_MS = 60_000
 /** Hard cap for slow commands (du/find/etc.) that may emit no output for a while. */
@@ -39,7 +36,12 @@ const EXEC_OUTPUT_MAX = 4000
 const PROGRESS_INTERVAL_MS = 1000
 
 /** Commands that may run long with little or no output before the marker appears. */
-const SLOW_COMMAND_RE = /\b(du|find|locate|mlocate|updatedb|rsync|ncdu|tree)\b/i
+const SLOW_COMMAND_RE = /\b(du|find|locate|mlocate|updatedb|rsync|ncdu|tree|sleep)\b/i
+
+/** Echoed helper: `__ec=$?; __m=AISSH_…; printf …` */
+const HELPER_SRC_RE = /__ec=\$\?;\s*__m=AISSH_[A-Za-z0-9]+;/
+/** Printed sentinel: `AISSH_… ec=0 cwd=/tmp AISSH_…` */
+const MARKER_OUT_RE = /AISSH_[A-Za-z0-9]+ ec=-?\d+ cwd=/
 
 export interface CaptureTiming {
   /** Idle ms before giving up without marker; null = wait only for marker/hard cap. */
@@ -61,12 +63,19 @@ export function isSlowCaptureCommand(command: string): boolean {
   return SLOW_COMMAND_RE.test(core)
 }
 
-/** Resolve idle/hard timeouts for a command. Slow commands wait for the marker only. */
+/**
+ * Resolve idle/hard timeouts for a command.
+ *
+ * Never idle-timeout while waiting for the marker. A short idle (previously
+ * 800ms) fired during slow git prompts and silent commands (`sleep`, `pwd` in
+ * a huge repo), after which the helper leaked into the visible terminal.
+ * Completion is the marker itself; the hard cap is the only fallback.
+ */
 export function getCaptureTiming(command: string): CaptureTiming {
   const slow = isSlowCaptureCommand(command)
   return {
     slow,
-    idleMs: slow ? null : EXEC_IDLE_MS,
+    idleMs: null,
     hardTimeoutMs: slow ? EXEC_SLOW_HARD_TIMEOUT_MS : EXEC_HARD_TIMEOUT_MS
   }
 }
@@ -91,12 +100,20 @@ function markerToken(): string {
   return `${CAPTURE_MARKER_PREFIX}${rand}`
 }
 
-/** Sessions with an in-flight execCapture run (agent / silent pwd). */
-const activeCaptures = new Set<string>()
+/**
+ * Sessions with an in-flight execCapture run (agent / silent pwd).
+ * Value is the capture's marker token so a queued teardown cannot drop a
+ * newer capture that started on the same session.
+ */
+const activeCaptures = new Map<string, string>()
 
 /** True while runCapturedCommand is capturing on this SSH session. */
 export function isSessionCaptureActive(sessionId: string): boolean {
   return activeCaptures.has(sessionId)
+}
+
+function captureHelper(marker: string): string {
+  return `__ec=$?; __m=${marker}; printf '\\n%s ec=%s cwd=%s %s\\n' "$__m" "$__ec" "$(pwd 2>/dev/null)" "$__m"`
 }
 
 /**
@@ -104,10 +121,49 @@ export function isSessionCaptureActive(sessionId: string): boolean {
  * `__ec=$?` MUST come first so it captures the command's exit code before the
  * later assignment/subshell overwrite it. The marker is emitted via a variable
  * so the shell-echoed source line never matches the runtime marker regex.
+ *
+ * The helper is chained with `;` (not a newline) so the shell does not print
+ * PS1 in between. A slow git prompt between two commands used to look like
+ * "idle" and the helper then appeared at the user's prompt.
+ *
+ * Commands that contain `#` or extra newlines go in a `{ …; }` group so a
+ * trailing comment cannot swallow the helper.
  */
 function buildWrappedCommand(command: string, marker: string): string {
   const cmd = command.replace(/\s+$/, '')
-  return `${cmd}\n__ec=$?; __m=${marker}; printf '\\n%s ec=%s cwd=%s %s\\n' "$__m" "$__ec" "$(pwd 2>/dev/null)" "$__m"\n`
+  const helper = captureHelper(marker)
+  if (cmd.includes('\n') || /(^|\s)#/.test(cmd)) {
+    return `{ ${cmd}\n}; ${helper}\n`
+  }
+  return `${cmd}; ${helper}\n`
+}
+
+/**
+ * Drop sentinel helper / marker lines from a raw PTY chunk so they never
+ * reach the visible terminal, even if capture ended before the chunk arrived.
+ * A helper glued to a prompt keeps the prompt prefix.
+ */
+export function stripCaptureArtifacts(data: string): string {
+  if (!data.includes(CAPTURE_MARKER_PREFIX) && !data.includes('__ec=$?')) return data
+  const pieces = data.split(/(\r?\n)/)
+  const out: string[] = []
+  for (const piece of pieces) {
+    if (piece === '\n' || piece === '\r\n') {
+      out.push(piece)
+      continue
+    }
+    const plain = stripAnsi(piece)
+    if (MARKER_OUT_RE.test(plain)) continue
+    const helperAt = plain.search(HELPER_SRC_RE)
+    if (helperAt >= 0) {
+      const kept = plain.slice(0, helperAt).replace(/[ \t;]+$/, '')
+      if (kept) out.push(kept)
+      continue
+    }
+    if (plain.includes(CAPTURE_MARKER_PREFIX)) continue
+    out.push(piece)
+  }
+  return out.join('')
 }
 
 function markerRegex(marker: string): RegExp {
@@ -185,10 +241,9 @@ export function cleanCapturedOutput(raw: string, command: string, marker: string
 
 /**
  * Run a command on an SSH session and capture its output + exit code + cwd.
- * Resolves as soon as the sentinel marker is seen; for fast commands, falls
- * back to idle timeout when the marker never arrives. Slow commands (du/find/…)
- * wait for the marker or the extended hard timeout only. Never rejects —
- * failures are reported via the `timedOut` / `disconnected` flags.
+ * Resolves as soon as the sentinel marker is seen. Slow commands (du/find/…)
+ * use the extended hard timeout. Never rejects — failures are reported via
+ * the `timedOut` / `disconnected` flags.
  */
 export function runCapturedCommand(
   sessionId: string,
@@ -213,7 +268,11 @@ export function runCapturedCommand(
     const complete = (timedOut: boolean, disconnected: boolean): void => {
       if (done) return
       done = true
-      activeCaptures.delete(sessionId)
+      // Drop the flag after every onData listener has seen this chunk. A
+      // TerminalView registered after us would otherwise write the marker.
+      queueMicrotask(() => {
+        if (activeCaptures.get(sessionId) === marker) activeCaptures.delete(sessionId)
+      })
       if (idleTimer) clearTimeout(idleTimer)
       if (hardTimer) clearTimeout(hardTimer)
       if (progressTimer) clearInterval(progressTimer)
@@ -262,7 +321,7 @@ export function runCapturedCommand(
     })
 
     hardTimer = setTimeout(() => complete(true, false), timing.hardTimeoutMs)
-    activeCaptures.add(sessionId)
+    activeCaptures.set(sessionId, marker)
     bumpIdle()
     window.api.ssh.write(sessionId, buildWrappedCommand(command, marker))
   })
