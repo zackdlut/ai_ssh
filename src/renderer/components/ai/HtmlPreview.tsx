@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { handleExternalLinkClick } from '../../lib/openExternal'
 
 interface Props {
   html: string
@@ -16,7 +17,7 @@ const BASE_STYLE = `<style>
     line-height: 1.6;
     word-break: break-word;
   }
-  a { color: #5be9d0; }
+  a { color: #5be9d0; cursor: pointer; }
   img, video, table { max-width: 100%; }
   pre, code { font-family: 'JetBrains Mono', monospace; }
 </style>`
@@ -48,6 +49,21 @@ export default function HtmlPreview({ html }: Props): JSX.Element {
     setTimeout(() => setCopied(false), 1200)
   }
 
+  const onFrameLoad = (): void => {
+    resize()
+    const doc = frameRef.current?.contentDocument
+    if (!doc) return
+    doc.removeEventListener('click', handleExternalLinkClick, true)
+    doc.addEventListener('click', handleExternalLinkClick, true)
+  }
+
+  useEffect(() => {
+    const frame = frameRef.current
+    return () => {
+      frame?.contentDocument?.removeEventListener('click', handleExternalLinkClick, true)
+    }
+  }, [])
+
   return (
     <div className="preview-block">
       <div className="preview-toolbar">
@@ -62,7 +78,7 @@ export default function HtmlPreview({ html }: Props): JSX.Element {
         title="HTML preview"
         sandbox="allow-same-origin"
         srcDoc={buildSrcDoc(html)}
-        onLoad={resize}
+        onLoad={onFrameLoad}
       />
     </div>
   )

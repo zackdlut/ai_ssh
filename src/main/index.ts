@@ -1,6 +1,7 @@
-import { app, shell, BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { readBootWindowBackground } from './config/bootTheme'
+import { openExternalUrl } from './openExternal'
 import type { IpcManagers } from './ipc'
 
 // A terminal app needs no GPU acceleration; disabling it avoids GPU process
@@ -42,8 +43,32 @@ function createWindow(): void {
   mainWindow.on('ready-to-show', () => mainWindow?.show())
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    void shell.openExternal(details.url)
+    void openExternalUrl(details.url)
     return { action: 'deny' }
+  })
+
+  // Keep the renderer from navigating away if a link is clicked without
+  // target=_blank. Skip the first load (current URL is still about:blank) and
+  // same-origin / same-file reloads so Vite HMR and production file loads work.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const current = mainWindow?.webContents.getURL() ?? ''
+    if (!current || current === 'about:blank') return
+    try {
+      const from = new URL(current)
+      const to = new URL(url)
+      // file: origins are the string "null", so same-origin is not a safe check.
+      if (from.protocol === 'file:' || to.protocol === 'file:') {
+        if (from.protocol === 'file:' && to.protocol === 'file:' && from.pathname === to.pathname) {
+          return
+        }
+      } else if (from.origin === to.origin) {
+        return
+      }
+    } catch {
+      // Fall through and block the navigation.
+    }
+    event.preventDefault()
+    void openExternalUrl(url)
   })
 
   // electron-vite injects ELECTRON_RENDERER_URL in dev.

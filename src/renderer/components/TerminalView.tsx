@@ -353,7 +353,13 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
-    term.loadAddon(new WebLinksAddon())
+    // Default handler uses window.open() then sets location — Electron denies
+    // the blank window, so the link never opens. Hand the URL to the OS instead.
+    term.loadAddon(
+      new WebLinksAddon((_event, uri) => {
+        void window.api.app.openExternal(uri)
+      })
+    )
 
     let cancelled = false
     const attachTerminal = (): void => {

@@ -40,6 +40,7 @@ import type {
   SftpTransferDoneEvent,
   LocalListResult,
   LocalHomeResult,
+  OpenExternalResult,
   OpenPathResult,
   PickDirectoryResult,
   SaveFileResult,
@@ -65,7 +66,9 @@ function on<T>(channel: string, cb: (payload: T) => void): Unsubscribe {
 
 const api = {
   app: {
-    getInfo: (): Promise<AppInfo> => ipcRenderer.invoke('app:getInfo')
+    getInfo: (): Promise<AppInfo> => ipcRenderer.invoke('app:getInfo'),
+    openExternal: (url: string): Promise<OpenExternalResult> =>
+      ipcRenderer.invoke('app:openExternal', url)
   },
   ssh: {
     connect: (opts: ConnectOptions): Promise<ConnectResult> =>

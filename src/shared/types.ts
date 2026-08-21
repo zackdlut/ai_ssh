@@ -507,6 +507,12 @@ export interface OpenPathResult {
   error?: string
 }
 
+/** Result of opening a URL with the OS default application. */
+export interface OpenExternalResult {
+  ok?: true
+  error?: string
+}
+
 export interface SaveFileResult {
   /** Path written when save succeeded. */
   path?: string

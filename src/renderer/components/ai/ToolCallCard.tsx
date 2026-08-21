@@ -7,6 +7,7 @@ import { useT, type TranslationKey } from '../../lib/i18n'
 import { useAIStore } from '../../store/aiStore'
 import AppSettingsToolPanel from './AppSettingsToolPanel'
 import FileDiffPreview from './FileDiffPreview'
+import LinkifiedText from './LinkifiedText'
 import type { PlanItemStatus, ToolCallView } from '../../../shared/types'
 
 interface Props {
@@ -520,7 +521,9 @@ function LongTextOutput({ text }: { text: string }): JSX.Element {
       className={`tool-output-wrap ${isLong ? (expanded ? 'is-expanded' : 'is-collapsed') : 'is-short'}`}
     >
       <div className="tool-output-scroll" tabIndex={isLong ? 0 : undefined}>
-        <pre className="tool-output">{text}</pre>
+        <pre className="tool-output">
+          <LinkifiedText text={text} />
+        </pre>
       </div>
       {isLong && (
         <div className="tool-output-bar">
@@ -736,7 +739,9 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
                   <ParamRows
                     args={Object.fromEntries(Object.entries(args).filter(([k]) => k !== 'command'))}
                   />
-                  <pre className="tool-command">{command}</pre>
+                  <pre className="tool-command">
+                    <LinkifiedText text={command} />
+                  </pre>
                 </>
               )}
             </>

@@ -3,6 +3,7 @@ import { useTabsStore } from '../../store/tabsStore'
 import { isDangerous } from '../../lib/commands'
 import { useT } from '../../lib/i18n'
 import { debugLog } from '../../lib/debugLog'
+import LinkifiedText from './LinkifiedText'
 
 interface Props {
   command: string
@@ -56,7 +57,9 @@ export default function CommandCard({ command }: Props): JSX.Element {
           style={{ border: 'none', borderRadius: 0, minHeight: 60 }}
         />
       ) : (
-        <pre>{value}</pre>
+        <pre>
+          <LinkifiedText text={value} />
+        </pre>
       )}
       {dangerous && <div className="danger-banner">{t('cmd.dangerBanner')}</div>}
       <div className="cmd-actions">

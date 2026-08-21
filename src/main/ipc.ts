@@ -1,4 +1,5 @@
 import { app, ipcMain, dialog, shell, type BrowserWindow } from 'electron'
+import { openExternalUrl } from './openExternal'
 import { mkdir, readFile, writeFile } from 'fs/promises'
 import { basename, dirname, join } from 'path'
 import { SshManager } from './ssh/manager'
@@ -56,6 +57,7 @@ import type {
   SftpTransferDoneEvent,
   LocalListResult,
   LocalHomeResult,
+  OpenExternalResult,
   OpenPathResult,
   PickDirectoryResult,
   SaveFileResult
@@ -600,6 +602,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
   )
 
   // --- App ---
+  ipcMain.handle(
+    'app:openExternal',
+    (_e, url: string): Promise<OpenExternalResult> => openExternalUrl(url)
+  )
   ipcMain.handle(
     'app:getInfo',
     (): AppInfo => {

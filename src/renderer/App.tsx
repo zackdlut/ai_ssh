@@ -14,6 +14,7 @@ import { useSkillsStore } from './store/skillsStore'
 import { useUserRulesStore } from './store/userRulesStore'
 import { getConnSidebarStartupOpen } from './store/startupStore'
 import { initAIService } from './lib/aiService'
+import { bindExternalLinkClicks } from './lib/openExternal'
 import { addEmptyTab } from './lib/connect'
 import type { ConnectionConfig } from '../shared/types'
 
@@ -71,6 +72,8 @@ export default function App(): JSX.Element {
     return off
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => bindExternalLinkClicks(), [])
 
   const openNewConnection = (parentId: string | null): void =>
     setConnectModal({ parentId })

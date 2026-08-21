@@ -3789,6 +3789,19 @@ select:focus {
   color: var(--signal);
   border-bottom-color: var(--signal);
 }
+.command-card pre a,
+.tool-call-card .tool-output a,
+.tool-call-card .tool-command a {
+  color: var(--signal-strong);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.command-card pre a:hover,
+.tool-call-card .tool-output a:hover,
+.tool-call-card .tool-command a:hover {
+  color: var(--signal);
+}
 .md strong {
   color: var(--md-strong-fg);
   font-weight: 700;

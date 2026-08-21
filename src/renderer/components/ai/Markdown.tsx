@@ -7,8 +7,9 @@ marked.setOptions({
   breaks: true
 })
 
-// Open links in the system browser (the window-open handler in the main
-// process forwards them to the OS) instead of navigating the app.
+// Open links in the OS default application. Clicks are intercepted in the
+// renderer; target=_blank remains a fallback for the main-process window-open
+// handler.
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName === 'A' && node.getAttribute('href')) {
     node.setAttribute('target', '_blank')
