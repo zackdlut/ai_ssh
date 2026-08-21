@@ -21,6 +21,7 @@ import { runAgentCommand } from './agentExec'
 import { getTabObservation, setTabObservation } from './terminalObservation'
 import { verifyCommand } from '../../shared/verify'
 import { normalizeAISettings } from '../../shared/aiSettings'
+import { toolNamesFor, type ToolTier } from '../../shared/aiTools'
 import type { TerminalAppearanceSettings } from '../../shared/terminalSettings'
 import type {
   AISettings,
@@ -718,11 +719,31 @@ export async function executeToolCall(
  * Build a compact, sanitized snapshot of the current open tabs and saved
  * connection configs, injected as a system message each turn so the model can
  * reference tab_id / config_id directly without always calling the list tools.
+ *
+ * Scoped to the tools the turn actually sends. Ids and settings the turn has no
+ * tool to consume are not context, they are noise the model pays for on every
+ * turn: on the `core` tier nothing accepts a config_id or folder_id, and nothing
+ * reads or writes app settings. Gating on tool presence rather than on the tier
+ * name means widening a tier automatically brings the matching facts back.
  */
-export function buildToolContextMessage(): string | undefined {
+export function buildToolContextMessage(
+  /** Tier whose tools this turn sends, or undefined when tools are disabled. */
+  tier: ToolTier | undefined
+): string | undefined {
+  // A turn with no tools can act on no id, so the whole snapshot is dead weight.
+  if (!tier) return undefined
+  const available = new Set(toolNamesFor(tier, { hasSkills: hasEnabledSkills() }))
+  const wantsConnections = ['open_ssh', 'create_ssh_config', 'update_ssh_config', 'list_ssh_configs', 'move_connection_to_folder'].some(
+    (n) => available.has(n)
+  )
+  const wantsFolders = ['create_folder', 'list_folders', 'move_connection_to_folder'].some((n) =>
+    available.has(n)
+  )
+  const wantsSettings = available.has('get_app_settings') || available.has('update_app_settings')
+
   const tabs = useTabsStore.getState().tabs
-  const configs = useBookmarksStore.getState().connections
-  const folders = useBookmarksStore.getState().folders
+  const configs = wantsConnections ? useBookmarksStore.getState().connections : []
+  const folders = wantsFolders || wantsConnections ? useBookmarksStore.getState().folders : []
   const theme = useThemeStore.getState().theme
   const locale = useLocaleStore.getState().locale
   const terminal = useTerminalAppearanceStore.getState()
@@ -776,24 +797,22 @@ export function buildToolContextMessage(): string | undefined {
         .join('\n')
     : '(none)'
 
-  const settingsLine = `App settings: theme=${theme} | locale=${locale} | terminal fontSize=${terminal.fontSize} | terminal colorScheme=${terminal.colorScheme} | startup connSidebarOpen=${startup.connSidebarOpen} | startup copilotOpen=${startup.copilotOpen}`
+  const settingsLine = wantsSettings
+    ? `App settings: theme=${theme} | locale=${locale} | terminal fontSize=${terminal.fontSize} | terminal colorScheme=${terminal.colorScheme} | startup connSidebarOpen=${startup.connSidebarOpen} | startup copilotOpen=${startup.copilotOpen}`
+    : undefined
 
-  if (tabs.length === 0 && configs.length === 0 && folders.length === 0) {
-    return `Current app state:\n\n${settingsLine}`
+  const sections = [
+    `Open terminal tabs:\n${tabsText}`,
+    wantsConnections && `Saved connection configs:\n${configsText}`,
+    wantsFolders && `Bookmark folders:\n${foldersText}`,
+    settingsLine
+  ].filter((s): s is string => !!s)
+
+  if (tabs.length === 0 && !configs.length && !folders.length) {
+    return settingsLine ? `Current app state:\n\n${settingsLine}` : undefined
   }
 
-  return `Current SSH terminal manager state (use these exact ids with the tools; do NOT invent ids):
-
-Open terminal tabs:
-${tabsText}
-
-Saved connection configs:
-${configsText}
-
-Bookmark folders:
-${foldersText}
-
-${settingsLine}`
+  return `Current SSH terminal manager state (use these exact ids with the tools; do NOT invent ids):\n\n${sections.join('\n\n')}`
 }
 
 /**
@@ -802,6 +821,15 @@ ${settingsLine}`
  * instructions on demand with the read_skill tool. Returns undefined when no
  * skills are enabled, so no empty section is injected.
  */
+/**
+ * Whether any skill is installed and enabled. Decides whether the read_skill
+ * schema and the prompt paragraphs about skills are worth sending at all, so it
+ * must be asked before assembling either.
+ */
+export function hasEnabledSkills(): boolean {
+  return useSkillsStore.getState().skills.some((s) => s.enabled)
+}
+
 export function buildSkillsContextMessage(): string | undefined {
   const skills = useSkillsStore.getState().skills.filter((s) => s.enabled)
   if (skills.length === 0) return undefined

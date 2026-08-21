@@ -1,4 +1,4 @@
-import { isDangerousTool, isReadonlyTool } from '../../shared/aiTools'
+import { isAutoApprovedTool, isDangerousTool } from '../../shared/aiTools'
 import type { ToolCallView } from '../../shared/types'
 import { useAIStore } from '../store/aiStore'
 import { isDangerous } from './commands'
@@ -85,7 +85,7 @@ export function getPendingToolCalls(tabId: string): PendingToolCallRef[] {
   for (const message of tab.messages) {
     if (message.role !== 'assistant' || !message.toolCalls) continue
     for (const call of message.toolCalls) {
-      if (call.status === 'pending' && !isReadonlyTool(call.name)) {
+      if (call.status === 'pending' && !isAutoApprovedTool(call.name)) {
         pending.push({ messageId: message.id, callId: call.id, call })
       }
     }

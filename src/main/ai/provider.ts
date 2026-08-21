@@ -31,12 +31,14 @@ import {
 import { buildAITools, toolTierForProfile } from '../../shared/aiTools'
 import type {
   AISettings,
+  AppLocale,
   ModelProfile,
   AIChatRequest,
   AIChartSpecRequest,
   AITranslateRequest,
   AISummarizeRequest,
   AICompressHistoryRequest,
+  InstalledSkill,
   ChatMessageDTO,
   ToolCallDTO,
   AITokenUsage
@@ -44,9 +46,10 @@ import type {
 import {
   buildCopilotSystemPrompt,
   CHART_SPEC_SYSTEM_PROMPT,
-  TRANSLATE_SYSTEM_PROMPT,
-  SUMMARIZE_SYSTEM_PROMPT,
-  HISTORY_SUMMARY_SYSTEM_PROMPT,
+  buildTranslateSystemPrompt,
+  buildSummarizeSystemPrompt,
+  buildSummarizeUserMessage,
+  buildHistorySummarySystemPrompt,
   buildContextMessage,
   buildChartSpecUserMessage,
   buildHistoryCompressUserMessage,
@@ -407,7 +410,18 @@ export class AIProvider {
   private proxyAgent: InstanceType<HttpsProxyAgentConstructor> | undefined
   private proxyAgentUrl = ''
 
-  constructor(private getSettings: () => AISettings) {}
+  /**
+   * `getLocale` is injected rather than carried on each request so the language
+   * of a model-authored answer can never drift from the app's UI language.
+   * `getSkills` decides whether the skill tool is worth its schema, and is read
+   * from the same store the renderer builds the skills catalog from, so the two
+   * cannot disagree about whether skills exist.
+   */
+  constructor(
+    private getSettings: () => AISettings,
+    private getLocale: () => AppLocale,
+    private getSkills: () => InstalledSkill[]
+  ) {}
 
   private async getProxyAgent(
     url: string
@@ -453,14 +467,19 @@ export class AIProvider {
     this.controllers.set(req.requestId, controller)
 
     const tier = toolTierForProfile(profile)
-    const tools = buildAITools(tier)
+    const tools = buildAITools(tier, {
+      hasSkills: this.getSkills().some((s) => s.enabled),
+      aiSettingsIntent: req.aiSettingsIntent
+    })
+    // Scope the prompt to what this request actually carries. Main owns the
+    // decision, so the prompt cannot advertise tools the request omits — a turn
+    // with function calling off (the chart turn) gets no tool rules at all,
+    // instead of a Tool rules section the trailing nudge then has to fight.
+    const toolNames = req.enableTools ? tools.map((t) => t.function.name) : []
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       {
         role: 'system',
-        content: buildCopilotSystemPrompt({
-          ...(req.promptSections ?? {}),
-          toolNames: tools.map((t) => t.function.name)
-        })
+        content: buildCopilotSystemPrompt({ ...(req.promptSections ?? {}), toolNames })
       }
     ]
     const userRulesMessage = buildUserRulesSystemMessage(req.userRules ?? '')
@@ -776,7 +795,7 @@ export class AIProvider {
     const traceId = `translate-${started}`
 
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: TRANSLATE_SYSTEM_PROMPT }
+      { role: 'system', content: buildTranslateSystemPrompt(this.getLocale()) }
     ]
     const contextMessage = buildContextMessage(req.context)
     if (contextMessage) {
@@ -822,18 +841,11 @@ export class AIProvider {
     const controller = new AbortController()
     this.controllers.set(req.requestId, controller)
 
-    const runsText = req.runs
-      .map((r, i) => {
-        const code = r.code === null ? '未知' : String(r.code)
-        const output = (r.output || '(无输出)').slice(0, 1500)
-        return `# 命令 ${i + 1}（退出码 ${code}）\n$ ${r.command}\n输出:\n${output}`
-      })
-      .join('\n\n')
-
-    const userContent = `用户的原始请求：\n${req.request}\n\n执行情况：\n${runsText}`
+    const locale = this.getLocale()
+    const userContent = buildSummarizeUserMessage(locale, req.request, req.runs)
 
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: SUMMARIZE_SYSTEM_PROMPT }
+      { role: 'system', content: buildSummarizeSystemPrompt(locale) }
     ]
     const contextMessage = buildContextMessage(req.context)
     if (contextMessage) {
@@ -912,8 +924,9 @@ export class AIProvider {
       .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
       .join('\n\n')
 
+    const locale = this.getLocale()
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: HISTORY_SUMMARY_SYSTEM_PROMPT }
+      { role: 'system', content: buildHistorySummarySystemPrompt(locale) }
     ]
     const contextMessage = buildContextMessage(req.context)
     if (contextMessage) {
@@ -921,7 +934,7 @@ export class AIProvider {
     }
     messages.push({
       role: 'user',
-      content: buildHistoryCompressUserMessage(convText)
+      content: buildHistoryCompressUserMessage(locale, convText)
     })
 
     const model = resolveActiveModel(settings)

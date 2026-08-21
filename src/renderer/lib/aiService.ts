@@ -8,9 +8,11 @@ import {
   buildContextMessage,
   buildCopilotSystemPrompt,
   buildUserRulesSystemMessage,
+  describeTabOs,
   CHART_INTENT,
   MERMAID_INTENT,
-  CHART_TURN_NUDGE
+  buildChartTurnNudge,
+  type PromptSections
 } from '../../shared/prompts'
 import {
   buildChatPayload,
@@ -23,15 +25,19 @@ import { useLocaleStore } from '../store/localeStore'
 import { debugLog } from './debugLog'
 import {
   buildAITools,
+  isAutoApprovedTool,
   isDisplayTool,
-  isReadonlyTool,
+  toolNamesFor,
   toolTierForProfile,
+  AI_SETTINGS_INTENT,
+  type ToolSurfaceOptions,
   type ToolTier
 } from '../../shared/aiTools'
 import { decideToolCall, DEFAULT_AUTONOMY_MODE } from '../../shared/toolPolicy'
 import {
   buildSkillsContextMessage,
   buildToolContextMessage,
+  hasEnabledSkills,
   executeToolCall,
   parseToolArgs,
   type ToolResult
@@ -85,6 +91,16 @@ import type {
 interface LoopState {
   tabId: string
   context?: TerminalContext
+  /**
+   * Terminal tab the injected context is read from, plus how many lines of its
+   * scrollback to include. Kept on the loop so every continuation turn can
+   * REBUILD the context instead of resending the snapshot taken before the task
+   * started: after a few exec_command calls the cwd and recent output have moved
+   * on, while the prompt tells the model exec_command resumes in "the last
+   * observed cwd".
+   */
+  contextTabId?: string
+  contextMaxLines?: number
   boundSessionId?: string
   boundTabId?: string
   conversation: ChatMessageDTO[]
@@ -111,6 +127,18 @@ interface LoopState {
    * fence, so the two-phase chart pipeline never starts. See sendPrompt.
    */
   chartIntent?: boolean
+  /**
+   * Whether this task should carry the mermaid authoring rules. Decided once
+   * from the opening request and reused, since a diagram normally lands on the
+   * last turn of the task rather than the first.
+   */
+  mermaidIntent?: boolean
+  /**
+   * Whether this task's request is about AI configuration, so the settings tool
+   * carries its full `ai` branch. Decided once and held, like mermaidIntent: the
+   * schema for a given tool must not change shape between turns of one task.
+   */
+  aiSettingsIntent?: boolean
   /**
    * The raw user instruction that kicked off this loop. Used by the Verify step
    * to decide, after a display-only tool turn, whether the request was pure
@@ -144,14 +172,23 @@ const MIN_CONVERSATION_TOKENS = 1024
  * from free — the full tier's 21 schemas measure ~4.5k real tokens, 14% of a
  * 32k window, and none of it was previously counted against any budget.
  */
-const toolSchemaTokens = new Map<ToolTier, number>()
+const toolSchemaTokens = new Map<string, number>()
 
-function toolTokens(tier: ToolTier): number {
-  const cached = toolSchemaTokens.get(tier)
+function toolTokens(tier: ToolTier, surface: ToolSurfaceOptions): number {
+  const key = `${tier}:${!!surface.hasSkills}:${!!surface.aiSettingsIntent}`
+  const cached = toolSchemaTokens.get(key)
   if (cached !== undefined) return cached
-  const tokens = estimateTokens(JSON.stringify(buildAITools(tier)))
-  toolSchemaTokens.set(tier, tokens)
+  const tokens = estimateTokens(JSON.stringify(buildAITools(tier, surface)))
+  toolSchemaTokens.set(key, tokens)
   return tokens
+}
+
+/** The tool surface for a turn, derived from installed config plus its request. */
+function toolSurfaceFor(userIntent: string | undefined): ToolSurfaceOptions {
+  return {
+    hasSkills: hasEnabledSkills(),
+    aiSettingsIntent: AI_SETTINGS_INTENT.test(userIntent ?? '')
+  }
 }
 
 /**
@@ -166,23 +203,36 @@ function toolTokens(tier: ToolTier): number {
  */
 function conversationBudget(
   loop: LoopState,
-  tier: ToolTier,
-  promptSections: Record<string, boolean>,
+  /** Tier whose schemas ride along, or undefined when tools are disabled. */
+  tier: ToolTier | undefined,
+  promptSections: PromptSections,
+  surface: ToolSurfaceOptions,
   surrounding: ChatMessageDTO[]
 ): number {
   if (!loop.contextLimit) return 0
-  const systemPrompt = buildCopilotSystemPrompt({
-    ...promptSections,
-    toolNames: buildAITools(tier).map((t) => t.function.name)
-  })
   const fixed = [
-    systemPrompt,
+    buildCopilotSystemPrompt(promptSections),
     buildUserRulesSystemMessage(useUserRulesStore.getState().rules) ?? '',
     buildContextMessage(loop.context) ?? '',
     ...surrounding.map((m) => m.content)
-  ].reduce((sum, text) => sum + estimateTokens(text), toolTokens(tier))
+  ].reduce((sum, text) => sum + estimateTokens(text), tier ? toolTokens(tier, surface) : 0)
 
-  return Math.max(MIN_CONVERSATION_TOKENS, loop.contextLimit - fixed - OUTPUT_RESERVE_TOKENS)
+  const available = loop.contextLimit - fixed - OUTPUT_RESERVE_TOKENS
+  if (available < MIN_CONVERSATION_TOKENS) {
+    // The floor keeps a cramped window usable for a step or two, but it means
+    // the payload is knowingly over budget: everything that is not the
+    // conversation already fills the window. Surface it rather than letting the
+    // server truncate the prompt from the front (which drops the user's
+    // question) and the turn fail for no visible reason.
+    useAIStore.getState().setNotice(tNotice('copilot.context.overCommitted'))
+    debugLog({
+      category: 'action.triggered',
+      tabId: loop.tabId,
+      message: 'agent.budget.overCommitted',
+      data: { contextLimit: loop.contextLimit, fixed, available, floor: MIN_CONVERSATION_TOKENS }
+    })
+  }
+  return Math.max(MIN_CONVERSATION_TOKENS, available)
 }
 
 /**
@@ -298,6 +348,17 @@ function advance(loop: LoopState, event: AgentEvent, tabId: string): AgentPhase 
 }
 
 /**
+ * Rebuild the loop's terminal context from live state. Leaves the existing
+ * context in place if the source tab is gone (closed mid-task), since a stale
+ * host/output snippet is still better context than none.
+ */
+function refreshLoopContext(loop: LoopState): void {
+  if (!loop.contextTabId) return
+  const fresh = readTabContext(loop.contextTabId, loop.contextMaxLines ?? COPILOT_CONTEXT_MAX_LINES)
+  if (fresh) loop.context = fresh
+}
+
+/**
  * Begin one LLM turn for the loop: a fresh assistant message + chat request.
  *
  * When `epilogue` is true the turn follows a display-only tool turn (its card is
@@ -308,18 +369,36 @@ function advance(loop: LoopState, event: AgentEvent, tabId: string): AgentPhase 
  */
 function startTurn(loop: LoopState, epilogue = false): void {
   const ai = useAIStore.getState()
+  // Re-read the terminal before every turn. The snapshot taken when the task
+  // started goes stale the moment the agent runs a command, and a stale `cwd` is
+  // actively misleading given exec_command resumes in the last observed one.
+  refreshLoopContext(loop)
   // A chart-visualization request only applies to the FIRST turn: emit the
   // ```chart fence with tools OFF (below), then the loop is done — there is no
   // continuation to keep nudging.
   const firstTurn = loop.phase === undefined
   const chartTurn = !!loop.chartIntent && firstTurn
   // Only assemble the prompt sections this turn actually needs: the long chart
-  // rules ride along only on the (first) chart turn, mermaid rules only when the
-  // request asked for a diagram, and continuation turns drop first-turn examples.
-  const promptSections = {
+  // rules ride along only on the (first) chart turn, and mermaid rules only when
+  // the request asked for a diagram. A chart turn sends no tools, so it is
+  // charged for no tool rules either.
+  //
+  // The mermaid decision is made from the request that opened the loop and then
+  // held for the whole task. It is deliberately NOT re-derived from the latest
+  // user message: a diagram is usually emitted at the END of a multi-step task,
+  // by which point the newest user-role message is an injected nudge rather than
+  // the request — testing that would drop the rules exactly when they are due.
+  // A genuinely new instruction supersedes the loop, so it arrives as a new one.
+  loop.mermaidIntent ??= !chartTurn && MERMAID_INTENT.test(loop.userIntent ?? '')
+  loop.aiSettingsIntent ??= AI_SETTINGS_INTENT.test(loop.userIntent ?? '')
+  const toolSurface = {
+    hasSkills: hasEnabledSkills(),
+    aiSettingsIntent: loop.aiSettingsIntent
+  }
+  const promptSections: PromptSections = {
     chart: chartTurn,
-    mermaid: MERMAID_INTENT.test(loop.userIntent ?? ''),
-    concise: !firstTurn
+    mermaid: loop.mermaidIntent,
+    toolNames: chartTurn ? [] : toolNamesFor(loop.toolTier ?? 'full', toolSurface)
   }
   const skillsCatalog = buildSkillsContextMessage()
   // Prefix layer: near-constant across the task, so it stays at the front where
@@ -332,7 +411,7 @@ function startTurn(loop: LoopState, epilogue = false): void {
   // conversation both preserves the cacheable prefix and gives these facts
   // recency over the long system prompt.
   const suffix: ChatMessageDTO[] = []
-  const snapshot = buildToolContextMessage()
+  const snapshot = buildToolContextMessage(loop.toolTier)
   const plan = buildPlanContextMessage(loop.tabId)
   const taskMemory = buildTaskMemoryMessage(loop.tabId)
   if (snapshot) suffix.push({ role: 'system', content: snapshot })
@@ -342,10 +421,13 @@ function startTurn(loop: LoopState, epilogue = false): void {
   // Bound the running conversation with what is actually left over, which is
   // why the surrounding layers are assembled first.
   if (loop.contextLimit) {
-    const budget = conversationBudget(loop, loop.toolTier ?? 'full', promptSections, [
-      ...prefix,
-      ...suffix
-    ])
+    const budget = conversationBudget(
+      loop,
+      chartTurn ? undefined : loop.toolTier ?? 'full',
+      promptSections,
+      toolSurface,
+      [...prefix, ...suffix]
+    )
     loop.conversationBudget = budget
     setToolResultCharBudget(perResultCap(budget))
     const compacted = compactConversation(loop.conversation, budget)
@@ -370,7 +452,12 @@ function startTurn(loop: LoopState, epilogue = false): void {
   // the large tool-oriented system prompt, which otherwise wins and the model
   // answers with a bare bash block. It is NOT written back to loop.conversation,
   // so it never leaks into persisted history or later turns.
-  if (chartTurn) messages.push({ role: 'user', content: CHART_TURN_NUDGE })
+  if (chartTurn) {
+    messages.push({
+      role: 'user',
+      content: buildChartTurnNudge(useLocaleStore.getState().locale)
+    })
+  }
 
   // Entering an LLM turn is the "thinking" phase of the state machine.
   advance(loop, loop.phase ? 'continue' : 'prompt', loop.tabId)
@@ -410,7 +497,8 @@ function startTurn(loop: LoopState, epilogue = false): void {
     context: loop.context,
     enableTools: !chartTurn,
     userRules,
-    promptSections
+    promptSections,
+    aiSettingsIntent: loop.aiSettingsIntent
   })
 }
 
@@ -447,7 +535,7 @@ async function runToolCall(
   const ai = useAIStore.getState()
   const call = findMessage(tabId, messageId)?.toolCalls?.find((c) => c.id === callId)
   if (!call) return
-  if (!isReadonlyTool(call.name)) {
+  if (!isAutoApprovedTool(call.name)) {
     const loop = loops.get(messageId)
     if (loop) loop.executedActionTool = true
   }
@@ -550,7 +638,7 @@ async function runToolCall(
 async function runAutoToolCalls(tabId: string, messageId: string, callIds: string[]): Promise<void> {
   const calls = findMessage(tabId, messageId)?.toolCalls ?? []
   const byId = new Map(calls.map((c) => [c.id, c]))
-  const readonly = callIds.filter((id) => isReadonlyTool(byId.get(id)?.name ?? ''))
+  const readonly = callIds.filter((id) => isAutoApprovedTool(byId.get(id)?.name ?? ''))
   const mutating = callIds.filter((id) => !readonly.includes(id))
 
   await Promise.all(readonly.map((id) => runToolCall(tabId, messageId, id, { deferContinue: true })))
@@ -1055,15 +1143,26 @@ function buildTerminalContext(
   activeTerminalTab: ReturnType<typeof useTabsStore.getState>['tabs'][number] | undefined
 ): TerminalContext | undefined {
   if (!activeTerminalTab) return undefined
-  const mentionsTerminal = TERMINAL_MENTION.test(prompt)
+  return readTabContext(activeTerminalTab.id, contextMaxLines(prompt))
+}
+
+/** How much scrollback to include: an explicit @terminal mention asks for more. */
+function contextMaxLines(prompt: string): number {
+  return TERMINAL_MENTION.test(prompt)
+    ? COPILOT_TERMINAL_MENTION_MAX_LINES
+    : COPILOT_CONTEXT_MAX_LINES
+}
+
+/** Read a tab's live context (output window, host identity, observed cwd). */
+function readTabContext(tabId: string, maxLines: number): TerminalContext | undefined {
+  const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId)
+  if (!tab) return undefined
   return {
-    recentOutput: readTerminalOutput(
-      activeTerminalTab.id,
-      mentionsTerminal ? COPILOT_TERMINAL_MENTION_MAX_LINES : COPILOT_CONTEXT_MAX_LINES
-    ),
-    host: activeTerminalTab.host,
-    username: activeTerminalTab.username,
-    cwd: getTabObservation(activeTerminalTab.id)?.cwd
+    recentOutput: readTerminalOutput(tab.id, maxLines),
+    host: tab.host,
+    username: tab.username,
+    osHint: describeTabOs(tab.kind, tab.wslDistro),
+    cwd: getTabObservation(tab.id)?.cwd
   }
 }
 
@@ -1106,11 +1205,23 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
   const settings = normalizeAISettings(await window.api.config.getAISettings())
   const limit = resolveActiveContextLength(settings)
   refreshAutonomyMode(settings.copilotAutonomy)
-  const contextMessage = buildContextMessage(context)
   const userRules = useUserRulesStore.getState().rules
+  const tier = toolTierForProfile(settings.copilotModelProfile)
+  // Force the chart path only when a terminal is bound to read from.
+  const chartIntent = mentionsTerminal && !!activeTerminalTab && CHART_INTENT.test(prompt)
+
+  // Decide compression against what this turn will ACTUALLY send: the sections
+  // and tool set for the active tier, plus every per-turn injection. Estimating
+  // from the full worst-case prompt moved the threshold for trimmed tiers.
+  const surface = toolSurfaceFor(prompt)
   const budgetParams = {
-    systemPrompt: buildEffectiveSystemPrompt(userRules),
-    contextMessage,
+    systemPrompt: buildEffectiveSystemPrompt(userRules, {
+      chart: chartIntent,
+      mermaid: MERMAID_INTENT.test(prompt),
+      // A chart turn disables function calling, so it is charged for no tools.
+      toolNames: chartIntent ? [] : toolNamesFor(tier, surface)
+    }),
+    contextMessage: fixedOverheadText(context, tabId, chartIntent ? undefined : tier, surface),
     draft: prompt,
     limit
   }
@@ -1187,16 +1298,17 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
   startTurn({
     tabId,
     context,
+    contextTabId: activeTerminalTab?.id,
+    contextMaxLines: contextMaxLines(prompt),
     boundSessionId: mentionsTerminal ? activeTerminalTab?.sessionId : undefined,
     boundTabId: mentionsTerminal ? activeTerminalTab?.id : undefined,
     conversation: history,
     contextLimit: limit,
-    toolTier: toolTierForProfile(settings.copilotModelProfile),
+    toolTier: tier,
     guard: createGuardState(),
     // Raw instruction, kept for the Verify step's display-only stop decision.
     userIntent: prompt,
-    // Force the chart path only when a terminal is bound to read from.
-    chartIntent: mentionsTerminal && !!activeTerminalTab && CHART_INTENT.test(prompt)
+    chartIntent
   })
 }
 
@@ -1223,12 +1335,50 @@ export function askAboutSelection(selection: string): void {
 
 /**
  * Estimated token cost of the tool/function schemas sent every turn. Which
- * schemas are sent depends on the model tier, so the meter is charged for the
- * tier actually in use rather than always for the full set.
+ * schemas are sent depends on the model tier and on whether skills exist, so the
+ * meter is charged for the surface actually in use rather than the full set.
+ * Cached per surface because the JSON is rebuilt on every keystroke of the
+ * draft, and it never changes for a given surface.
  */
-const TOOLS_DEFINITION_TEXT: Record<ToolTier, string> = {
-  core: JSON.stringify(buildAITools('core')),
-  full: JSON.stringify(buildAITools('full'))
+const toolsDefinitionCache = new Map<string, string>()
+
+function toolsDefinitionText(tier: ToolTier, surface: ToolSurfaceOptions): string {
+  const key = `${tier}:${!!surface.hasSkills}:${!!surface.aiSettingsIntent}`
+  let text = toolsDefinitionCache.get(key)
+  if (text === undefined) {
+    text = JSON.stringify(buildAITools(tier, surface))
+    toolsDefinitionCache.set(key, text)
+  }
+  return text
+}
+
+/**
+ * Everything a turn pays for besides the running conversation: the per-turn
+ * context injections plus the tool schemas.
+ *
+ * Account for EVERY per-turn injection, not just the terminal context — the app
+ * snapshot, skills catalog, task-memory ledger and the tool schemas all ride
+ * along on each turn. Shared by the UI meter and the pre-turn compression
+ * decision so the two cannot disagree about how much of the window is already
+ * spoken for.
+ */
+function fixedOverheadText(
+  context: TerminalContext | undefined,
+  chatTabId: string | undefined,
+  /** Tier whose schemas ride along, or undefined when tools are disabled. */
+  tier: ToolTier | undefined,
+  surface: ToolSurfaceOptions
+): string {
+  return [
+    buildContextMessage(context),
+    buildToolContextMessage(tier),
+    buildSkillsContextMessage(),
+    chatTabId ? buildTaskMemoryMessage(chatTabId) : undefined,
+    buildPlanContextMessage(chatTabId),
+    tier ? toolsDefinitionText(tier, surface) : undefined
+  ]
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 /** Build context budget for the active chat tab (for UI meter). */
@@ -1241,24 +1391,22 @@ export function computeActiveTabBudget(params: {
   /** Active copilot model profile; decides how large a tool schema is sent. */
   profile?: ModelProfile
 }) {
-  // Account for EVERY per-turn injection, not just the terminal context: the app
-  // snapshot, skills catalog, task-memory ledger and the tool schemas are all
-  // sent each turn and previously went uncounted, understating real usage.
-  const activeChatTabId = useAIStore.getState().activeChatTabId
-  const overhead = [
-    buildContextMessage(params.context),
-    buildToolContextMessage(),
-    buildSkillsContextMessage(),
-    activeChatTabId ? buildTaskMemoryMessage(activeChatTabId) : undefined,
-    buildPlanContextMessage(activeChatTabId ?? undefined),
-    TOOLS_DEFINITION_TEXT[toolTierForProfile(params.profile)]
-  ]
-    .filter(Boolean)
-    .join('\n\n')
+  const activeChatTabId = useAIStore.getState().activeChatTabId ?? undefined
+  const tier = toolTierForProfile(params.profile)
+  // A gauge should read the fullest the next turn could get, so it assumes the
+  // optional sections and the heavyweight settings schema all ride along.
+  const surface: ToolSurfaceOptions = { hasSkills: hasEnabledSkills(), aiSettingsIntent: true }
 
   return buildChatPayload({
-    systemPrompt: buildEffectiveSystemPrompt(params.userRules ?? ''),
-    contextMessage: overhead,
+    // The meter is a headroom gauge, so it keeps the worst-case chart+mermaid
+    // sections — but scoped to the tier's tools, since a trimmed tier can never
+    // be charged for schemas and rules it does not receive.
+    systemPrompt: buildEffectiveSystemPrompt(params.userRules ?? '', {
+      chart: true,
+      mermaid: true,
+      toolNames: toolNamesFor(tier, surface)
+    }),
+    contextMessage: fixedOverheadText(params.context, activeChatTabId, tier, surface),
     messages: params.messages,
     draft: params.draft,
     limit: params.limit

@@ -305,13 +305,20 @@ export interface AIChatRequest {
   /**
    * Which optional system-prompt sections to assemble for this turn. Lets the
    * renderer inject the long chart/mermaid rules only when the user asks to
-   * visualize/diagram, and trim first-turn examples on continuation turns.
+   * visualize/diagram. Tool-dependent sections are decided in main from the
+   * tools it actually sends, so they are not carried here.
    */
   promptSections?: {
     chart?: boolean
     mermaid?: boolean
-    concise?: boolean
   }
+  /**
+   * Whether this turn's request is about AI configuration, so the settings tool
+   * should carry its heavyweight `ai` branch. Decided in the renderer, which
+   * holds the task's opening request and must charge its budget for the same
+   * schema main will send.
+   */
+  aiSettingsIntent?: boolean
 }
 
 /** Summarize older Copilot turns before they exceed the context budget. */

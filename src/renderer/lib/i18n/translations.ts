@@ -278,6 +278,8 @@ const zh = {
   'copilot.context.compressing': '上下文接近上限，正在压缩较早消息…',
   'copilot.context.compressed': '已压缩 {count} 条较早消息',
   'copilot.context.compressFailed': '上下文压缩失败，请删减内容后重试',
+  'copilot.context.overCommitted':
+    '上下文窗口太小，系统提示与工具定义已几乎占满；请在设置中调大上下文长度或切换模型档位',
   'copilot.queued': '当前任务仍在进行，已排队 {count} 条消息，稍后自动发送',
   'copilot.newChat': '新对话',
   'copilot.newTab': '新建聊天',
@@ -844,6 +846,8 @@ const en: Record<keyof typeof zh, string> = {
   'copilot.context.compressing': 'Context nearly full — compressing older messages…',
   'copilot.context.compressed': 'Compressed {count} earlier messages',
   'copilot.context.compressFailed': 'Context compression failed. Shorten the chat and try again.',
+  'copilot.context.overCommitted':
+    'Context window too small — the system prompt and tool definitions nearly fill it. Raise the context length or switch model profile in Settings.',
   'copilot.queued': 'Still working — queued {count} message(s), they will be sent next.',
   'copilot.newChat': 'New chat',
   'copilot.newTab': 'New chat tab',

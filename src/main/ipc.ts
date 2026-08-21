@@ -85,7 +85,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
 
   const ssh = new SshManager(getWindow)
   const wsl = new WslManager(getWindow)
-  const ai = new AIProvider(() => config.getAISettings())
+  const ai = new AIProvider(
+    () => config.getAISettings(),
+    () => config.getLocale(),
+    () => config.getSkills()
+  )
 
   // --- Debug log ---
   ipcMain.on('debug:log', (_e, entry: DebugLogPayload) => {

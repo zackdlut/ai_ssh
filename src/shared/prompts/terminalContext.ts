@@ -1,6 +1,19 @@
 import type { TerminalContext } from '../types'
 
 /**
+ * Describe what kind of shell a tab is, for the context message's OS hint.
+ *
+ * The SSH/WSL distinction is load-bearing rather than cosmetic: WSL tabs have
+ * no SFTP channel, so the file tools cannot run there and the model has to fall
+ * back to exec_command. Saying so up front saves a failed tool call.
+ */
+export function describeTabOs(kind: 'ssh' | 'wsl' | undefined, wslDistro?: string): string {
+  if (kind !== 'wsl') return 'remote Linux/Unix over SSH'
+  const distro = wslDistro ? ` (${wslDistro})` : ''
+  return `local WSL${distro} — no SFTP channel, so the file tools do not work on this tab; use exec_command`
+}
+
+/**
  * Build the per-turn "current terminal context" system message from the
  * connected host / user / cwd / OS hint and a snippet of recent output.
  * Returns null when there is nothing worth injecting.

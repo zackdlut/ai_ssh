@@ -1,4 +1,4 @@
-import { COPILOT_SYSTEM_PROMPT } from './copilot'
+import { buildCopilotSystemPrompt, type PromptSections } from './copilot'
 
 /** Wrap trimmed user rules for injection as a system message. */
 export function buildUserRulesSystemMessage(rules: string): string | undefined {
@@ -9,9 +9,18 @@ export function buildUserRulesSystemMessage(rules: string): string | undefined {
 ${trimmed}`
 }
 
-/** Base copilot system prompt plus optional user rules (for token budget). */
-export function buildEffectiveSystemPrompt(userRules = ''): string {
+/**
+ * Copilot system prompt plus optional user rules, as one string, for token
+ * accounting. Callers pass the same `sections` the real turn will use — the
+ * default (everything on, full tool set) overstates a trimmed tier by thousands
+ * of tokens, which is enough to move the compression threshold.
+ */
+export function buildEffectiveSystemPrompt(
+  userRules = '',
+  sections: PromptSections = { chart: true, mermaid: true }
+): string {
+  const prompt = buildCopilotSystemPrompt(sections)
   const rulesMessage = buildUserRulesSystemMessage(userRules)
-  if (!rulesMessage) return COPILOT_SYSTEM_PROMPT
-  return `${COPILOT_SYSTEM_PROMPT}\n\n${rulesMessage}`
+  if (!rulesMessage) return prompt
+  return `${prompt}\n\n${rulesMessage}`
 }

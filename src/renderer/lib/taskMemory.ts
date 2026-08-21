@@ -13,7 +13,7 @@
  */
 import { useAIStore } from '../store/aiStore'
 import type { CopilotChatMessage, ToolCallView } from '../../shared/types'
-import { isReadonlyTool } from '../../shared/aiTools'
+import { isAutoApprovedTool } from '../../shared/aiTools'
 
 export interface TaskStep {
   index: number
@@ -61,9 +61,9 @@ function clamp(text: string | undefined): string | undefined {
 }
 
 function stepFromCall(call: ToolCallView, index: number): TaskStep | null {
-  // Read-only lookups leave no lasting state, so they would only dilute the
-  // ledger with noise the model can re-derive at any time.
-  if (isReadonlyTool(call.name)) return null
+  // Lookups and the agent's own bookkeeping leave no lasting state, so they
+  // would only dilute the ledger with noise the model can re-derive at any time.
+  if (isAutoApprovedTool(call.name)) return null
   if (call.status === 'pending' || call.status === 'running') return null
 
   const status: TaskStep['status'] =

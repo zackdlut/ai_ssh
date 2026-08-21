@@ -16,7 +16,7 @@
  * safe rather than merely fail to look dangerous.
  */
 import { isDangerous } from './dangerousCommands'
-import { isReadonlyTool } from './aiTools'
+import { isAutoApprovedTool } from './aiTools'
 import type { AutonomyMode } from './types'
 
 export const DEFAULT_AUTONOMY_MODE: AutonomyMode = 'balanced'
@@ -157,7 +157,7 @@ function parseCommand(argsJson: string | undefined): string | null {
 export function decideToolCall(input: PolicyInput): ToolDecision {
   const { tool, argsJson, mode, sessionAllowlist } = input
 
-  if (isReadonlyTool(tool)) return 'auto'
+  if (isAutoApprovedTool(tool)) return 'auto'
 
   if (tool === 'exec_command' || tool === 'run_in_terminal') {
     const command = parseCommand(argsJson)

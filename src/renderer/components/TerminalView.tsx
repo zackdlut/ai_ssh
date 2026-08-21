@@ -11,6 +11,7 @@ import { extractCommands, isDangerous } from '../lib/commands'
 import { stripAnsi } from '../lib/streamParse'
 import { buildMarkerCommand, parseMarker, runCapturedCommand, getCaptureTiming, hasCaptureMarker, formatCaptureElapsed, isSessionCaptureActive } from '../lib/execCapture'
 import { getTabObservation, setTabObservation } from '../lib/terminalObservation'
+import { describeTabOs } from '../../shared/prompts'
 import {
   isFollowAppTheme,
   resolveTerminalTheme,
@@ -90,15 +91,19 @@ const MAX_CAPTURE = 2000
 // Skip the summarize LLM call when a single command returns short, plain output.
 const DIRECT_ANSWER_MAX = 200
 
+/** Tab fields the NL-mode context needs; a subset of TerminalTab. */
+type NlContextTab = Pick<TerminalTab, 'id' | 'host' | 'username' | 'kind' | 'wslDistro'>
+
+/** Same fields, as carried across the NL summarize hop (tab id renamed). */
+type NlSummarizeContext = Omit<NlContextTab, 'id'> & { tabId: string }
+
 /** Build NL-mode AI context, including the observed shell cwd when known. */
-function buildNlContext(
-  term: Terminal,
-  tab: { id: string; host: string; username: string }
-): TerminalContext {
+function buildNlContext(term: Terminal, tab: NlContextTab): TerminalContext {
   return {
     recentOutput: serializeBuffer(term, NL_CONTEXT_MAX_LINES),
     host: tab.host,
     username: tab.username,
+    osHint: describeTabOs(tab.kind, tab.wslDistro),
     cwd: getTabObservation(tab.id)?.cwd
   }
 }
@@ -172,7 +177,7 @@ function formatRunsFallback(runs: CommandRun[]): string | null {
 /** Stream summarize tokens into the terminal as they arrive from the model. */
 function streamSummarize(
   term: Terminal,
-  req: { request: string; runs: CommandRun[]; context?: { tabId: string; host: string; username: string } },
+  req: { request: string; runs: CommandRun[]; context?: NlSummarizeContext },
   locale: AppLocale
 ): Promise<void> {
   const requestId = crypto.randomUUID()
@@ -232,11 +237,7 @@ function streamSummarize(
       request: req.request,
       runs: req.runs,
       context: req.context
-        ? buildNlContext(term, {
-            id: req.context.tabId,
-            host: req.context.host,
-            username: req.context.username
-          })
+        ? buildNlContext(term, { ...req.context, id: req.context.tabId })
         : undefined
     })
   })
@@ -601,7 +602,13 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
               {
                 request: text,
                 runs,
-                context: { tabId: tab.id, host: tab.host, username: tab.username }
+                context: {
+                  tabId: tab.id,
+                  host: tab.host,
+                  username: tab.username,
+                  kind: tab.kind,
+                  wslDistro: tab.wslDistro
+                }
               },
               loc()
             )
