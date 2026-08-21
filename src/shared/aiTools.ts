@@ -162,7 +162,8 @@ export function toolNamesFor(tier: ToolTier, opts: ToolSurfaceOptions = {}): str
  */
 const TAB_ID_PARAM = {
   type: 'string',
-  description: 'Connected tab to act on, by tab_id from the snapshot.'
+  description:
+    'Connected tab to act on, by tab_id from the snapshot. Defaults to the pinned tab when omitted.'
 } as const
 
 /** Suffix shared by the list_* tools, whose ids the snapshot already carries. */

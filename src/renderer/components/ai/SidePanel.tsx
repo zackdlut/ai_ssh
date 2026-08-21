@@ -3,7 +3,8 @@ import {
   useAIStore,
   clampPanelWidth,
   PANEL_MIN_WIDTH,
-  PANEL_MAX_WIDTH
+  PANEL_MAX_WIDTH,
+  MAX_CHAT_TABS
 } from '../../store/aiStore'
 import { useTabsStore } from '../../store/tabsStore'
 import {
@@ -14,7 +15,7 @@ import {
   rejectToolCall,
   abortLoop
 } from '../../lib/aiService'
-import { getPendingToolCalls, hasPendingToolCalls } from '../../lib/toolApproval'
+import { getPendingToolCalls } from '../../lib/toolApproval'
 import { normalizeAISettings, DEFAULT_CONTEXT_LENGTHS } from '../../../shared/aiSettings'
 import type { ModelProfile } from '../../../shared/types'
 import { useT, type TranslationKey } from '../../lib/i18n'
@@ -28,9 +29,16 @@ import ChatHistoryPanel from './ChatHistoryPanel'
 import ModelSelect from './ModelSelect'
 import ContextMeter from './ContextMeter'
 import PlanCard from './PlanCard'
+import TerminalTabPicker from './TerminalTabPicker'
 import { COPILOT_CONTEXT_MAX_LINES, COPILOT_TERMINAL_MENTION_MAX_LINES, readTerminalOutput } from '../../lib/terminalRegistry'
-
-const TERMINAL_MENTION = /@terminal\b/i
+import {
+  TERMINAL_MENTION,
+  formatTerminalLabel,
+  needsTerminalPicker,
+  replaceAtMention,
+  resolvePinnedTab,
+  terminalContextTabId
+} from '../../lib/pinnedTerminal'
 
 const EXAMPLE_KEYS = [
   'copilot.example1',
@@ -38,6 +46,8 @@ const EXAMPLE_KEYS = [
   'copilot.example3',
   'copilot.example4'
 ] as const satisfies readonly TranslationKey[]
+
+type PickerReason = 'mention' | 'send' | 'rebind'
 
 type ContextMenu =
   | { source: 'chat'; x: number; y: number; text: string }
@@ -51,17 +61,27 @@ export default function SidePanel(): JSX.Element {
   const panelWidth = useAIStore((s) => s.panelWidth)
   const notice = useAIStore((s) => s.notice)
   const setPanelWidth = useAIStore((s) => s.setPanelWidth)
-  const setBusy = useAIStore((s) => s.setBusy)
   const setPanelOpen = useAIStore((s) => s.setPanelOpen)
   const updateDraft = useAIStore((s) => s.updateDraft)
   const setNotice = useAIStore((s) => s.setNotice)
+  const setPinnedTerminal = useAIStore((s) => s.setPinnedTerminal)
+  const addChatTab = useAIStore((s) => s.addChatTab)
   const messages = activeChat?.messages ?? []
   const input = activeChat?.draft ?? ''
 
-  const activeTab = useTabsStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
+  const terminalTabs = useTabsStore((s) => s.tabs)
+  const activeTabId = useTabsStore((s) => s.activeTabId)
+  const activeTab = terminalTabs.find((t) => t.id === activeTabId)
 
   const [resizing, setResizing] = useState(false)
-  const [mentionOpen, setMentionOpen] = useState(false)
+  const [picker, setPicker] = useState<PickerReason | null>(null)
+  const [pickerIndex, setPickerIndex] = useState(0)
+  const pendingSendRef = useRef<string | null>(null)
+  const pickerIndexRef = useRef(0)
+  const terminalTabsRef = useRef(terminalTabs)
+  const pickTerminalRef = useRef<(tabId: string) => void>(() => {})
+  pickerIndexRef.current = pickerIndex
+  terminalTabsRef.current = terminalTabs
   const [copilotProfile, setCopilotProfile] = useState<ModelProfile>('default')
   const [modelNames, setModelNames] = useState<Record<ModelProfile, string>>({
     default: '',
@@ -96,17 +116,29 @@ export default function SidePanel(): JSX.Element {
     })
   }, [])
 
+  const pin = useMemo(
+    () =>
+      resolvePinnedTab(
+        activeChat?.pinnedTabId,
+        activeChat?.pinnedLabel,
+        terminalTabs.map((t) => t.id)
+      ),
+    [activeChat?.pinnedTabId, activeChat?.pinnedLabel, terminalTabs]
+  )
+  const contextTabId = terminalContextTabId(pin, activeTabId)
+  const contextTab = contextTabId ? terminalTabs.find((t) => t.id === contextTabId) : undefined
+
   const contextBudget = useMemo(() => {
     const limit = contextLengths[copilotProfile] ?? DEFAULT_CONTEXT_LENGTHS[copilotProfile]
     const mentionsTerminal = TERMINAL_MENTION.test(input)
-    const context = activeTab
+    const context = contextTab
       ? {
           recentOutput: readTerminalOutput(
-            activeTab.id,
+            contextTab.id,
             mentionsTerminal ? COPILOT_TERMINAL_MENTION_MAX_LINES : COPILOT_CONTEXT_MAX_LINES
           ),
-          host: activeTab.host,
-          username: activeTab.username
+          host: contextTab.host,
+          username: contextTab.username
         }
       : undefined
     return computeActiveTabBudget({
@@ -117,7 +149,7 @@ export default function SidePanel(): JSX.Element {
       userRules,
       profile: copilotProfile
     })
-  }, [messages, input, activeTab, copilotProfile, contextLengths, activeChatTabId, userRules])
+  }, [messages, input, contextTab, copilotProfile, contextLengths, activeChatTabId, userRules])
 
   const pendingApprovals = useMemo(
     () => (activeChatTabId ? getPendingToolCalls(activeChatTabId) : []),
@@ -141,7 +173,8 @@ export default function SidePanel(): JSX.Element {
   }
 
   useEffect(() => {
-    setMentionOpen(false)
+    setPicker(null)
+    pendingSendRef.current = null
   }, [activeChatTabId])
 
   const onProfileChange = (profile: ModelProfile): void => {
@@ -155,6 +188,18 @@ export default function SidePanel(): JSX.Element {
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight })
   }, [messages, activeChatTabId])
+
+  useEffect(() => {
+    if (!picker || picker === 'mention') return
+    const onDown = (e: MouseEvent): void => {
+      const el = e.target as HTMLElement
+      if (el.closest('.mention-menu') || el.closest('.context-hint-btn')) return
+      setPicker(null)
+      pendingSendRef.current = null
+    }
+    window.addEventListener('mousedown', onDown)
+    return () => window.removeEventListener('mousedown', onDown)
+  }, [picker])
 
   useEffect(() => {
     if (!menu) return
@@ -249,9 +294,23 @@ export default function SidePanel(): JSX.Element {
     setMenu(null)
   }
 
-  const send = (): void => {
-    const text = input.trim()
-    if (!text) return
+  const defaultPickerIndex = (): number => {
+    const idx = terminalTabs.findIndex((t) => t.id === (activeChat?.pinnedTabId ?? activeTabId))
+    return idx >= 0 ? idx : 0
+  }
+
+  const openPicker = (reason: PickerReason): void => {
+    setPickerIndex(defaultPickerIndex())
+    setPicker(reason)
+  }
+
+  const closePicker = (): void => {
+    setPicker(null)
+    pendingSendRef.current = null
+  }
+
+  const sendText = (text: string): void => {
+    if (!text.trim()) return
 
     if (activeChatTabId) {
       const approval = tryHandleToolApprovalFromInput(activeChatTabId, text)
@@ -264,49 +323,128 @@ export default function SidePanel(): JSX.Element {
           setNotice(t('tool.approveDangerCard'))
         }
         updateDraft(activeChatTabId, '')
-        setMentionOpen(false)
+        closePicker()
         return
       }
-      // A new instruction while actions await approval supersedes them;
-      // sendPrompt drops the pending approvals and starts a fresh turn even
-      // though the paused loop still holds the busy flag.
       if (waitingToolApproval) {
         updateDraft(activeChatTabId, '')
         void sendPrompt(text)
-        setMentionOpen(false)
+        closePicker()
         return
       }
     }
 
+    if (needsTerminalPicker(text, pin)) {
+      pendingSendRef.current = text
+      openPicker('send')
+      setNotice(t('copilot.chooseTabToBind'))
+      return
+    }
+
     if (busy) return
     void sendPrompt(text)
-    setMentionOpen(false)
+    closePicker()
+  }
+
+  const send = (): void => {
+    sendText(input)
   }
 
   const refreshMention = (value: string, caret: number): void => {
     const before = value.slice(0, caret)
     const m = /@(\w*)$/.exec(before)
-    setMentionOpen(!!m && 'terminal'.startsWith(m[1].toLowerCase()))
-  }
-
-  const onInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>): void => {
-    setInput(e.target.value)
-    refreshMention(e.target.value, e.target.selectionStart ?? e.target.value.length)
+    const wantsMention = !!m && 'terminal'.startsWith(m[1].toLowerCase())
+    if (wantsMention) {
+      if (picker !== 'mention') openPicker('mention')
+    } else if (picker === 'mention') {
+      setPicker(null)
+    }
   }
 
   const insertTerminalMention = (): void => {
     const el = inputRef.current
     const caret = el?.selectionStart ?? input.length
-    const before = input.slice(0, caret).replace(/@(\w*)$/, '@terminal ')
-    const after = input.slice(caret)
-    const next = before + after
+    const { next, caret: pos } = replaceAtMention(input, caret)
     setInput(next)
-    setMentionOpen(false)
     requestAnimationFrame(() => {
       el?.focus()
-      const pos = before.length
       el?.setSelectionRange(pos, pos)
     })
+  }
+
+  const onPickTerminal = (tabId: string): void => {
+    if (!activeChatTabId) return
+    const reason = picker
+    const label = formatTerminalLabel(
+      terminalTabs.find((t) => t.id === tabId) ?? { username: '', host: tabId }
+    )
+    setPinnedTerminal(activeChatTabId, tabId)
+    if (reason === 'mention') insertTerminalMention()
+    const toSend = reason === 'send' ? pendingSendRef.current : null
+    setPicker(null)
+    pendingSendRef.current = null
+    if (reason === 'send' && toSend) {
+      void sendPrompt(toSend)
+      return
+    }
+    if (reason === 'rebind') setNotice(t('copilot.rebindNotice', { host: label }))
+  }
+  pickTerminalRef.current = onPickTerminal
+
+  useEffect(() => {
+    if (!picker) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.isComposing || e.keyCode === 229) return
+      const tabs = terminalTabsRef.current
+      const count = tabs.length
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        e.stopPropagation()
+        if (count === 0) return
+        const delta = e.key === 'ArrowDown' ? 1 : -1
+        setPickerIndex((i) => (i + delta + count) % count)
+        return
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault()
+        e.stopPropagation()
+        const tab = tabs[pickerIndexRef.current]
+        if (tab) pickTerminalRef.current(tab.id)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        setPicker(null)
+        pendingSendRef.current = null
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [picker])
+
+  const clearPin = (): void => {
+    if (!activeChatTabId) return
+    setPinnedTerminal(activeChatTabId, null)
+    closePicker()
+    setNotice(t('copilot.pinCleared'))
+  }
+
+  const newChatForTerminal = (): void => {
+    if (!activeTab) return
+    const id = addChatTab()
+    if (!id) {
+      setNotice(t('copilot.maxTabsTitle', { max: MAX_CHAT_TABS }))
+      return
+    }
+    setPinnedTerminal(id, activeTab.id)
+    closePicker()
+    setNotice(t('copilot.newChatForTerminalPinned', { host: formatTerminalLabel(activeTab) }))
+  }
+
+  const onInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>): void => {
+    setInput(e.target.value)
+    refreshMention(e.target.value, e.target.selectionStart ?? e.target.value.length)
   }
 
   const stop = (): void => {
@@ -315,15 +453,7 @@ export default function SidePanel(): JSX.Element {
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.nativeEvent.isComposing || e.keyCode === 229) return
-    if (mentionOpen && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey))) {
-      e.preventDefault()
-      insertTerminalMention()
-      return
-    }
-    if (e.key === 'Escape' && mentionOpen) {
-      setMentionOpen(false)
-      return
-    }
+    if (picker) return
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       send()
@@ -357,8 +487,68 @@ export default function SidePanel(): JSX.Element {
     else if (e.key === 'ArrowRight') setPanelWidth(panelWidth - 24)
   }
 
-  const terminalLabel = activeTab ? `${activeTab.username}@${activeTab.host}` : t('copilot.noTerminal')
-  const terminalState = activeTab ? 'live' : 'idle'
+  const hintLabel =
+    pin.status === 'live' && contextTab
+      ? formatTerminalLabel(contextTab)
+      : pin.status === 'stale'
+        ? activeChat?.pinnedLabel || t('copilot.pinnedClosed')
+        : activeTab
+          ? formatTerminalLabel(activeTab)
+          : t('copilot.noTerminal')
+  const hintState =
+    pin.status === 'live' ? 'live pinned' : pin.status === 'stale' ? 'idle stale' : activeTab ? 'live' : 'idle'
+  const diverged =
+    pin.status === 'live' && activeTab && activeTab.id !== pin.tabId
+  const hintTitle = diverged
+    ? t('copilot.viewingOther', { host: formatTerminalLabel(activeTab) })
+    : pin.status === 'stale'
+      ? t('copilot.pinnedClosed')
+      : hintLabel
+  const hintClass = [
+    'context-hint',
+    hintState,
+    diverged ? 'diverged' : ''
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  const pickerFooter =
+    picker === 'rebind' ? (
+      <div className="mention-footer">
+        {pin.status !== 'none' && (
+          <button
+            type="button"
+            className="mention-item mention-item--action"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={clearPin}
+          >
+            <span className="mention-name">{t('copilot.clearPin')}</span>
+          </button>
+        )}
+        <button
+          type="button"
+          className="mention-item mention-item--action"
+          disabled={!activeTab}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={newChatForTerminal}
+        >
+          <span className="mention-name">{t('copilot.newChatForTerminal')}</span>
+        </button>
+      </div>
+    ) : null
+
+  const contextHint = (placement: 'header' | 'composer'): JSX.Element => (
+    <button
+      type="button"
+      className={`${hintClass} context-hint-btn context-hint--${placement}`}
+      title={hintTitle}
+      aria-label={t('copilot.pickTerminal')}
+      onClick={() => (picker === 'rebind' ? closePicker() : openPicker('rebind'))}
+    >
+      {hintLabel}
+      {pin.status === 'live' && <span className="context-hint-pin">{t('copilot.pinnedHint')}</span>}
+    </button>
+  )
 
   return (
     <div className="side-panel copilot-panel" style={{ width: panelWidth }}>
@@ -380,12 +570,7 @@ export default function SidePanel(): JSX.Element {
         <span className="panel-title">
           <span className="spark" />
           <span className="panel-title-text">{t('copilot.title')}</span>
-          <span
-            className={`context-hint context-hint--header ${terminalState}`}
-            title={terminalLabel}
-          >
-            {terminalLabel}
-          </span>
+          {contextHint('header')}
         </span>
         <div className="panel-toolbar">
           <button className="toolbar-btn panel-close" onClick={() => setPanelOpen(false)} title={t('copilot.hide')}>
@@ -411,7 +596,7 @@ export default function SidePanel(): JSX.Element {
                   type="button"
                   className="hint-chip"
                   disabled={busy}
-                  onClick={() => sendPrompt(t(key))}
+                  onClick={() => sendText(t(key))}
                 >
                   {t(key)}
                 </button>
@@ -443,24 +628,19 @@ export default function SidePanel(): JSX.Element {
       )}
 
       <div className="composer">
-        <span
-          className={`context-hint context-hint--composer ${terminalState}`}
-          title={terminalLabel}
-        >
-          {terminalLabel}
-        </span>
+        {contextHint('composer')}
         <div className="composer-box">
-          {mentionOpen && (
-            <div className="mention-menu" role="listbox">
-              <button
-                className="mention-item"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={insertTerminalMention}
-              >
-                <span className="mention-name">@terminal</span>
-                <span className="mention-desc">{t('copilot.mentionDesc')}</span>
-              </button>
-            </div>
+          {picker && (
+            <TerminalTabPicker
+              tabs={terminalTabs}
+              activeTabId={activeTabId}
+              pinnedTabId={activeChat?.pinnedTabId}
+              highlightIndex={pickerIndex}
+              emptyLabel={t('copilot.noOpenTabs')}
+              onHighlight={setPickerIndex}
+              onSelect={onPickTerminal}
+              footer={pickerFooter}
+            />
           )}
           <textarea
             key={activeChatTabId ?? 'composer'}

@@ -84,6 +84,11 @@ describe('buildCopilotSystemPrompt tool gating', () => {
     expect(full).toContain('App settings line')
   })
 
+  it('tells the model to default to the pinned tab', () => {
+    const prompt = buildCopilotSystemPrompt({ toolNames: CORE })
+    expect(prompt).toContain('Default to the tab marked pinned')
+  })
+
   it('shrinks as the tool set shrinks', () => {
     const full = buildCopilotSystemPrompt({ toolNames: FULL }).length
     const core = buildCopilotSystemPrompt({ toolNames: CORE }).length

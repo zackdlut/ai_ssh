@@ -19,6 +19,7 @@ import { updatePlan } from './planTool'
 import { formatCaptureElapsed } from './execCapture'
 import { runAgentCommand } from './agentExec'
 import { getTabObservation, setTabObservation } from './terminalObservation'
+import { snapshotTabMarkers, applyPinnedTabId } from './pinnedTerminal'
 import { verifyCommand } from '../../shared/verify'
 import { normalizeAISettings } from '../../shared/aiSettings'
 import { toolNamesFor, type ToolTier } from '../../shared/aiTools'
@@ -656,6 +657,8 @@ export function parseToolArgs(raw: string): ParsedToolArgs {
 export interface ToolExecContext {
   /** Chat tab the call belongs to; needed by chat-scoped tools like update_plan. */
   chatTabId?: string
+  /** Terminal tab this chat is pinned to; host tools omit tab_id against it. */
+  pinnedTabId?: string
   onCaptureProgress?: (elapsedMs: number) => void
   /** Receives a canceller once a long-running command starts, for Stop. */
   onAbortHandle?: (abort: () => void) => void
@@ -667,6 +670,7 @@ export async function executeToolCall(
   args: Record<string, unknown>,
   ctx?: ToolExecContext
 ): Promise<ToolResult> {
+  args = applyPinnedTabId(name, args, ctx?.pinnedTabId)
   switch (name) {
     case 'open_ssh':
       return openSsh(args)
@@ -728,7 +732,9 @@ export async function executeToolCall(
  */
 export function buildToolContextMessage(
   /** Tier whose tools this turn sends, or undefined when tools are disabled. */
-  tier: ToolTier | undefined
+  tier: ToolTier | undefined,
+  /** Terminal tab the current chat task is pinned to. */
+  pinnedTabId?: string
 ): string | undefined {
   // A turn with no tools can act on no id, so the whole snapshot is dead weight.
   if (!tier) return undefined
@@ -764,7 +770,7 @@ export function buildToolContextMessage(
                 }`
               : ''
           return `- tab_id=${t.id} | ${t.username}@${t.host}:${t.port} | ${t.status}${
-            t.id === activeTabId ? ' | active' : ''
+            snapshotTabMarkers(t.id, activeTabId, pinnedTabId)
           }${cwd}${last}`
         })
         .join('\n')

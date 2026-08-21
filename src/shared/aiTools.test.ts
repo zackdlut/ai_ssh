@@ -88,4 +88,9 @@ describe('buildAITools', () => {
       expect(toolNamesFor('full'), tool).toContain(tool)
     }
   })
+
+  it('documents that tab_id defaults to the pinned tab', () => {
+    const exec = buildAITools('core').find((t) => t.function.name === 'exec_command')
+    expect(JSON.stringify(exec)).toContain('pinned tab')
+  })
 })

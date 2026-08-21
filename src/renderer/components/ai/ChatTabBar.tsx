@@ -121,7 +121,11 @@ export default function ChatTabBar({ onOpenHistory }: Props): JSX.Element {
                 data-tab-id={tab.id}
                 className={`copilot-tab ${isActive ? 'active' : ''} ${isStreaming ? 'streaming' : ''}`}
                 onClick={() => setActiveChatTab(tab.id)}
-                title={tabLabel(tab, newChatLabel)}
+                title={
+                  tab.pinnedLabel
+                    ? `${tabLabel(tab, newChatLabel)} · ${tab.pinnedLabel}`
+                    : tabLabel(tab, newChatLabel)
+                }
                 role="tab"
                 aria-selected={isActive}
               >

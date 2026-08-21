@@ -9,7 +9,9 @@ import type {
 } from '../../shared/types'
 import { getCopilotStartupOpen } from './startupStore'
 import { useLocaleStore } from './localeStore'
+import { useTabsStore } from './tabsStore'
 import { translate } from '../lib/i18n/translations'
+import { formatTerminalLabel } from '../lib/pinnedTerminal'
 
 export interface ChatMessage extends CopilotChatMessage {
   streaming?: boolean
@@ -137,6 +139,8 @@ function toPersistedState(
       updatedAt: tab.updatedAt,
       archived: tab.archived ?? false,
       plan: tab.plan,
+      pinnedTabId: tab.pinnedTabId,
+      pinnedLabel: tab.pinnedLabel,
       messages: tab.messages.slice(-MAX_MESSAGES_PER_TAB).map((m) => ({
         id: m.id,
         role: m.role,
@@ -263,6 +267,7 @@ interface AIState {
   setActiveChatTab: (id: string) => void
   updateDraft: (tabId: string, draft: string) => void
   clearActiveTab: () => void
+  setPinnedTerminal: (chatTabId: string, terminalTabId: string | null) => void
   renameTab: (tabId: string, title: string) => void
   addMessage: (tabId: string, msg: ChatMessage) => void
   removeMessage: (tabId: string, id: string) => void
@@ -436,8 +441,36 @@ export const useAIStore = create<AIState>((set, get) => ({
     if (!activeId) return
     // Task memory and the plan are derived from / stored on the tab, so
     // clearing the messages is all that is needed to reset the agent's memory.
+    // A new task also drops the terminal pin so the next send re-pins.
     set((s) => ({
-      chatTabs: updateTab(s.chatTabs, activeId, { messages: [], draft: '', plan: undefined })
+      chatTabs: updateTab(s.chatTabs, activeId, {
+        messages: [],
+        draft: '',
+        plan: undefined,
+        pinnedTabId: undefined,
+        pinnedLabel: undefined
+      })
+    }))
+    schedulePersist(get)
+  },
+  setPinnedTerminal: (chatTabId, terminalTabId) => {
+    if (!terminalTabId) {
+      set((s) => ({
+        chatTabs: updateTab(s.chatTabs, chatTabId, {
+          pinnedTabId: undefined,
+          pinnedLabel: undefined
+        })
+      }))
+      schedulePersist(get)
+      return
+    }
+    const tab = useTabsStore.getState().tabs.find((t) => t.id === terminalTabId)
+    const pinnedLabel = tab ? formatTerminalLabel(tab) : undefined
+    set((s) => ({
+      chatTabs: updateTab(s.chatTabs, chatTabId, {
+        pinnedTabId: terminalTabId,
+        pinnedLabel
+      })
     }))
     schedulePersist(get)
   },

@@ -1,6 +1,12 @@
 import { useAIStore, DEFAULT_CHAT_TAB_TITLE } from '../store/aiStore'
 import { useTabsStore } from '../store/tabsStore'
 import { COPILOT_CONTEXT_MAX_LINES, COPILOT_TERMINAL_MENTION_MAX_LINES, readTerminalOutput } from './terminalRegistry'
+import {
+  TERMINAL_MENTION,
+  resolvePinnedTab,
+  shouldPinOnSend,
+  terminalContextTabId
+} from './pinnedTerminal'
 import { getTabObservation } from './terminalObservation'
 import { normalizeAISettings, resolveActiveContextLength } from '../../shared/aiSettings'
 import {
@@ -353,6 +359,17 @@ function advance(loop: LoopState, event: AgentEvent, tabId: string): AgentPhase 
  * host/output snippet is still better context than none.
  */
 function refreshLoopContext(loop: LoopState): void {
+  // A rebind mid-task only takes effect on the next turn: pick up the chat's
+  // current pin without aborting a command already in flight.
+  const chat = useAIStore.getState().chatTabs.find((t) => t.id === loop.tabId)
+  if (chat?.pinnedTabId && chat.pinnedTabId !== loop.contextTabId) {
+    const terminal = useTabsStore.getState().tabs.find((t) => t.id === chat.pinnedTabId)
+    if (terminal) {
+      loop.contextTabId = terminal.id
+      loop.boundTabId = terminal.id
+      loop.boundSessionId = terminal.sessionId
+    }
+  }
   if (!loop.contextTabId) return
   const fresh = readTabContext(loop.contextTabId, loop.contextMaxLines ?? COPILOT_CONTEXT_MAX_LINES)
   if (fresh) loop.context = fresh
@@ -411,7 +428,8 @@ function startTurn(loop: LoopState, epilogue = false): void {
   // conversation both preserves the cacheable prefix and gives these facts
   // recency over the long system prompt.
   const suffix: ChatMessageDTO[] = []
-  const snapshot = buildToolContextMessage(loop.toolTier)
+  const chat = ai.chatTabs.find((t) => t.id === loop.tabId)
+  const snapshot = buildToolContextMessage(loop.toolTier, chat?.pinnedTabId)
   const plan = buildPlanContextMessage(loop.tabId)
   const taskMemory = buildTaskMemoryMessage(loop.tabId)
   if (snapshot) suffix.push({ role: 'system', content: snapshot })
@@ -562,10 +580,12 @@ async function runToolCall(
     data: { args: parsed.args }
   })
   let unregisterAbort: (() => void) | undefined
+  const chat = ai.chatTabs.find((t) => t.id === tabId)
   try {
     const invoke = (): Promise<ToolResult> =>
       executeToolCall(call.name, parsed.args, {
         chatTabId: tabId,
+        pinnedTabId: chat?.pinnedTabId,
         onCaptureProgress:
           call.name === 'exec_command' || call.name === 'run_in_terminal'
             ? (elapsedMs) => {
@@ -1123,9 +1143,6 @@ export function initAIService(): void {
   })
 }
 
-/** Matches the @terminal mention used to bind the active terminal's live output. */
-const TERMINAL_MENTION = /@terminal\b/i
-
 const TAB_TITLE_MAX = 24
 
 function autoTitleFromPrompt(prompt: string): string {
@@ -1136,14 +1153,6 @@ function autoTitleFromPrompt(prompt: string): string {
 
 function tNotice(key: Parameters<typeof translate>[1], vars?: Record<string, string | number>): string {
   return translate(useLocaleStore.getState().locale, key, vars)
-}
-
-function buildTerminalContext(
-  prompt: string,
-  activeTerminalTab: ReturnType<typeof useTabsStore.getState>['tabs'][number] | undefined
-): TerminalContext | undefined {
-  if (!activeTerminalTab) return undefined
-  return readTabContext(activeTerminalTab.id, contextMaxLines(prompt))
 }
 
 /** How much scrollback to include: an explicit @terminal mention asks for more. */
@@ -1167,7 +1176,7 @@ function readTabContext(tabId: string, maxLines: number): TerminalContext | unde
 }
 
 /**
- * Send a user prompt to the AI, attaching the active terminal's recent output
+ * Send a user prompt to the AI, attaching the pinned terminal's recent output
  * and host info as context. Ignored while another request is in flight.
  */
 export async function sendPrompt(text: string, targetTabId?: string): Promise<void> {
@@ -1196,11 +1205,25 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
   let tab = ai.chatTabs.find((t) => t.id === tabId)
   if (!tab) return
 
-  const activeTerminalTab = useTabsStore.getState().tabs.find(
-    (t) => t.id === useTabsStore.getState().activeTabId
+  const terminals = useTabsStore.getState()
+  const activeTerminalId = terminals.activeTabId
+  const nextPinId = shouldPinOnSend(tab.pinnedTabId, activeTerminalId)
+  if (nextPinId && nextPinId !== tab.pinnedTabId) {
+    ai.setPinnedTerminal(tabId, nextPinId)
+    tab = { ...tab, pinnedTabId: nextPinId }
+  }
+
+  const pin = resolvePinnedTab(
+    tab.pinnedTabId,
+    tab.pinnedLabel,
+    terminals.tabs.map((t) => t.id)
   )
+  const contextTabId = terminalContextTabId(pin, activeTerminalId)
+  const contextTab = contextTabId
+    ? terminals.tabs.find((t) => t.id === contextTabId)
+    : undefined
   const mentionsTerminal = TERMINAL_MENTION.test(prompt)
-  const context = buildTerminalContext(prompt, activeTerminalTab)
+  const context = contextTabId ? readTabContext(contextTabId, contextMaxLines(prompt)) : undefined
 
   const settings = normalizeAISettings(await window.api.config.getAISettings())
   const limit = resolveActiveContextLength(settings)
@@ -1208,7 +1231,11 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
   const userRules = useUserRulesStore.getState().rules
   const tier = toolTierForProfile(settings.copilotModelProfile)
   // Force the chart path only when a terminal is bound to read from.
-  const chartIntent = mentionsTerminal && !!activeTerminalTab && CHART_INTENT.test(prompt)
+  const chartIntent = mentionsTerminal && !!contextTab && CHART_INTENT.test(prompt)
+  const boundTabId = pin.status === 'live' ? pin.tabId : contextTab?.id
+  const boundSessionId = boundTabId
+    ? terminals.tabs.find((t) => t.id === boundTabId)?.sessionId
+    : undefined
 
   // Decide compression against what this turn will ACTUALLY send: the sections
   // and tool set for the active tier, plus every per-turn injection. Estimating
@@ -1289,7 +1316,7 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
     data: {
       textLength: prompt.length,
       hasMention: mentionsTerminal,
-      boundTabId: mentionsTerminal ? activeTerminalTab?.id : undefined
+      boundTabId
     }
   })
 
@@ -1298,10 +1325,10 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
   startTurn({
     tabId,
     context,
-    contextTabId: activeTerminalTab?.id,
+    contextTabId,
     contextMaxLines: contextMaxLines(prompt),
-    boundSessionId: mentionsTerminal ? activeTerminalTab?.sessionId : undefined,
-    boundTabId: mentionsTerminal ? activeTerminalTab?.id : undefined,
+    boundSessionId,
+    boundTabId,
     conversation: history,
     contextLimit: limit,
     toolTier: tier,
@@ -1330,6 +1357,11 @@ export function askAboutSelection(selection: string): void {
       ? `${text.slice(0, MAX_SELECTION)}\n${translate(locale, 'copilot.selectionTruncated')}`
       : text
   const prompt = translate(locale, 'copilot.selectionExplain', { selection: clipped })
+  const chatId = useAIStore.getState().activeChatTabId
+  const activeTerminalId = useTabsStore.getState().activeTabId
+  if (chatId && activeTerminalId) {
+    useAIStore.getState().setPinnedTerminal(chatId, activeTerminalId)
+  }
   void sendPrompt(prompt)
 }
 
@@ -1371,7 +1403,7 @@ function fixedOverheadText(
 ): string {
   return [
     buildContextMessage(context),
-    buildToolContextMessage(tier),
+    buildToolContextMessage(tier, chatTabId ? useAIStore.getState().chatTabs.find((t) => t.id === chatTabId)?.pinnedTabId : undefined),
     buildSkillsContextMessage(),
     chatTabId ? buildTaskMemoryMessage(chatTabId) : undefined,
     buildPlanContextMessage(chatTabId),

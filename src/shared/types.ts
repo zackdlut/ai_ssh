@@ -276,6 +276,10 @@ export interface CopilotChatTab {
   archived?: boolean
   /** Current agent task plan for this chat (maintained via the update_plan tool). */
   plan?: PlanItem[]
+  /** Terminal tab this chat task is pinned to (task-level, not 1:1 with SSH tabs). */
+  pinnedTabId?: string
+  /** Display label (`user@host`) kept so a closed pin still has a name. */
+  pinnedLabel?: string
 }
 
 /** Persisted Copilot multi-tab chat state. */

@@ -124,7 +124,7 @@ function environment(t: ToolSet): string {
         connections ? ', saved SSH configs and bookmark folders with theirs' : ''
       }${settings ? ', and an App settings line' : ''}.`,
     t.enabled &&
-      `- Resolve ids from the snapshot; NEVER invent one. ${
+      `- Resolve ids from the snapshot; NEVER invent one. Default to the tab marked pinned; only pass a different tab_id when the user names another host. ${
         named
           ? 'When unsure, pass a name field (connection_name / folder_name) and let the app resolve it, or call the matching list_* tool first.'
           : 'If the snapshot lacks the tab you need, call list_open_tabs first.'
