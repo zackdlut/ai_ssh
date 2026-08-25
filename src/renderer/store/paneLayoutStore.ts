@@ -2,7 +2,6 @@ import { useMemo } from 'react'
 import { create } from 'zustand'
 import { useSessionsStore } from './sessionsStore'
 import {
-  buildPreset,
   clearTerminalsFromLayout,
   collectLeaves,
   computeLayoutBoxes,
@@ -19,8 +18,9 @@ import {
   setLeafTerminal,
   setSplitRatio,
   splitLeaf,
+  swapLeaves,
+  moveLeaf,
   type FocusDirection,
-  type LayoutPreset,
   type PaneLayoutBoxes,
   type PaneNode,
   type SplitDir
@@ -75,6 +75,13 @@ interface PaneLayoutState {
     terminalId: string,
     before?: boolean
   ) => void
+  /** Exchange two panes in the active tab. Focus follows `aId`. */
+  swapPanes: (aId: string, bId: string) => void
+  /**
+   * Relocate a pane beside another in the active tab. Does not add a pane, so
+   * the ceilings never apply; `before` matches an edge drop.
+   */
+  movePane: (sourceId: string, targetId: string, dir: SplitDir, before?: boolean) => void
   closePane: (paneId: string) => void
   focusPane: (paneId: string) => void
   focusDirection: (dir: FocusDirection) => void
@@ -83,7 +90,6 @@ interface PaneLayoutState {
   setRatio: (splitId: string, ratio: number, axisPx?: number) => void
   /** Give every pane an equal share of the terminal area. */
   evenOut: () => void
-  applyPreset: (preset: LayoutPreset) => void
   /** False once a pane ceiling is reached, so callers can disable their UI. */
   canSplit: () => boolean
   /**
@@ -295,6 +301,27 @@ export const usePaneLayoutStore = create<PaneLayoutState>((set, get) => ({
     useSessionsStore.getState().setActive(terminalId)
   },
 
+  swapPanes: (aId, bId) => {
+    const s = get()
+    const tab = tabById(s.tabs, s.activeTabId)
+    const root = swapLeaves(tab.root, aId, bId)
+    if (root === tab.root) return
+    const patch = { root, focusedPaneId: aId, zoomedPaneId: null }
+    set({ tabs: withTab(s.tabs, tab.id, patch) })
+    syncActiveSession({ ...tab, ...patch })
+  },
+
+  movePane: (sourceId, targetId, dir, before = false) => {
+    const s = get()
+    const tab = tabById(s.tabs, s.activeTabId)
+    const root = moveLeaf(tab.root, sourceId, targetId, dir, genId('split'), before)
+    if (root === tab.root) return
+    const focusedPaneId = findLeaf(root, sourceId)?.id ?? tab.focusedPaneId
+    const patch = { root, focusedPaneId, zoomedPaneId: null }
+    set({ tabs: withTab(s.tabs, tab.id, patch) })
+    syncActiveSession({ ...tab, ...patch })
+  },
+
   closePane: (paneId) => {
     const s = get()
     const tab = tabById(s.tabs, s.activeTabId)
@@ -373,28 +400,6 @@ export const usePaneLayoutStore = create<PaneLayoutState>((set, get) => ({
       const root = evenRatios(tab.root)
       return root === tab.root ? s : { tabs: withTab(s.tabs, tab.id, { root }) }
     }),
-
-  applyPreset: (preset) => {
-    const s = get()
-    const tab = tabById(s.tabs, s.activeTabId)
-    // Carry this tab's existing terminals over in visual order so nothing gets
-    // unloaded.
-    let terminalIds = terminalsIn(tab)
-    // A preset with fewer cells than we have terminals drops the tail. Move the
-    // active one to the front first, so shrinking the layout never evicts the
-    // session the user is actually looking at.
-    const activeSessionId = useSessionsStore.getState().activeSessionId
-    if (activeSessionId && terminalIds.includes(activeSessionId)) {
-      terminalIds = [activeSessionId, ...terminalIds.filter((id) => id !== activeSessionId)]
-    }
-    const root = buildPreset(preset, () => genId('pane'), terminalIds)
-    const leaves = collectLeaves(root)
-    const focusedPaneId =
-      leaves.find((leaf) => leaf.terminalId === activeSessionId)?.id ?? leaves[0].id
-    const patch = { root, focusedPaneId, zoomedPaneId: null }
-    set({ tabs: withTab(s.tabs, tab.id, patch) })
-    syncActiveSession({ ...tab, ...patch })
-  },
 
   /*
    * Both ceilings are real, and they bound different things.
@@ -543,8 +548,8 @@ export const usePaneLayoutStore = create<PaneLayoutState>((set, get) => ({
     let next = root
     for (const [paneId, terminalId] of assigned) next = setLeafTerminal(next, paneId, terminalId)
 
-    // Match `applyPreset`: keep the user on the session they were looking at
-    // when it survived the restore, rather than snapping to the first pane.
+    // Keep the user on the session they were looking at when it survived the
+    // restore, rather than snapping to the first pane.
     const activeSessionId = useSessionsStore.getState().activeSessionId
     const nextLeaves = collectLeaves(next)
     const focusedPaneId =

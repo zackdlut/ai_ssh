@@ -1,6 +1,5 @@
 import { matchesKeyEvent } from './keybindingMatch'
 import { usePaneLayoutStore } from '../store/paneLayoutStore'
-import { usePaneDiffStore } from '../store/paneDiffStore'
 import { usePaneSyncStore } from '../store/paneSyncStore'
 import { usePaneSearchStore } from '../store/paneSearchStore'
 import { useKeybindingsStore } from '../store/keybindingsStore'
@@ -18,7 +17,7 @@ const FOCUS_BINDINGS: [KeybindingId, FocusDirection][] = [
  * Split-pane shortcuts.
  *
  * Returns true when the key was consumed. `terminalId` is null for an empty
- * focused pane, which is why the search and diff bindings check it: those act on
+ * focused pane, which is why the search binding checks it: search acts on
  * a scrollback, while the layout bindings only need the pane.
  */
 export function handlePaneKey(
@@ -64,11 +63,6 @@ export function handlePaneKey(
   if (terminalId && matchesKeyEvent(bindings.paneSearch, e)) {
     e.preventDefault()
     usePaneSearchStore.getState().open(terminalId)
-    return true
-  }
-  if (matchesKeyEvent(bindings.openPaneDiff, e)) {
-    e.preventDefault()
-    usePaneDiffStore.getState().openPanel(terminalId)
     return true
   }
   if (matchesKeyEvent(bindings.toggleSyncInput, e)) {

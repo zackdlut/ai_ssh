@@ -21,6 +21,8 @@ export type UiIconName =
   | 'connect'
   | 'edit'
   | 'delete'
+  | 'close-others'
+  | 'close-all'
   | 'copy'
   | 'cut'
   | 'paste'
@@ -41,8 +43,6 @@ export type UiIconName =
   | 'split-right'
   | 'split-down'
   | 'layout-grid'
-  | 'diff'
-  | 'camera'
 
 interface Props {
   name: UiIconName

@@ -1,16 +1,15 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSessionsStore, type TerminalSession } from '../store/sessionsStore'
 import { useAIStore } from '../store/aiStore'
 import { useSftpStore } from '../store/sftpStore'
 import { useBookmarksStore } from '../store/bookmarksStore'
-import { usePaneLayoutStore, type PaneTab } from '../store/paneLayoutStore'
-import { connectFromConfig, connectWsl, duplicateSession, reconnectSession } from '../lib/connect'
+import { usePaneLayoutStore } from '../store/paneLayoutStore'
+import { connectFromConfig, connectWsl } from '../lib/connect'
 import { readFullTerminalOutput } from '../lib/terminalRegistry'
 import { useT, type TranslationKey } from '../lib/i18n'
 import UiIcon from './UiIcon'
 import DropdownMenuItem from './DropdownMenuItem'
-import ContextMenuItem from './ContextMenuItem'
-import PaneToolbarMenu from './pane/PaneToolbarMenu'
+import TabContextMenu, { type TabView } from './TabContextMenu'
 import type { WslDistro } from '../../shared/types'
 import { collectLeaves } from '../lib/paneLayout'
 import { TAB_DRAG_MIME } from '../lib/tabDrag'
@@ -26,37 +25,11 @@ export type SettingsMenuItem =
   | 'startup'
   | 'about'
 
-/**
- * What one tab shows: the tab itself plus the session in its focused pane.
- *
- * A tab owns a whole tree, so nothing about it is a single session — but the
- * label, the status dot and the session-specific menu entries all describe the
- * pane the user is looking at, which is what Windows Terminal does too.
- */
-interface TabView {
-  tab: PaneTab
-  session?: TerminalSession
-  paneCount: number
-  /** Every session in the tree, so closing the tab can close all of them. */
-  terminalIds: string[]
-}
-
-interface TabContextMenu {
+interface TabMenuState {
   x: number
   y: number
   view: TabView
 }
-
-const TAB_COLORS = [
-  '#ff6b6b',
-  '#ff9d3c',
-  '#ffd93d',
-  '#51cf66',
-  '#4dabf7',
-  '#b197fc',
-  '#f783ac',
-  '#adb5bd'
-]
 
 function defaultLogName(tab: TerminalSession): string {
   const now = new Date()
@@ -105,8 +78,7 @@ export default function TabBar({
   onNewTab,
   onSettingsSelect
 }: Props): JSX.Element {
-  const { sessions, activeSessionId, removeSessions, setSessionColor } = useSessionsStore()
-  const showTerminal = usePaneLayoutStore((s) => s.showTerminal)
+  const { sessions, activeSessionId, removeSessions } = useSessionsStore()
   const paneTabs = usePaneLayoutStore((s) => s.tabs)
   const activeTabId = usePaneLayoutStore((s) => s.activeTabId)
   const activateTab = usePaneLayoutStore((s) => s.activateTab)
@@ -124,7 +96,8 @@ export default function TabBar({
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [wslDistros, setWslDistros] = useState<WslDistro[]>([])
   const [wslMenuOpen, setWslMenuOpen] = useState(false)
-  const [menu, setMenu] = useState<TabContextMenu | null>(null)
+  const [menu, setMenu] = useState<TabMenuState | null>(null)
+  const closeMenu = useCallback((): void => setMenu(null), [])
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [dragId, setDragId] = useState<string | null>(null)
@@ -215,23 +188,8 @@ export default function TabBar({
     }
   }, [settingsOpen])
 
-  useEffect(() => {
-    if (!menu) return
-    const close = (): void => setMenu(null)
-    window.addEventListener('click', close)
-    window.addEventListener('wheel', close)
-    window.addEventListener('resize', close)
-    window.addEventListener('blur', close)
-    return () => {
-      window.removeEventListener('click', close)
-      window.removeEventListener('wheel', close)
-      window.removeEventListener('resize', close)
-      window.removeEventListener('blur', close)
-    }
-  }, [menu])
-
   const saveTabOutput = async (session: TerminalSession): Promise<void> => {
-    setMenu(null)
+    closeMenu()
     const content = readFullTerminalOutput(session.id).trim()
     if (!content) {
       window.alert(t('tabbar.saveOutputEmpty'))
@@ -275,17 +233,17 @@ export default function TabBar({
   }
 
   const closeOthers = (view: TabView): void => {
-    setMenu(null)
+    closeMenu()
     closeTabs(views.filter((other) => other.tab.id !== view.tab.id))
   }
 
   const closeAll = (): void => {
-    setMenu(null)
+    closeMenu()
     closeTabs(views)
   }
 
   const startRename = (view: TabView): void => {
-    setMenu(null)
+    closeMenu()
     setRenamingId(view.tab.id)
     setRenameValue(tabLabel(view, t))
   }
@@ -508,7 +466,6 @@ export default function TabBar({
       )}
       <div className="tabbar-spacer" />
       <div className="tabbar-actions">
-        <PaneToolbarMenu />
         <div className="tabbar-action-slot toolbar-menu-wrap">
           <button
             className={`toolbar-btn toolbar-menu-btn tabbar-action-btn ${settingsOpen ? 'active' : ''}`}
@@ -632,83 +589,18 @@ export default function TabBar({
         </div>
       </div>
       {menu && (
-        <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
-          {menu.view.session && (menu.view.session.status === 'closed' || menu.view.session.status === 'error') && (
-            <>
-              <ContextMenuItem
-                icon="connect"
-                onClick={() => {
-                  const id = menu.view.session!.id
-                  setMenu(null)
-                  showTerminal(id)
-                  void reconnectSession(id)
-                }}
-              >
-                {t('tabbar.reconnect')}
-              </ContextMenuItem>
-              <div className="context-menu-divider" role="separator" />
-            </>
-          )}
-          <ContextMenuItem icon="rename" onClick={() => startRename(menu.view)}>
-            {t('tabbar.rename')}
-          </ContextMenuItem>
-          {menu.view.session && (
-            <div className="context-menu-colors" onClick={(e) => e.stopPropagation()}>
-              <span className="context-menu-colors-label">{t('tabbar.setColor')}</span>
-              <div className="context-menu-swatches">
-                {TAB_COLORS.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    className={`color-swatch ${menu.view.session!.color === c ? 'active' : ''}`}
-                    style={{ background: c }}
-                    title={c}
-                    onClick={() => {
-                      setSessionColor(menu.view.session!.id, c)
-                      setMenu(null)
-                    }}
-                  />
-                ))}
-                <button
-                  type="button"
-                  className={`color-swatch color-swatch-none ${!menu.view.session!.color ? 'active' : ''}`}
-                  title={t('tabbar.colorNone')}
-                  onClick={() => {
-                    setSessionColor(menu.view.session!.id, undefined)
-                    setMenu(null)
-                  }}
-                />
-              </div>
-            </div>
-          )}
-          <div className="context-menu-divider" role="separator" />
-          <ContextMenuItem
-            icon="copy"
-            disabled={menu.view.session?.status !== 'connected'}
-            onClick={() => {
-              const id = menu.view.session!.id
-              setMenu(null)
-              void duplicateSession(id)
-            }}
-          >
-            {t('tabbar.duplicate')}
-          </ContextMenuItem>
-          <ContextMenuItem
-            icon="save"
-            disabled={!menu.view.session}
-            onClick={() => void saveTabOutput(menu.view.session!)}
-          >
-            {t('tabbar.saveOutput')}
-          </ContextMenuItem>
-          <div className="context-menu-divider" role="separator" />
-          <ContextMenuItem icon="delete" onClick={() => closeTabs([menu.view])}>
-            {t('tabbar.closeTab')}
-          </ContextMenuItem>
-          <ContextMenuItem disabled={views.length <= 1} onClick={() => closeOthers(menu.view)}>
-            {t('tabbar.closeOthers')}
-          </ContextMenuItem>
-          <ContextMenuItem onClick={closeAll}>{t('tabbar.closeAll')}</ContextMenuItem>
-        </div>
+        <TabContextMenu
+          x={menu.x}
+          y={menu.y}
+          view={menu.view}
+          tabCount={views.length}
+          onClose={closeMenu}
+          onRename={startRename}
+          onSaveOutput={saveTabOutput}
+          onCloseTab={(target) => closeTabs([target])}
+          onCloseOthers={closeOthers}
+          onCloseAll={closeAll}
+        />
       )}
     </div>
   )

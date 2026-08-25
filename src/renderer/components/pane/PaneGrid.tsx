@@ -1,20 +1,18 @@
 import { useRef, useState } from 'react'
 import { paneRectStyle, type PaneDivider, type PaneLayoutBoxes, type PaneRect } from '../../lib/paneLayout'
 import {
-  dropZoneSplit,
-  isTabDrag,
-  readDraggedTabId,
+  isLayoutDrag,
+  PANE_DRAG_MIME,
+  paneDropAction,
   type PaneDropZone
 } from '../../lib/tabDrag'
 import { selectActiveTab, usePaneLayoutStore } from '../../store/paneLayoutStore'
 import { useTabDragStore } from '../../store/tabDragStore'
 import { MIN_SYNC_GROUP, usePaneSyncStore } from '../../store/paneSyncStore'
-import { usePaneDiffStore } from '../../store/paneDiffStore'
 import { usePaneSearchStore } from '../../store/paneSearchStore'
 import { useSessionsStore, type TerminalSession } from '../../store/sessionsStore'
 import { useBookmarksStore } from '../../store/bookmarksStore'
 import { connectFromConfig } from '../../lib/connect'
-import { snapshotAndCompare } from '../../lib/paneSnapshot'
 import { useT } from '../../lib/i18n'
 import UiIcon from '../UiIcon'
 import TerminalEmptyState from '../TerminalEmptyState'
@@ -94,9 +92,9 @@ function PaneFrame({
   )
   const toggleLock = usePaneSyncStore((s) => s.toggleLock)
   const toggleReadOnly = usePaneSyncStore((s) => s.toggleReadOnly)
-  const openDiff = usePaneDiffStore((s) => s.openPanel)
   const searching = usePaneSearchStore((s) => Boolean(terminalId) && s.terminalId === terminalId)
   const canSplit = usePaneLayoutStore((s) => s.canSplit())
+  const dragging = useTabDragStore((s) => s.sourcePaneId === paneId)
 
   const focus = (): void => focusPane(paneId)
   const armed = locked && broadcasting
@@ -115,7 +113,22 @@ function PaneFrame({
     <div className={classes} style={paneRectStyle(rect)}>
       <div className="pane-frame-border" aria-hidden />
       {showHeader && (
-        <div className="pane-header" onMouseDown={focus}>
+        <div
+          className={`pane-header ${dragging ? 'is-dragging' : ''}`}
+          draggable
+          title={t('pane.dragHint')}
+          onMouseDown={focus}
+          onDragStart={(e) => {
+            // Pressing a header button must not start a drag instead of acting.
+            if ((e.target as HTMLElement).closest('button')) {
+              e.preventDefault()
+              return
+            }
+            e.dataTransfer.effectAllowed = 'move'
+            // `attachTabDragTracking` arms the drop zones off this payload.
+            e.dataTransfer.setData(PANE_DRAG_MIME, paneId)
+          }}
+        >
           <span className={`status-dot ${session ? (session.nlMode ? 'nl' : session.status) : 'idle'}`} />
           {groupIndex ? <span className="pane-header-index">{groupIndex}</span> : null}
           <span className="pane-header-title" title={session ? sessionLabel(session) : t('pane.emptyTitle')}>
@@ -127,6 +140,7 @@ function PaneFrame({
             type="button"
             className={`pane-header-btn ${locked ? 'active' : ''}`}
             disabled={!terminalId}
+            draggable={false}
             title={locked ? t('pane.unlock') : t('pane.lock')}
             aria-pressed={locked}
             onClick={() => terminalId && toggleLock(terminalId)}
@@ -137,6 +151,7 @@ function PaneFrame({
             type="button"
             className={`pane-header-btn ${readOnly ? 'active' : ''}`}
             disabled={!terminalId}
+            draggable={false}
             title={t('pane.readOnly')}
             aria-pressed={readOnly}
             onClick={() => terminalId && toggleReadOnly(terminalId)}
@@ -146,25 +161,8 @@ function PaneFrame({
           <button
             type="button"
             className="pane-header-btn"
-            disabled={!terminalId}
-            title={t('snapshot.take')}
-            onClick={() => terminalId && snapshotAndCompare(terminalId)}
-          >
-            <UiIcon name="camera" size="sm" />
-          </button>
-          <button
-            type="button"
-            className="pane-header-btn"
-            disabled={!terminalId}
-            title={t('pane.diff')}
-            onClick={() => openDiff(terminalId)}
-          >
-            <UiIcon name="diff" size="sm" />
-          </button>
-          <button
-            type="button"
-            className="pane-header-btn"
             disabled={!canSplit}
+            draggable={false}
             title={splitTitle(t('pane.splitRight'))}
             onClick={() => splitPane(paneId, 'row')}
           >
@@ -174,6 +172,7 @@ function PaneFrame({
             type="button"
             className="pane-header-btn"
             disabled={!canSplit}
+            draggable={false}
             title={splitTitle(t('pane.splitDown'))}
             onClick={() => splitPane(paneId, 'col')}
           >
@@ -182,6 +181,7 @@ function PaneFrame({
           <button
             type="button"
             className={`pane-header-btn ${zoomed ? 'active' : ''}`}
+            draggable={false}
             title={zoomed ? t('pane.unzoom') : t('pane.zoom')}
             aria-pressed={zoomed}
             onClick={() => toggleZoom(paneId)}
@@ -191,6 +191,7 @@ function PaneFrame({
           <button
             type="button"
             className="pane-header-btn pane-header-close"
+            draggable={false}
             title={t('pane.close')}
             onClick={() => closePane(paneId)}
           >
@@ -216,47 +217,65 @@ function PaneFrame({
 const ZONES: PaneDropZone[] = ['left', 'right', 'top', 'bottom', 'center']
 
 /**
- * Edge targets that turn a tab dragged off the tab bar into a split.
+ * Edge targets that turn a tab dragged off the tab bar into a split, or a pane
+ * dragged by its header into a swap / move.
  *
- * The whole overlay is inert (`pointer-events: none`) until a tab drag is in
- * flight, because it sits on top of the xterm host and would otherwise swallow
- * every click and text selection in the terminal.
+ * The overlay stays mounted and goes inert (`pointer-events: none`) between
+ * drags rather than unmounting. It sits on top of the xterm host, so it has to
+ * be click-through when idle — but it cannot come and go, because the window
+ * tracking disarms on `drop` in the capture phase: unmounting there pulls the
+ * drop target out of the tree before React dispatches to it, and the drop is
+ * silently lost.
  */
-function PaneDropZones({ paneId }: { paneId: string }): JSX.Element | null {
+function PaneDropZones({ paneId }: { paneId: string }): JSX.Element {
   const splitPaneWithTerminal = usePaneLayoutStore((s) => s.splitPaneWithTerminal)
   const showTerminalInPane = usePaneLayoutStore((s) => s.showTerminalInPane)
-  // A tab drag anywhere in the window arms every pane, so the zones appear as
-  // soon as the drag starts rather than only once the cursor is already inside.
-  const armed = useTabDragStore((s) => s.dragging)
+  const swapPanes = usePaneLayoutStore((s) => s.swapPanes)
+  const movePane = usePaneLayoutStore((s) => s.movePane)
+  // A tab or pane drag anywhere in the window arms every pane, so the zones
+  // take drops as soon as the drag starts rather than only once the cursor is
+  // already inside. The pane being dragged stays inert: it is its own no-op.
+  const dragging = useTabDragStore((s) => s.dragging)
+  const isSource = useTabDragStore((s) => s.sourcePaneId === paneId)
   const [hover, setHover] = useState<PaneDropZone | null>(null)
+  const armed = dragging && !isSource
 
-  if (!armed) return null
-
+  /*
+   * Decided from the drag payload only, never from `armed`: the disarm has
+   * already landed by the time this runs, so this closure sees `armed === false`
+   * on every real drop.
+   */
   const drop = (zone: PaneDropZone) => (e: React.DragEvent): void => {
     e.preventDefault()
     e.stopPropagation()
     setHover(null)
-    const terminalId = readDraggedTabId(e.dataTransfer)
-    if (!terminalId) return
-    const split = dropZoneSplit(zone)
-    // A centre drop means "show it here", so it targets this pane directly
-    // instead of letting `showTerminal` hunt for an empty one somewhere else.
-    if (!split) {
-      showTerminalInPane(paneId, terminalId)
-      return
+    const action = paneDropAction(e.dataTransfer, zone, paneId)
+    if (!action) return
+    switch (action.kind) {
+      case 'swapPanes':
+        swapPanes(action.sourcePaneId, paneId)
+        return
+      case 'movePane':
+        movePane(action.sourcePaneId, paneId, action.dir, action.before)
+        return
+      case 'showTerminal':
+        showTerminalInPane(paneId, action.terminalId)
+        return
+      case 'splitWithTerminal':
+        splitPaneWithTerminal(paneId, action.dir, action.terminalId, action.before)
+        return
     }
-    splitPaneWithTerminal(paneId, split.dir, terminalId, split.before)
   }
 
   return (
-    <div className="pane-drops">
+    <div className={`pane-drops ${armed ? 'is-armed' : ''}`}>
       {ZONES.map((zone) => (
         <div
           key={zone}
-          className={`pane-drop pane-drop--${zone} ${hover === zone ? 'is-over' : ''}`}
+          className={`pane-drop pane-drop--${zone} ${armed && hover === zone ? 'is-over' : ''}`}
           onDragEnter={() => setHover(zone)}
           onDragOver={(e) => {
-            if (!isTabDrag(e.dataTransfer)) return
+            if (!isLayoutDrag(e.dataTransfer)) return
             e.preventDefault()
             e.stopPropagation()
             e.dataTransfer.dropEffect = 'move'

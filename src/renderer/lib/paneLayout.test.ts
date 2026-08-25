@@ -9,15 +9,19 @@ import {
   countLeaves,
   createLeaf,
   evenRatios,
+  findLeaf,
   findLeafByTerminal,
   MIN_PANE_PX,
   MIN_RATIO,
   minExtentPx,
+  moveLeaf,
   nearestPaneInDirection,
   removeLeaf,
+  setLeafPending,
   setLeafTerminal,
   setSplitRatio,
   splitLeaf,
+  swapLeaves,
   type PaneNode,
   type PaneSplit
 } from './paneLayout'
@@ -398,5 +402,73 @@ describe('buildPreset', () => {
       ...computeLayoutBoxes(root).dividers.map((d) => d.splitId)
     ]
     expect(new Set(ids).size).toBe(ids.length)
+  })
+})
+
+describe('swapLeaves', () => {
+  it('exchanges two leaves including their ids', () => {
+    const root = splitLeaf(createLeaf('p1', 't1'), 'p1', 'row', 's1', 'p2', 't2')
+    const next = swapLeaves(root, 'p1', 'p2')
+    expect(collectLeaves(next).map((leaf) => leaf.id)).toEqual(['p2', 'p1'])
+    expect(findLeafByTerminal(next, 't1')?.id).toBe('p1')
+    expect(findLeafByTerminal(next, 't2')?.id).toBe('p2')
+    expect(next.kind === 'split' && next.ratio).toBe(0.5)
+  })
+
+  it('carries a pending connection with the leaf', () => {
+    let root: PaneNode = splitLeaf(createLeaf('p1', 't1'), 'p1', 'row', 's1', 'p2')
+    root = setLeafPending(root, 'p2', 'conn-1')
+    const next = swapLeaves(root, 'p1', 'p2')
+    expect(findLeaf(next, 'p2')?.pendingConnectionId).toBe('conn-1')
+    expect(findLeaf(next, 'p1')?.terminalId).toBe('t1')
+    expect(collectLeaves(next).map((leaf) => leaf.id)).toEqual(['p2', 'p1'])
+  })
+
+  it('is identity when the ids match or a pane is missing', () => {
+    const root = splitLeaf(createLeaf('p1', 't1'), 'p1', 'row', 's1', 'p2', 't2')
+    expect(swapLeaves(root, 'p1', 'p1')).toBe(root)
+    expect(swapLeaves(root, 'p1', 'gone')).toBe(root)
+  })
+})
+
+describe('moveLeaf', () => {
+  it('turns a row of two into a column without adding a pane', () => {
+    const root = splitLeaf(createLeaf('p1', 't1'), 'p1', 'row', 's1', 'p2', 't2')
+    const next = moveLeaf(root, 'p1', 'p2', 'col', 's2')
+    expect(countLeaves(next)).toBe(2)
+    expect(next.kind === 'split' && next.dir).toBe('col')
+    expect(collectLeaves(next).map((leaf) => leaf.id)).toEqual(['p2', 'p1'])
+    expect(findLeafByTerminal(next, 't1')?.id).toBe('p1')
+  })
+
+  it('inserts on the dropped-on side when before is set', () => {
+    const root = splitLeaf(createLeaf('p1', 't1'), 'p1', 'row', 's1', 'p2', 't2')
+    const next = moveLeaf(root, 'p2', 'p1', 'col', 's2', true)
+    expect(next.kind === 'split' && next.dir).toBe('col')
+    expect(collectLeaves(next).map((leaf) => leaf.id)).toEqual(['p2', 'p1'])
+    expect(computeLayoutBoxes(next).leaves[0].rect.top).toBe(0)
+  })
+
+  it('promotes a nested sibling then docks beside another pane', () => {
+    let root: PaneNode = splitLeaf(createLeaf('p1', 't1'), 'p1', 'row', 's1', 'p2', 't2')
+    root = splitLeaf(root, 'p2', 'col', 's2', 'p3', 't3')
+    const next = moveLeaf(root, 'p3', 'p1', 'row', 's3', true)
+    expect(countLeaves(next)).toBe(3)
+    expect(collectLeaves(next).map((leaf) => leaf.id)).toEqual(['p3', 'p1', 'p2'])
+  })
+
+  it('keeps a pending binding on the moved leaf', () => {
+    let root: PaneNode = splitLeaf(createLeaf('p1', 't1'), 'p1', 'row', 's1', 'p2')
+    root = setLeafPending(root, 'p2', 'conn-9')
+    const next = moveLeaf(root, 'p2', 'p1', 'col', 's2', true)
+    expect(findLeaf(next, 'p2')?.pendingConnectionId).toBe('conn-9')
+  })
+
+  it('is identity for a self-drop, a missing pane, or the last pane', () => {
+    const pair = splitLeaf(createLeaf('p1', 't1'), 'p1', 'row', 's1', 'p2', 't2')
+    expect(moveLeaf(pair, 'p1', 'p1', 'row', 's2')).toBe(pair)
+    expect(moveLeaf(pair, 'p1', 'gone', 'row', 's2')).toBe(pair)
+    const only = createLeaf('p1', 't1')
+    expect(moveLeaf(only, 'p1', 'p1', 'row', 's2')).toBe(only)
   })
 })

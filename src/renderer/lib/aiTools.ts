@@ -443,9 +443,8 @@ function listOpenTabs(): ToolResult {
 /**
  * Diff two tabs' buffers without touching either host.
  *
- * Reuses the pane-diff pipeline wholesale — `readSource` for the text,
- * `normalizeForDiff` for the volatile-value masking, `computeTextDiff` for the
- * comparison — so what the model reads is exactly what the diff panel shows.
+ * Reuses `readSource` for the text, `normalizeForDiff` for volatile-value
+ * masking, and `computeTextDiff` for the comparison.
  */
 function diffPanes(args: Record<string, unknown>): ToolResult {
   const leftTerminalId = typeof args.left_tab_id === 'string' ? args.left_tab_id : ''

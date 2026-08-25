@@ -12,7 +12,6 @@ export type KeybindingId =
   | 'focusPaneDown'
   | 'evenPanes'
   | 'toggleSyncInput'
-  | 'openPaneDiff'
   | 'paneSearch'
 
 export type KeybindingsSettings = Record<KeybindingId, string>
@@ -31,7 +30,6 @@ export const KEYBINDING_IDS: KeybindingId[] = [
   'focusPaneDown',
   'evenPanes',
   'toggleSyncInput',
-  'openPaneDiff',
   'paneSearch'
 ]
 
@@ -58,7 +56,6 @@ export const DEFAULT_KEYBINDINGS: KeybindingsSettings = {
   focusPaneDown: 'mod+shift+arrowdown',
   evenPanes: 'mod+shift+b',
   toggleSyncInput: 'mod+shift+i',
-  openPaneDiff: 'mod+shift+d',
   // mod+f is already "ask Copilot", so in-pane find takes the shifted variant.
   paneSearch: 'mod+shift+f'
 }

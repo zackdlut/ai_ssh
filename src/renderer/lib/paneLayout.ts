@@ -220,6 +220,41 @@ export function computeLayoutBoxes(
 }
 
 /**
+ * Place an existing leaf beside `targetId`. Used when a pane is dropped on an
+ * edge: the dragged leaf keeps its id and pending binding instead of being
+ * minted again.
+ *
+ * `before` puts the inserted pane in the `a` slot, which is what a drop on a
+ * pane's left or top edge means: it appears on the side that was dropped on.
+ */
+export function insertLeaf(
+  root: PaneNode,
+  targetId: string,
+  dir: SplitDir,
+  splitId: string,
+  leaf: PaneLeaf,
+  before = false
+): PaneNode {
+  const replace = (node: PaneNode): PaneNode => {
+    if (node.kind === 'leaf') {
+      if (node.id !== targetId) return node
+      return {
+        kind: 'split',
+        id: splitId,
+        dir,
+        ratio: 0.5,
+        a: before ? leaf : node,
+        b: before ? node : leaf
+      }
+    }
+    const a = replace(node.a)
+    const b = replace(node.b)
+    return a === node.a && b === node.b ? node : { ...node, a, b }
+  }
+  return replace(root)
+}
+
+/**
  * Replace `paneId` with a split holding the original pane plus a new one.
  *
  * `before` puts the new pane in the `a` slot, which is what a drop on a pane's
@@ -234,24 +269,7 @@ export function splitLeaf(
   newTerminalId: string | null = null,
   before = false
 ): PaneNode {
-  const replace = (node: PaneNode): PaneNode => {
-    if (node.kind === 'leaf') {
-      if (node.id !== paneId) return node
-      const created = createLeaf(newPaneId, newTerminalId)
-      return {
-        kind: 'split',
-        id: splitId,
-        dir,
-        ratio: 0.5,
-        a: before ? created : node,
-        b: before ? node : created
-      }
-    }
-    const a = replace(node.a)
-    const b = replace(node.b)
-    return a === node.a && b === node.b ? node : { ...node, a, b }
-  }
-  return replace(root)
+  return insertLeaf(root, paneId, dir, splitId, createLeaf(newPaneId, newTerminalId), before)
 }
 
 /**
@@ -275,6 +293,42 @@ function mapLeaves(node: PaneNode, fn: (leaf: PaneLeaf) => PaneLeaf): PaneNode {
   const a = mapLeaves(node.a, fn)
   const b = mapLeaves(node.b, fn)
   return a === node.a && b === node.b ? node : { ...node, a, b }
+}
+
+/**
+ * Exchange two leaves in the tree, including their ids, so the dragged pane
+ * keeps focus after a centre drop. Structure and ratios stay put.
+ */
+export function swapLeaves(root: PaneNode, aId: string, bId: string): PaneNode {
+  if (aId === bId) return root
+  const a = findLeaf(root, aId)
+  const b = findLeaf(root, bId)
+  if (!a || !b) return root
+  return mapLeaves(root, (leaf) => {
+    if (leaf.id === aId) return b
+    if (leaf.id === bId) return a
+    return leaf
+  })
+}
+
+/**
+ * Pull `sourceId` out of the tree (sibling promotes) and insert it beside
+ * `targetId` in `dir`. Pane count is unchanged; orientation can change.
+ */
+export function moveLeaf(
+  root: PaneNode,
+  sourceId: string,
+  targetId: string,
+  dir: SplitDir,
+  splitId: string,
+  before = false
+): PaneNode {
+  if (sourceId === targetId) return root
+  const source = findLeaf(root, sourceId)
+  if (!source || !findLeaf(root, targetId)) return root
+  const without = removeLeaf(root, sourceId)
+  if (!without || !findLeaf(without, targetId)) return root
+  return insertLeaf(without, targetId, dir, splitId, source, before)
 }
 
 export function setLeafTerminal(root: PaneNode, paneId: string, terminalId: string | null): PaneNode {

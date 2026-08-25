@@ -1369,26 +1369,6 @@ export function askAboutSelection(selection: string): void {
 }
 
 /**
- * Open the AI panel and ask the copilot to interpret a pane diff. Same budget
- * and truncation rules as a selection, since the payload is the same kind of
- * pasted terminal text.
- */
-export function askAboutDiff(diffText: string, leftLabel: string, rightLabel: string): void {
-  const text = diffText.trim()
-  if (!text) return
-
-  useAIStore.getState().setPanelOpen(true)
-
-  const locale = useLocaleStore.getState().locale
-  const clipped =
-    text.length > MAX_SELECTION
-      ? `${text.slice(0, MAX_SELECTION)}\n${translate(locale, 'copilot.selectionTruncated')}`
-      : text
-  const intro = translate(locale, 'diff.explainPrompt', { left: leftLabel, right: rightLabel })
-  void sendPrompt(`${intro}\n\n\`\`\`diff\n${clipped}\n\`\`\``)
-}
-
-/**
  * Estimated token cost of the tool/function schemas sent every turn. Which
  * schemas are sent depends on the model tier and on whether skills exist, so the
  * meter is charged for the surface actually in use rather than the full set.

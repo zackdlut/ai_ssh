@@ -1,19 +1,18 @@
 import { reconcileActiveSession, usePaneLayoutStore } from '../store/paneLayoutStore'
 import { usePaneSyncStore } from '../store/paneSyncStore'
-import { usePaneDiffStore } from '../store/paneDiffStore'
 import { usePaneSearchStore } from '../store/paneSearchStore'
 import { useSessionsStore } from '../store/sessionsStore'
 
 /**
  * Bridge the session list into the pane stores: closed sessions are detached
- * from the layout, the sync group and the diff selection, and a session that
+ * from the layout, the sync group and in-pane search, and a session that
  * becomes active without a pane is placed automatically.
  *
  * `connect.ts` normally places a session before registering it, so the
  * automatic placement is a safety net for whatever adds a session directly.
  *
  * Lives outside the stores so none of them has to import another, which would
- * otherwise form a cycle through `paneDiffStore` reading the layout.
+ * otherwise form a cycle.
  *
  * Returns an unsubscribe function.
  */
@@ -27,7 +26,6 @@ export function attachPaneBridge(): () => void {
       if (gone.length) {
         usePaneLayoutStore.getState().detachTerminals(gone)
         usePaneSyncStore.getState().detachTerminals(gone)
-        usePaneDiffStore.getState().detachTerminals(gone)
         usePaneSearchStore.getState().detachTerminals(gone)
       }
     }

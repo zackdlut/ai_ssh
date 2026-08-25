@@ -5,7 +5,6 @@ import PaneGrid from './components/pane/PaneGrid'
 import StatusBar from './components/StatusBar'
 import { useSessionsStore } from './store/sessionsStore'
 import { usePaneBoxes, usePaneLayoutStore } from './store/paneLayoutStore'
-import { usePaneDiffStore } from './store/paneDiffStore'
 import { attachPaneBridge } from './lib/paneBridge'
 import { attachGlobalPaneShortcuts } from './lib/paneShortcuts'
 import { attachTabDragTracking } from './store/tabDragStore'
@@ -26,7 +25,6 @@ import { addEmptyTab } from './lib/connect'
 import type { ConnectionConfig } from '../shared/types'
 
 const TerminalView = lazy(() => import('./components/TerminalView'))
-const TerminalDiffPanel = lazy(() => import('./components/diff/TerminalDiffPanel'))
 const SidePanel = lazy(() => import('./components/ai/SidePanel'))
 const SftpPanel = lazy(() => import('./components/sftp/SftpPanel'))
 const ConnectModal = lazy(() => import('./components/connection/ConnectModal'))
@@ -62,7 +60,6 @@ export default function App(): JSX.Element {
   const paneBoxes = usePaneBoxes()
   const paneTabs = usePaneLayoutStore((s) => s.tabs)
   const activeTabId = usePaneLayoutStore((s) => s.activeTabId)
-  const diffOpen = usePaneDiffStore((s) => s.open)
 
   /*
    * Every session's pane, in whichever tab owns it — not just the tab on screen.
@@ -158,11 +155,6 @@ export default function App(): JSX.Element {
               })}
             </Suspense>
             <PaneGrid boxes={paneBoxes} onNewConnection={() => openNewConnection(null)} />
-            {diffOpen && (
-              <Suspense fallback={null}>
-                <TerminalDiffPanel />
-              </Suspense>
-            )}
           </div>
           <StatusBar />
         </div>

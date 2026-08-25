@@ -408,37 +408,6 @@ describe('focusDirection', () => {
   })
 })
 
-describe('applyPreset', () => {
-  beforeEach(resetStores)
-  afterEach(resetStores)
-
-  it('keeps the active session when the preset has fewer cells', () => {
-    openInPane(tab('t1', 'connected'))
-    openInNewPane(tab('t2', 'connected'))
-    layout().showTerminal('t2')
-
-    layout().applyPreset('single')
-
-    expect(layout().paneCount()).toBe(1)
-    expect(layout().focusedTerminalId()).toBe('t2')
-    expect(useSessionsStore.getState().activeSessionId).toBe('t2')
-    // t1 is still open, just no longer on screen.
-    expect(layout().paneIdForTerminal('t1')).toBeNull()
-    expect(useSessionsStore.getState().sessions.map((t) => t.id)).toEqual(['t1', 't2'])
-  })
-
-  it('only rebuilds the active tab', () => {
-    openInPane(tab('t1', 'connected'))
-    const second = layout().newTab()
-    openInPane(tab('t2', 'connected'))
-
-    layout().applyPreset('cols2')
-
-    expect(terminalsOf(second)).toEqual(['t2', null])
-    expect(terminalsOf(ROOT_TAB)).toEqual(['t1'])
-  })
-})
-
 describe('restoreLayout', () => {
   beforeEach(resetStores)
   afterEach(resetStores)
@@ -548,5 +517,51 @@ describe('restoreLayoutInTab', () => {
 
     const leaves = collectLeaves(layout().tabs.find((t) => t.id === restored)!.root)
     expect(leaves.map((leaf) => leaf.pendingConnectionId)).toEqual(['conn-a', 'conn-b'])
+  })
+})
+
+describe('swapPanes / movePane', () => {
+  beforeEach(resetStores)
+  afterEach(resetStores)
+
+  it('swaps two panes and focuses the dragged one', () => {
+    const left = openInPane(tab('t1', 'connected'))
+    const right = openInNewPane(tab('t2', 'connected'))
+    layout().focusPane(left)
+
+    layout().swapPanes(left, right)
+
+    expect(layout().paneIdForTerminal('t1')).toBe(left)
+    expect(layout().paneIdForTerminal('t2')).toBe(right)
+    expect(collectLeaves(activeTab().root).map((leaf) => leaf.id)).toEqual([right, left])
+    expect(activeTab().focusedPaneId).toBe(left)
+    expect(useSessionsStore.getState().activeSessionId).toBe('t1')
+  })
+
+  it('moves a pane beside another without growing the tree', () => {
+    const left = openInPane(tab('t1', 'connected'))
+    const right = openInNewPane(tab('t2', 'connected'))
+
+    layout().movePane(left, right, 'col')
+
+    expect(layout().paneCount()).toBe(2)
+    const root = activeTab().root
+    expect(root.kind).toBe('split')
+    if (root.kind !== 'split') return
+    expect(root.dir).toBe('col')
+    expect(collectLeaves(root).map((leaf) => leaf.id)).toEqual([right, left])
+    expect(activeTab().focusedPaneId).toBe(left)
+  })
+
+  it('clears zoom after a swap', () => {
+    const left = openInPane(tab('t1', 'connected'))
+    const right = openInNewPane(tab('t2', 'connected'))
+    layout().toggleZoom(right)
+    expect(activeTab().zoomedPaneId).toBe(right)
+
+    layout().swapPanes(left, right)
+
+    expect(activeTab().zoomedPaneId).toBeNull()
+    expect(activeTab().focusedPaneId).toBe(left)
   })
 })
