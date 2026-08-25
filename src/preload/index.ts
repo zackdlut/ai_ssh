@@ -17,6 +17,7 @@ import type {
   AITranslateResult,
   AISummarizeRequest,
   BookmarkFolder,
+  SavedLayout,
   BookmarkTransferFormat,
   ConnectionConfig,
   ConnectOptions,
@@ -205,6 +206,9 @@ const api = {
       ipcRenderer.invoke('config:deleteConnection', id),
     setConnections: (list: ConnectionConfig[]): Promise<ConnectionConfig[]> =>
       ipcRenderer.invoke('config:setConnections', list),
+    getLayouts: (): Promise<SavedLayout[]> => ipcRenderer.invoke('config:getLayouts'),
+    setLayouts: (list: SavedLayout[]): Promise<SavedLayout[]> =>
+      ipcRenderer.invoke('config:setLayouts', list),
     getFolders: (): Promise<BookmarkFolder[]> => ipcRenderer.invoke('config:getFolders'),
     saveFolder: (f: BookmarkFolder): Promise<BookmarkFolder[]> =>
       ipcRenderer.invoke('config:saveFolder', f),

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { clampPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from '../../store/aiStore'
 import { useSftpStore } from '../../store/sftpStore'
-import { useTabsStore } from '../../store/tabsStore'
+import { useSessionsStore } from '../../store/sessionsStore'
 import { getContextMenuPosition } from '../../lib/contextMenuPosition'
 import { useT } from '../../lib/i18n'
 import type { LocalEntry, SftpEntry, SftpTransferProgress } from '../../../shared/types'
@@ -115,8 +115,8 @@ function TransferTitleProgress({
 
 export default function SftpPanel(): JSX.Element {
   const { panelWidth, setPanelWidth, setPanelOpen } = useSftpStore()
-  const activeTab = useTabsStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
-  const sessionId = activeTab && activeTab.status === 'connected' ? activeTab.sessionId : null
+  const activeSession = useSessionsStore((s) => s.sessions.find((t) => t.id === s.activeSessionId))
+  const sessionId = activeSession && activeSession.status === 'connected' ? activeSession.sessionId : null
   const t = useT()
 
   const [localCwd, setLocalCwd] = useState('')

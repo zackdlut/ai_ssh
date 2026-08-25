@@ -6,7 +6,7 @@ import {
   CONN_SIDEBAR_MIN_WIDTH,
   CONN_SIDEBAR_MAX_WIDTH
 } from '../../store/connSidebarStore'
-import { useTabsStore } from '../../store/tabsStore'
+import { useSessionsStore } from '../../store/sessionsStore'
 import { connectFromConfig } from '../../lib/connect'
 import { useT } from '../../lib/i18n'
 import ContextMenuItem from '../ContextMenuItem'
@@ -48,7 +48,7 @@ export default function ConnectionSidebar({
   // Subscribe to the raw arrays so the tree re-renders on any change.
   const folders = useBookmarksStore((s) => s.folders)
   const connections = useBookmarksStore((s) => s.connections)
-  const tabs = useTabsStore((s) => s.tabs)
+  const tabs = useSessionsStore((s) => s.sessions)
   const { panelWidth, setPanelWidth } = useConnSidebarStore()
   const t = useT()
 

@@ -30,7 +30,8 @@ import type {
   BookmarkFolder,
   ConnectionConfig,
   CopilotChatState,
-  InstalledSkill
+  InstalledSkill,
+  SavedLayout
 } from '../../shared/types'
 
 interface StoreSchema {
@@ -41,6 +42,8 @@ interface StoreSchema {
   keybindings: KeybindingsSettings
   connections: ConnectionConfig[]
   folders: BookmarkFolder[]
+  /** Named split layouts ("workspaces"). */
+  layouts: SavedLayout[]
   skills: InstalledSkill[]
   /** Custom instructions injected into the copilot system prompt. */
   userRules: string
@@ -97,6 +100,7 @@ function store(): Store<StoreSchema> {
         keybindings: { ...DEFAULT_KEYBINDINGS },
         connections: [],
         folders: [],
+        layouts: [],
         skills: [],
         userRules: '',
         debugLog: { enabled: false }
@@ -190,6 +194,16 @@ export function deleteConnection(id: string): ConnectionConfig[] {
 export function setConnections(list: ConnectionConfig[]): ConnectionConfig[] {
   store().set('connections', list)
   return list
+}
+
+export function getLayouts(): SavedLayout[] {
+  const list = store().get('layouts')
+  return Array.isArray(list) ? list : []
+}
+
+export function setLayouts(list: SavedLayout[]): SavedLayout[] {
+  store().set('layouts', list)
+  return getLayouts()
 }
 
 export function getFolders(): BookmarkFolder[] {

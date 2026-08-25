@@ -26,6 +26,8 @@ export function keyEventToBinding(e: KeyboardEvent): string | null {
   let keyPart = e.key.toLowerCase()
   if (/^f([1-9]|1[0-2])$/i.test(e.key)) {
     keyPart = e.key.toLowerCase()
+  } else if (/^Arrow(Left|Right|Up|Down)$/.test(e.key)) {
+    keyPart = e.key.toLowerCase()
   } else if (e.key.length === 1) {
     keyPart = e.key.toLowerCase()
   } else {

@@ -21,6 +21,7 @@ export const READONLY_TOOLS = new Set([
   'list_ssh_configs',
   'list_open_tabs',
   'list_folders',
+  'diff_panes',
   'get_app_settings',
   'read_skill',
   'read_file',
@@ -186,6 +187,34 @@ const BASE_TOOLS: AIToolDefinition[] = [
       name: 'list_open_tabs',
       description: `List the open SSH terminal tabs with their tab_id, host and connection status. ${SNAPSHOT_NOTE}`,
       parameters: { type: 'object', properties: {}, additionalProperties: false }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'diff_panes',
+      description:
+        "Compare two terminal tabs' output line by line and return a unified diff. Use it when the user asks what differs between two hosts or panes; it reads the existing buffers, so it never runs anything on either host.",
+      parameters: {
+        type: 'object',
+        properties: {
+          left_tab_id: { type: 'string', description: 'tab_id of the left (old) side.' },
+          right_tab_id: { type: 'string', description: 'tab_id of the right (new) side.' },
+          range: {
+            type: 'string',
+            enum: ['viewport', 'recent', 'all'],
+            description:
+              "How much of each buffer to read: 'viewport' for what is on screen, 'recent' for the last ~1000 lines (default), 'all' for the whole scrollback."
+          },
+          normalize: {
+            type: 'boolean',
+            description:
+              'When true (default), fold trailing whitespace and mask volatile values such as timestamps and PIDs so they do not swamp the diff.'
+          }
+        },
+        required: ['left_tab_id', 'right_tab_id'],
+        additionalProperties: false
+      }
     }
   },
   {

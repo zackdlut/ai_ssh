@@ -3,9 +3,23 @@ import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-import type { TerminalTab } from '../store/tabsStore'
-import { useTabsStore } from '../store/tabsStore'
-import { COPILOT_CONTEXT_MAX_LINES, registerNlToggle, registerTerminal, unregisterTerminal } from '../lib/terminalRegistry'
+import { WebglAddon } from '@xterm/addon-webgl'
+// 0.15.0 matches @xterm/xterm@5.5; 0.16 is for xterm 6 and white-screens on find.
+import { SearchAddon, type ISearchOptions } from '@xterm/addon-search'
+import type { TerminalSession } from '../store/sessionsStore'
+import { useSessionsStore } from '../store/sessionsStore'
+import {
+  COPILOT_CONTEXT_MAX_LINES,
+  registerTerminal,
+  unregisterTerminal,
+  type TerminalSearchOptions
+} from '../lib/terminalRegistry'
+import { paneRectStyle, type PaneRect } from '../lib/paneLayout'
+import { usePaneLayoutStore } from '../store/paneLayoutStore'
+import { isTerminalReadOnly, selectGroupActive, usePaneSyncStore } from '../store/paneSyncStore'
+import { broadcastInput, broadcastScroll } from '../lib/paneSync'
+import { handlePaneKey } from '../lib/paneShortcuts'
+import { hasGpuWebgl2 } from '../lib/webglSupport'
 import { askAboutSelection } from '../lib/aiService'
 import { extractCommands, isDangerous } from '../lib/commands'
 import { stripAnsi } from '../lib/streamParse'
@@ -18,6 +32,7 @@ import {
   xtermThemeForDisplay
 } from '../lib/terminalColorSchemes'
 import { useThemeStore } from '../store/themeStore'
+import { usePaneMetricsStore } from '../store/paneMetricsStore'
 import { useTerminalAppearanceStore } from '../store/terminalAppearanceStore'
 import { useKeybindingsStore } from '../store/keybindingsStore'
 import { MIN_TERMINAL_LINE_HEIGHT, MAX_TERMINAL_LINE_HEIGHT, xtermFontWeight } from '../../shared/terminalSettings'
@@ -33,8 +48,21 @@ import TerminalLineGutter from './TerminalLineGutter'
 import TerminalEmptyState from './TerminalEmptyState'
 
 interface Props {
-  tab: TerminalTab
-  active: boolean
+  tab: TerminalSession
+  /** Pane currently showing this tab, or undefined when detached. */
+  paneId?: string
+  /** Shown in a pane: rendered, hit-testable, and kept fitted to its rect. */
+  visible: boolean
+  /**
+   * The owning tab has more than one pane, so this host leaves room for a pane
+   * header. Read from the host's own tab rather than the one on screen, so a
+   * background terminal keeps its geometry and needs no refit when shown again.
+   */
+  split: boolean
+  /** Owns the keyboard; at most one terminal is focused at a time. */
+  focused: boolean
+  /** Percentage rect of the owning pane; full area when detached. */
+  rect?: PaneRect
   onNewConnection: () => void
 }
 
@@ -90,9 +118,11 @@ const NL_CONTEXT_MAX_LINES = 100
 const MAX_CAPTURE = 2000
 // Skip the summarize LLM call when a single command returns short, plain output.
 const DIRECT_ANSWER_MAX = 200
+// How long a scroll this pane was steered to still counts as our own echo.
+const SYNC_SCROLL_ECHO_MS = 500
 
-/** Tab fields the NL-mode context needs; a subset of TerminalTab. */
-type NlContextTab = Pick<TerminalTab, 'id' | 'host' | 'username' | 'kind' | 'wslDistro'>
+/** Tab fields the NL-mode context needs; a subset of TerminalSession. */
+type NlContextTab = Pick<TerminalSession, 'id' | 'host' | 'username' | 'kind' | 'wslDistro'>
 
 /** Same fields, as carried across the NL summarize hop (tab id renamed). */
 type NlSummarizeContext = Omit<NlContextTab, 'id'> & { tabId: string }
@@ -243,26 +273,65 @@ function streamSummarize(
   })
 }
 
-export default function TerminalView({ tab, active, onNewConnection }: Props): JSX.Element {
+export default function TerminalView({
+  tab,
+  paneId,
+  visible,
+  split,
+  focused,
+  rect,
+  onNewConnection
+}: Props): JSX.Element {
   if (tab.status === 'idle') {
     return (
-      <div className={`terminal-view-host${active ? ' is-active' : ''}`}>
-        <TerminalEmptyState tabId={tab.id} onNewConnection={onNewConnection} />
+      <div
+        className={`terminal-view-host${visible ? ' is-visible' : ''}${split ? ' is-split' : ''}`}
+        style={rect ? paneRectStyle(rect) : undefined}
+        onMouseDown={paneId ? () => usePaneLayoutStore.getState().focusPane(paneId) : undefined}
+      >
+        <TerminalEmptyState terminalId={tab.id} onNewConnection={onNewConnection} />
       </div>
     )
   }
 
-  return <ConnectedTerminalView tab={tab} active={active} />
+  return (
+    <ConnectedTerminalView
+      tab={tab}
+      paneId={paneId}
+      visible={visible}
+      split={split}
+      focused={focused}
+      rect={rect}
+    />
+  )
 }
 
-function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>): JSX.Element {
+function ConnectedTerminalView({
+  tab,
+  paneId,
+  visible,
+  split,
+  focused,
+  rect
+}: Omit<Props, 'onNewConnection'>): JSX.Element {
   const sessionId = tab.sessionId!
   const containerRef = useRef<HTMLDivElement>(null)
   const layoutRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const pasteIntoTerminalRef = useRef<((clip: string) => void) | null>(null)
-  const activeRef = useRef(active)
+  const visibleRef = useRef(visible)
+  const focusedRef = useRef(focused)
+  const paneIdRef = useRef(paneId)
+  /** Viewport line a sync mirror is steering to, so we don't echo it back. */
+  const syncScrollTargetRef = useRef<{ line: number; at: number } | null>(null)
+  /**
+   * Last geometry pushed to the remote pty. A divider drag resizes the host on
+   * every mouse move, but `fit()` only crosses a character-cell boundary now and
+   * then, so comparing against this is what keeps the SSH channel from taking an
+   * IPC round trip per frame for every pane in the split.
+   */
+  const sentSizeRef = useRef<{ cols: number; rows: number } | null>(null)
   const nlRef = useRef<NlState>({ mode: 'normal', buffer: '', cursor: 0, busy: false })
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [showLineNumbers, setShowLineNumbers] = useState(false)
@@ -273,14 +342,12 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
   const fontSize = useTerminalAppearanceStore((s) => s.fontSize)
   const lineHeight = useTerminalAppearanceStore((s) => s.lineHeight)
   const fontWeight = useTerminalAppearanceStore((s) => s.fontWeight)
-  const askCopilotBinding = useKeybindingsStore((s) => s.askCopilot)
-  const toggleNlBinding = useKeybindingsStore((s) => s.toggleNlMode)
-  const toggleLineNumbersBinding = useKeybindingsStore((s) => s.toggleLineNumbers)
-  const keybindingsRef = useRef({
-    askCopilot: askCopilotBinding,
-    toggleNlMode: toggleNlBinding,
-    toggleLineNumbers: toggleLineNumbersBinding
-  })
+  const keybindings = useKeybindingsStore()
+  const keybindingsRef = useRef(keybindings)
+  const askCopilotBinding = keybindings.askCopilot
+  const canRealign = usePaneSyncStore(
+    (s) => selectGroupActive(s) && s.lockedTerminalIds.includes(tab.id)
+  )
   const safeLineHeight = Math.min(
     MAX_TERMINAL_LINE_HEIGHT,
     Math.max(MIN_TERMINAL_LINE_HEIGHT, lineHeight)
@@ -290,12 +357,10 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
   const resolvedTheme = resolveTerminalTheme(colorScheme, appTheme)
   const containerBg = resolvedTheme.background ?? '#000'
 
-  activeRef.current = active
-  keybindingsRef.current = {
-    askCopilot: askCopilotBinding,
-    toggleNlMode: toggleNlBinding,
-    toggleLineNumbers: toggleLineNumbersBinding
-  }
+  visibleRef.current = visible
+  focusedRef.current = focused
+  paneIdRef.current = paneId
+  keybindingsRef.current = keybindings
 
   const fitTerminal = (): boolean => {
     const container = containerRef.current
@@ -306,7 +371,11 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
     try {
       fit.fit()
       if (term.cols > 0 && term.rows > 0) {
-        window.api.ssh.resize(sessionId, term.cols, term.rows)
+        const sent = sentSizeRef.current
+        if (!sent || sent.cols !== term.cols || sent.rows !== term.rows) {
+          sentSizeRef.current = { cols: term.cols, rows: term.rows }
+          window.api.ssh.resize(sessionId, term.cols, term.rows)
+        }
         return true
       }
     } catch {
@@ -316,9 +385,9 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
   }
 
   const scheduleFit = (): void => {
-    if (!activeRef.current) return
+    if (!visibleRef.current) return
     const attempt = (): void => {
-      if (!activeRef.current) return
+      if (!visibleRef.current) return
       fitTerminal()
     }
     attempt()
@@ -332,10 +401,17 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
   }
 
   useEffect(() => {
+    // A reconnect swaps the session under us, and the new pty knows nothing of
+    // the size the old one was told.
+    sentSizeRef.current = null
     const appearance = useTerminalAppearanceStore.getState()
     const appThemeAtMount = useThemeStore.getState().theme
     const theme = xtermThemeForDisplay(appearance.colorScheme, appThemeAtMount)
     const term = new Terminal({
+      // Search highlights call registerDecoration, which xterm 5.5 still
+      // treats as proposed API. Without this, every find throws and the bar
+      // reports "no matches".
+      allowProposedApi: true,
       allowTransparency: true,
       fontFamily: appearance.fontFamily,
       fontSize: appearance.fontSize,
@@ -353,6 +429,8 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
+    const search = new SearchAddon()
+    term.loadAddon(search)
     // Default handler uses window.open() then sets location — Electron denies
     // the blank window, so the link never opens. Hand the URL to the OS instead.
     term.loadAddon(
@@ -362,6 +440,41 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
     )
 
     let cancelled = false
+    let detachViewportScroll: (() => void) | null = null
+
+    /**
+     * Feed scroll sync from the viewport element rather than `term.onScroll`.
+     * xterm routes wheel and scrollbar input through the viewport with the
+     * scroll event suppressed, so `onScroll` only ever sees output-driven and
+     * programmatic scrolls — the user's own scrolling never reaches it.
+     */
+    const watchViewportScroll = (): void => {
+      const viewport = containerRef.current?.querySelector('.xterm-viewport')
+      if (!viewport) return
+      let frame: number | null = null
+      const onViewportScroll = (): void => {
+        if (frame !== null) return
+        frame = requestAnimationFrame(() => {
+          frame = null
+          // Skip the echo of a mirrored scroll so the group doesn't oscillate.
+          // The viewport only catches up with a programmatic scroll a frame
+          // later, so the guard has to survive until then.
+          const steering = syncScrollTargetRef.current
+          if (steering) {
+            const fresh = performance.now() - steering.at < SYNC_SCROLL_ECHO_MS
+            if (fresh && steering.line === term.buffer.active.viewportY) return
+            syncScrollTargetRef.current = null
+          }
+          broadcastScroll(tab.id)
+        })
+      }
+      viewport.addEventListener('scroll', onViewportScroll, { passive: true })
+      detachViewportScroll = () => {
+        if (frame !== null) cancelAnimationFrame(frame)
+        viewport.removeEventListener('scroll', onViewportScroll)
+      }
+    }
+
     const attachTerminal = (): void => {
       if (cancelled) return
       const el = containerRef.current
@@ -372,6 +485,7 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
       }
       el.replaceChildren()
       term.open(el)
+      watchViewportScroll()
       termRef.current = term
       setTermInstance(term)
       fitRef.current = fit
@@ -379,8 +493,10 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
       scheduleFit()
       if (term.cols > 0 && term.rows > 0) {
         window.api.ssh.resize(sessionId, term.cols, term.rows)
+        // `onResize` only fires on a change, so seed the first size here.
+        usePaneMetricsStore.getState().setSize(tab.id, { cols: term.cols, rows: term.rows })
       }
-      term.focus()
+      if (focusedRef.current) term.focus()
     }
     attachTerminal()
 
@@ -404,7 +520,7 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
         nl.mode = 'nl'
         nl.buffer = ''
         nl.cursor = 0
-        useTabsStore.getState().setNlMode(tab.id, true)
+        useSessionsStore.getState().setNlMode(tab.id, true)
         const toggleKey = formatShortcut(keybindingsRef.current.toggleNlMode)
         term.write(
           `\r\n${ORANGE}${t(loc(), 'terminal.nl.entered', { toggleKey })}${RESET}`
@@ -416,7 +532,7 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
         nl.buffer = ''
         nl.cursor = 0
         nl.confirmResolver = undefined
-        useTabsStore.getState().setNlMode(tab.id, false)
+        useSessionsStore.getState().setNlMode(tab.id, false)
         term.write(`\r\n${DIM}${t(loc(), 'terminal.nl.exited')}${RESET}`)
         // Redraw the real shell prompt for normal mode.
         window.api.ssh.write(sessionId, '\n')
@@ -766,7 +882,7 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
       }
     }
 
-    // Custom bindings for NL mode / line numbers / Ask Copilot.
+    // Custom bindings for NL mode / line numbers / split panes / Ask Copilot.
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true
 
@@ -782,6 +898,8 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
         setShowLineNumbers((v) => !v)
         return false
       }
+
+      if (handlePaneKey(bindings, e, paneIdRef.current ?? null, tab.id)) return false
 
       if (e.isComposing || e.keyCode === 229) return true
 
@@ -840,6 +958,9 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
     })
 
     const pasteIntoTerminal = (clip: string): void => {
+      // Every paste path (paste event, right-click, context menu) funnels here,
+      // so this is the only place read-only has to swallow pasted text.
+      if (isTerminalReadOnly(tab.id)) return
       const nl = nlRef.current
       if (nl.mode === 'nl') {
         nlInsertPasteText(clip)
@@ -869,8 +990,11 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
 
     const onDataDisposable = term.onData((data) => {
       const nl = nlRef.current
+      // A read-only pane swallows everything, including sync broadcasts.
+      if (isTerminalReadOnly(tab.id)) return
       if (nl.mode === 'normal') {
         window.api.ssh.write(sessionId, data)
+        broadcastInput(tab.id, data)
         return
       }
       if (nl.confirmResolver) {
@@ -888,6 +1012,7 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
 
     const onResizeDisposable = term.onResize(({ cols, rows }) => {
       window.api.ssh.resize(sessionId, cols, rows)
+      usePaneMetricsStore.getState().setSize(tab.id, { cols, rows })
     })
 
     const dataUnsub = window.api.ssh.onData((e) => {
@@ -920,13 +1045,67 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
       if (visible) term.write(visible)
     })
 
-    registerTerminal(tab.id, (maxLines = COPILOT_CONTEXT_MAX_LINES) =>
-      maxLines < 0 ? serializeFullBuffer(term) : serializeBuffer(term, maxLines)
-    )
-    registerNlToggle(tab.id, toggleNl)
+    registerTerminal(tab.id, {
+      readOutput: (maxLines = COPILOT_CONTEXT_MAX_LINES) =>
+        maxLines < 0 ? serializeFullBuffer(term) : serializeBuffer(term, maxLines),
+      readViewport: () => {
+        const buffer = term.buffer.active
+        return serializeRows(term, buffer.viewportY, term.rows)
+      },
+      readTail: (maxLines) => {
+        const buffer = term.buffer.active
+        const end = buffer.baseY + term.rows
+        const count = maxLines > 0 ? Math.min(maxLines, end) : end
+        return serializeRows(term, end - count, count)
+      },
+      toggleNl,
+      isNlMode: () => nlRef.current.mode === 'nl',
+      getSize: () => ({ cols: term.cols, rows: term.rows }),
+      getViewportTop: () => term.buffer.active.viewportY,
+      scrollToAbsolute: (line) => {
+        const buffer = term.buffer.active
+        const target = Math.min(buffer.baseY, Math.max(0, Math.round(line)))
+        if (buffer.viewportY === target) return
+        syncScrollTargetRef.current = { line: target, at: performance.now() }
+        term.scrollToLine(target)
+      },
+      search: {
+        findNext: (query, options) => {
+          try {
+            return search.findNext(query, searchOptions(options))
+          } catch {
+            // Invalid regex, or a selection whose end column is past `cols`.
+            return false
+          }
+        },
+        findPrevious: (query, options) => {
+          try {
+            return search.findPrevious(query, searchOptions(options))
+          } catch {
+            return false
+          }
+        },
+        clear: () => {
+          try {
+            search.clearDecorations()
+          } catch {
+            // Terminal may already be tearing down.
+          }
+        },
+        onResults: (listener) => {
+          const disposable = search.onDidChangeResults((e) => {
+            listener({
+              resultIndex: e?.resultIndex ?? -1,
+              resultCount: e?.resultCount ?? 0
+            })
+          })
+          return () => disposable.dispose()
+        }
+      }
+    })
 
     const resizeObserver = new ResizeObserver(() => {
-      if (!activeRef.current) return
+      if (!visibleRef.current) return
       fitTerminal()
     })
     resizeObserver.observe(containerRef.current!)
@@ -936,9 +1115,11 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
       term.textarea?.removeEventListener('paste', onTerminalPaste, true)
       onDataDisposable.dispose()
       onResizeDisposable.dispose()
+      detachViewportScroll?.()
       dataUnsub()
       resizeObserver.disconnect()
       unregisterTerminal(tab.id)
+      usePaneMetricsStore.getState().clear(tab.id)
       if (nlRef.current.capture) {
         clearTimeout(nlRef.current.capture.timer)
         if (nlRef.current.capture.idleTimer) clearTimeout(nlRef.current.capture.idleTimer)
@@ -952,16 +1133,79 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.id, sessionId])
 
-  // Refit and focus whenever this tab becomes the active one.
+  /*
+   * WebGL renderer, held only while this terminal is on screen.
+   *
+   * The DOM renderer cannot keep up with several panes streaming output at once,
+   * so a visible terminal upgrades to WebGL when a real GPU is available. But
+   * each WebGL renderer owns a real GPU context, browsers cap those (commonly
+   * 16), and past the cap they silently drop the oldest — blanking a terminal
+   * that is still connected. Background tabs stay mounted, so holding a context
+   * per terminal would grow the total with every tab the user opens. A hidden
+   * terminal paints nothing, so it gives its context back and takes a fresh one
+   * when shown again; that is the same path xterm uses to recover from a context
+   * loss, so it is well-trodden.
+   */
   useEffect(() => {
-    if (active && fitRef.current && termRef.current) {
-      scheduleFit()
-      termRef.current.focus()
+    const term = termInstance
+    if (!term || !visible || !hasGpuWebgl2()) return
+    let addon: WebglAddon
+    try {
+      addon = new WebglAddon()
+    } catch {
+      // Blocklisted driver or lost context at load time: DOM renderer stays.
+      return
     }
-  }, [active])
+    // Search decorations can also drop the context; refresh so the DOM renderer
+    // paints instead of leaving a blank (white) canvas.
+    const repaint = (): void => {
+      try {
+        term.refresh(0, term.rows - 1)
+      } catch {
+        // Terminal already disposed.
+      }
+    }
+    addon.onContextLoss(() => {
+      addon.dispose()
+      repaint()
+    })
+    try {
+      term.loadAddon(addon)
+    } catch {
+      addon.dispose()
+      return
+    }
+    return () => {
+      addon.dispose()
+      repaint()
+    }
+  }, [termInstance, visible])
+
+  /*
+   * Only the hidden -> visible transition needs the retry ladder, because the
+   * host may not have laid out yet. Rect changes (divider drags, zoom) are
+   * picked up by the ResizeObserver instead; that fires once per frame while a
+   * divider is dragged, so `fitTerminal` is what dedupes the SSH resize down to
+   * the frames where the cell grid actually changed.
+   */
+  useEffect(() => {
+    if (visible && fitRef.current && termRef.current) scheduleFit()
+  }, [visible])
+
+  /*
+   * Blurring matters as much as focusing: xterm's hidden textarea keeps DOM
+   * focus on its own, so a terminal that loses the focused pane would keep
+   * swallowing keystrokes — including when the newly focused pane is empty.
+   */
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    if (focused) term.focus()
+    else term.blur()
+  }, [focused])
 
   useEffect(() => {
-    if (activeRef.current) scheduleFit()
+    if (visibleRef.current) scheduleFit()
   }, [showLineNumbers])
 
   useEffect(() => {
@@ -972,7 +1216,7 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
     term.options.fontSize = fontSize
     term.options.lineHeight = safeLineHeight
     term.options.fontWeight = xtermFontWeight(fontWeight)
-    if (activeRef.current) scheduleFit()
+    if (visibleRef.current) scheduleFit()
   }, [appTheme, colorScheme, fontFamily, fontSize, safeLineHeight, fontWeight])
 
   // Dismiss the context menu on any outside interaction.
@@ -994,12 +1238,14 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
   // Right-click: when text is selected, show the Ask/Copy menu; otherwise paste
   // the clipboard straight into the terminal (PuTTY-style). Routing through
   // term.paste keeps normal/NL input handling consistent with typed input.
+  // A pane in a live scroll-sync group always gets the menu, since re-anchoring
+  // the group is only reachable from there; paste moves into the menu instead.
   const onContextMenu = (e: React.MouseEvent): void => {
     e.preventDefault()
     const term = termRef.current
     if (!term) return
     const selection = term.getSelection().trim()
-    if (selection) {
+    if (selection || canRealign) {
       setMenu({ x: e.clientX, y: e.clientY, text: selection })
       return
     }
@@ -1019,13 +1265,29 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
     setMenu(null)
   }
 
+  const paste = (): void => {
+    setMenu(null)
+    void navigator.clipboard.readText().then((text) => {
+      if (text) pasteIntoTerminalRef.current?.(text)
+    })
+  }
+
+  const realign = (): void => {
+    usePaneSyncStore.getState().realignScroll()
+    setMenu(null)
+  }
+
   return (
     <>
       <div
-        className={`terminal-view-host${active ? ' is-active' : ''}${
-          followAppTheme ? ' terminal-view-host--follow-theme' : ''
-        }`}
-        style={followAppTheme ? undefined : { background: containerBg }}
+        className={`terminal-view-host${visible ? ' is-visible' : ''}${
+          split ? ' is-split' : ''
+        }${followAppTheme ? ' terminal-view-host--follow-theme' : ''}`}
+        style={{
+          ...(rect ? paneRectStyle(rect) : null),
+          ...(followAppTheme ? null : { background: containerBg })
+        }}
+        onMouseDown={paneId ? () => usePaneLayoutStore.getState().focusPane(paneId) : undefined}
         onContextMenu={onContextMenu}
       >
         <div
@@ -1045,16 +1307,52 @@ function ConnectedTerminalView({ tab, active }: Omit<Props, 'onNewConnection'>):
       </div>
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
-          <ContextMenuItem shortcut={askCopilotBinding} icon="copilot" onClick={ask}>
-            {tr('terminal.askCopilot')}
-          </ContextMenuItem>
-          <ContextMenuItem shortcut={SHORTCUT_COPY} icon="copy" onClick={copy}>
-            {tr('common.copy')}
-          </ContextMenuItem>
+          {menu.text ? (
+            <>
+              <ContextMenuItem shortcut={askCopilotBinding} icon="copilot" onClick={ask}>
+                {tr('terminal.askCopilot')}
+              </ContextMenuItem>
+              <ContextMenuItem shortcut={SHORTCUT_COPY} icon="copy" onClick={copy}>
+                {tr('common.copy')}
+              </ContextMenuItem>
+            </>
+          ) : (
+            <ContextMenuItem icon="paste" onClick={paste}>
+              {tr('common.paste')}
+            </ContextMenuItem>
+          )}
+          {canRealign && (
+            <ContextMenuItem icon="lock" onClick={realign}>
+              {tr('sync.realign')}
+            </ContextMenuItem>
+          )}
         </div>
       )}
     </>
   )
+}
+
+/**
+ * Search options with highlight decorations always on.
+ *
+ * The decorations are not just cosmetic: `onDidChangeResults` only fires when
+ * they are enabled, so without them the search bar could never show a match
+ * count. xterm requires literal `#RRGGBB` here — CSS variables are not resolved
+ * — so these are fixed mid-tone ambers that stay legible on both light and dark
+ * colour schemes.
+ */
+function searchOptions(options?: TerminalSearchOptions): ISearchOptions {
+  return {
+    ...options,
+    decorations: {
+      matchBackground: '#c98f2b',
+      matchBorder: '#c98f2b',
+      matchOverviewRuler: '#c98f2b',
+      activeMatchBackground: '#e2601b',
+      activeMatchBorder: '#e2601b',
+      activeMatchColorOverviewRuler: '#e2601b'
+    }
+  }
 }
 
 function serializeBuffer(term: Terminal, maxLines: number): string {
@@ -1067,6 +1365,19 @@ function serializeBuffer(term: Terminal, maxLines: number): string {
     if (line) lines.push(line.translateToString(true))
   }
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()
+}
+
+/** Verbatim rows `[from, from + count)`, clamped to the buffer. */
+function serializeRows(term: Terminal, from: number, count: number): string {
+  const buffer = term.buffer.active
+  const start = Math.max(0, from)
+  const end = Math.min(buffer.baseY + term.rows, start + count)
+  const lines: string[] = []
+  for (let i = start; i < end; i++) {
+    const line = buffer.getLine(i)
+    lines.push(line ? line.translateToString(true) : '')
+  }
+  return lines.join('\n').trimEnd()
 }
 
 function serializeFullBuffer(term: Terminal): string {

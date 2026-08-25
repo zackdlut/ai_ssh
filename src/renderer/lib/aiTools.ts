@@ -5,7 +5,7 @@
  * the SSH bridge. All results are sanitized (never echo secrets back to the
  * model).
  */
-import { useTabsStore } from '../store/tabsStore'
+import { useSessionsStore } from '../store/sessionsStore'
 import { useBookmarksStore } from '../store/bookmarksStore'
 import { useThemeStore } from '../store/themeStore'
 import { useLocaleStore } from '../store/localeStore'
@@ -20,8 +20,21 @@ import { formatCaptureElapsed } from './execCapture'
 import { runAgentCommand } from './agentExec'
 import { getTabObservation, setTabObservation } from './terminalObservation'
 import { snapshotTabMarkers, applyPinnedTabId } from './pinnedTerminal'
+import {
+  describeSource,
+  readSource,
+  sourceExists,
+  type DiffRange,
+  type DiffSource
+} from './diffSource'
+import { usePaneLayoutStore } from '../store/paneLayoutStore'
+import { MIN_SYNC_GROUP, usePaneSyncStore } from '../store/paneSyncStore'
+import { usePaneMetricsStore } from '../store/paneMetricsStore'
+import { collectLeaves } from './paneLayout'
 import { verifyCommand } from '../../shared/verify'
 import { normalizeAISettings } from '../../shared/aiSettings'
+import { normalizeForDiff, toSideBySideRows } from '../../shared/diffRows'
+import { computeTextDiff } from '../../shared/textDiff'
 import { toolNamesFor, type ToolTier } from '../../shared/aiTools'
 import type { TerminalAppearanceSettings } from '../../shared/terminalSettings'
 import type {
@@ -74,7 +87,7 @@ function num(v: unknown): number | undefined {
 
 /** The ids of the open terminal tabs, used to detect a newly opened tab. */
 function tabIds(): Set<string> {
-  return new Set(useTabsStore.getState().tabs.map((t) => t.id))
+  return new Set(useSessionsStore.getState().sessions.map((t) => t.id))
 }
 
 async function openSsh(args: Record<string, unknown>): Promise<ToolResult> {
@@ -105,7 +118,7 @@ async function openSsh(args: Record<string, unknown>): Promise<ToolResult> {
     if (err) return { ok: false, error: err }
   }
 
-  const newTab = useTabsStore.getState().tabs.find((t) => !before.has(t.id))
+  const newTab = useSessionsStore.getState().sessions.find((t) => !before.has(t.id))
   return {
     ok: true,
     result: JSON.stringify({
@@ -120,23 +133,23 @@ async function openSsh(args: Record<string, unknown>): Promise<ToolResult> {
 function closeTab(args: Record<string, unknown>): ToolResult {
   const tabId = str(args.tab_id)
   if (!tabId) return { ok: false, error: 'tab_id is required.' }
-  const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId)
+  const tab = useSessionsStore.getState().sessions.find((t) => t.id === tabId)
   if (!tab) return { ok: false, error: `No open tab with id "${tabId}".` }
   if (tab.sessionId) window.api.ssh.close(tab.sessionId)
-  useTabsStore.getState().removeTab(tabId)
+  useSessionsStore.getState().removeSession(tabId)
   return { ok: true, result: `Closed tab "${tab.title}".` }
 }
 
 function closeTabs(args: Record<string, unknown>): ToolResult {
   const all = args.all === true
   const ids = Array.isArray(args.tab_ids) ? args.tab_ids.map((v) => String(v)) : []
-  const tabs = useTabsStore.getState().tabs
+  const tabs = useSessionsStore.getState().sessions
   const targets = all ? tabs : tabs.filter((t) => ids.includes(t.id))
   if (targets.length === 0) return { ok: false, error: 'No matching tabs to close.' }
   const titles = targets.map((t) => t.title)
   for (const t of targets) {
     if (t.sessionId) window.api.ssh.close(t.sessionId)
-    useTabsStore.getState().removeTab(t.id)
+    useSessionsStore.getState().removeSession(t.id)
   }
   return { ok: true, result: `Closed ${targets.length} tab(s): ${titles.join(', ')}.` }
 }
@@ -336,7 +349,7 @@ async function execCommand(
   const tabId = str(args.tab_id)
   const command = str(args.command)
   if (!tabId || !command) return { ok: false, error: 'tab_id and command are required.' }
-  const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId)
+  const tab = useSessionsStore.getState().sessions.find((t) => t.id === tabId)
   if (!tab) return { ok: false, error: `No open tab with id "${tabId}".` }
   if (tab.status !== 'connected' || !tab.sessionId) {
     return { ok: false, error: `Tab "${tabId}" is not connected (status: ${tab.status}).` }
@@ -416,7 +429,7 @@ function listFolders(): ToolResult {
 }
 
 function listOpenTabs(): ToolResult {
-  const tabs = useTabsStore.getState().tabs.map((t) => ({
+  const tabs = useSessionsStore.getState().sessions.map((t) => ({
     tab_id: t.id,
     title: t.title,
     host: t.host,
@@ -425,6 +438,72 @@ function listOpenTabs(): ToolResult {
     status: t.status
   }))
   return { ok: true, result: JSON.stringify(tabs) }
+}
+
+/**
+ * Diff two tabs' buffers without touching either host.
+ *
+ * Reuses the pane-diff pipeline wholesale — `readSource` for the text,
+ * `normalizeForDiff` for the volatile-value masking, `computeTextDiff` for the
+ * comparison — so what the model reads is exactly what the diff panel shows.
+ */
+function diffPanes(args: Record<string, unknown>): ToolResult {
+  const leftTerminalId = typeof args.left_tab_id === 'string' ? args.left_tab_id : ''
+  const rightTerminalId = typeof args.right_tab_id === 'string' ? args.right_tab_id : ''
+  if (!leftTerminalId || !rightTerminalId) {
+    return { ok: false, error: 'left_tab_id and right_tab_id are both required.' }
+  }
+  if (leftTerminalId === rightTerminalId) {
+    return { ok: false, error: 'left_tab_id and right_tab_id must be different tabs.' }
+  }
+
+  const range: DiffRange =
+    args.range === 'viewport' || args.range === 'all' ? args.range : 'recent'
+  const normalize = args.normalize !== false
+
+  const left: DiffSource = { kind: 'terminal', terminalId: leftTerminalId }
+  const right: DiffSource = { kind: 'terminal', terminalId: rightTerminalId }
+  for (const [id, source] of [
+    [leftTerminalId, left],
+    [rightTerminalId, right]
+  ] as const) {
+    if (!sourceExists(source)) return { ok: false, error: `No tab with tab_id "${id}".` }
+  }
+
+  const options = normalize
+    ? { trimTrailing: true, collapseSpaces: false, maskVolatile: true }
+    : { trimTrailing: false, collapseSpaces: false, maskVolatile: false }
+  const leftText = normalizeForDiff(readSource(left, range), options)
+  const rightText = normalizeForDiff(readSource(right, range), options)
+
+  if (!leftText.trim() && !rightText.trim()) {
+    return { ok: false, error: 'Both panes are empty for that range; nothing to compare.' }
+  }
+
+  const diff = computeTextDiff(leftText, rightText)
+  if (diff.skipped) {
+    return {
+      ok: false,
+      error: 'Too much content to diff line by line. Retry with range="viewport" or "recent".'
+    }
+  }
+
+  const hunks = toSideBySideRows(diff)
+  const header = `--- ${describeSource(left, leftTerminalId)}\n+++ ${describeSource(right, rightTerminalId)}\n+${diff.added} -${diff.removed}`
+  if (hunks.length === 0) return { ok: true, result: `${header}\n(identical)` }
+
+  const body: string[] = []
+  for (const hunk of hunks) {
+    body.push(`@@ -${hunk.oldStart} +${hunk.newStart} @@`)
+    for (const row of hunk.rows) {
+      if (row.left && row.right && row.left.op === 'context') body.push(` ${row.left.text}`)
+      else {
+        if (row.left) body.push(`-${row.left.text}`)
+        if (row.right) body.push(`+${row.right.text}`)
+      }
+    }
+  }
+  return { ok: true, result: `${header}\n${body.join('\n')}` }
 }
 
 function maskHttpProxy(url: string): string {
@@ -708,6 +787,8 @@ export async function executeToolCall(
       return listFolders()
     case 'list_open_tabs':
       return listOpenTabs()
+    case 'diff_panes':
+      return diffPanes(args)
     case 'get_app_settings':
       return getAppSettings()
     case 'update_app_settings':
@@ -730,6 +811,62 @@ export async function executeToolCall(
  * reads or writes app settings. Gating on tool presence rather than on the tier
  * name means widening a tier automatically brings the matching facts back.
  */
+/**
+ * The split grid, as the user currently sees it.
+ *
+ * This belongs in the tool snapshot rather than in `TerminalContext`: that
+ * describes the one session a question is about, while the layout is what makes
+ * "compare the left and right panes" resolvable to ids.
+ *
+ * Only the tab on screen is laid out, since that is what "left" and "right"
+ * refer to. The other tabs are reported as a count, so the model can tell that
+ * the tab list above holds sessions no pane position names — without it, "the
+ * other pane" would silently resolve to something in a tab nobody is looking at.
+ */
+function buildPaneLayoutText(): string | undefined {
+  const layout = usePaneLayoutStore.getState()
+  const active = layout.activeTab()
+  const leaves = collectLeaves(active.root)
+  const otherTabs = layout.tabs.length - 1
+  // One unsplit pane in the only tab adds nothing over the session list.
+  if (leaves.length < 2 && otherTabs === 0) return undefined
+
+  const sync = usePaneSyncStore.getState()
+  const sizes = usePaneMetricsStore.getState().sizes
+  const sessions = useSessionsStore.getState().sessions
+
+  const lines = leaves.map((leaf, index) => {
+    const session = leaf.terminalId ? sessions.find((s) => s.id === leaf.terminalId) : undefined
+    if (!session) {
+      const pending = leaf.pendingConnectionId ? ' | awaiting connection' : ''
+      return `- pane ${index + 1}: (empty)${pending}`
+    }
+    const size = sizes[session.id]
+    const flags = [
+      sync.lockedTerminalIds.includes(session.id) ? 'locked' : '',
+      sync.readOnlyTerminalIds.includes(session.id) ? 'read-only' : '',
+      active.zoomedPaneId === leaf.id ? 'zoomed' : '',
+      active.focusedPaneId === leaf.id ? 'focused' : ''
+    ].filter(Boolean)
+    return `- pane ${index + 1}: tab_id=${session.id} | ${session.username}@${session.host}${
+      size ? ` | ${size.cols}x${size.rows}` : ''
+    }${flags.length ? ` | ${flags.join(', ')}` : ''}`
+  })
+
+  const group =
+    sync.lockedTerminalIds.length >= MIN_SYNC_GROUP
+      ? `\nSync group: ${sync.lockedTerminalIds.length} panes locked, scrolling together (input=${
+          sync.syncInput ? 'on' : 'off'
+        })`
+      : ''
+
+  const elsewhere = otherTabs
+    ? `\n${otherTabs} other tab${otherTabs > 1 ? 's' : ''} hold sessions that are open but off screen; those have no pane number here.`
+    : ''
+
+  return `${lines.join('\n')}${group}${elsewhere}`
+}
+
 export function buildToolContextMessage(
   /** Tier whose tools this turn sends, or undefined when tools are disabled. */
   tier: ToolTier | undefined,
@@ -747,7 +884,7 @@ export function buildToolContextMessage(
   )
   const wantsSettings = available.has('get_app_settings') || available.has('update_app_settings')
 
-  const tabs = useTabsStore.getState().tabs
+  const tabs = useSessionsStore.getState().sessions
   const configs = wantsConnections ? useBookmarksStore.getState().connections : []
   const folders = wantsFolders || wantsConnections ? useBookmarksStore.getState().folders : []
   const theme = useThemeStore.getState().theme
@@ -755,7 +892,7 @@ export function buildToolContextMessage(
   const terminal = useTerminalAppearanceStore.getState()
   const startup = useStartupStore.getState()
 
-  const activeTabId = useTabsStore.getState().activeTabId
+  const activeSessionId = useSessionsStore.getState().activeSessionId
   const tabsText = tabs.length
     ? tabs
         .map((t) => {
@@ -770,7 +907,7 @@ export function buildToolContextMessage(
                 }`
               : ''
           return `- tab_id=${t.id} | ${t.username}@${t.host}:${t.port} | ${t.status}${
-            snapshotTabMarkers(t.id, activeTabId, pinnedTabId)
+            snapshotTabMarkers(t.id, activeSessionId, pinnedTabId)
           }${cwd}${last}`
         })
         .join('\n')
@@ -807,8 +944,11 @@ export function buildToolContextMessage(
     ? `App settings: theme=${theme} | locale=${locale} | terminal fontSize=${terminal.fontSize} | terminal colorScheme=${terminal.colorScheme} | startup connSidebarOpen=${startup.connSidebarOpen} | startup copilotOpen=${startup.copilotOpen}`
     : undefined
 
+  const panesText = buildPaneLayoutText()
+
   const sections = [
     `Open terminal tabs:\n${tabsText}`,
+    panesText && `Panes in the tab on screen:\n${panesText}`,
     wantsConnections && `Saved connection configs:\n${configsText}`,
     wantsFolders && `Bookmark folders:\n${foldersText}`,
     settingsLine

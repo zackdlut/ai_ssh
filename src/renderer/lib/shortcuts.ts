@@ -9,6 +9,13 @@ function isMac(): boolean {
   return /Mac|iPhone|iPod|iPad/i.test(navigator.platform) || /\bMac/i.test(navigator.userAgent)
 }
 
+const ARROW_LABELS: Record<string, string> = {
+  arrowleft: '←',
+  arrowright: '→',
+  arrowup: '↑',
+  arrowdown: '↓'
+}
+
 /** Turn `mod+c` into `Ctrl+C` (Windows/Linux) or `⌘C` (macOS). */
 export function formatShortcut(spec: string): string {
   const mac = isMac()
@@ -18,7 +25,7 @@ export function formatShortcut(spec: string): string {
     if (p === 'mod') labels.push(mac ? '⌘' : 'Ctrl')
     else if (p === 'shift') labels.push(mac ? '⇧' : 'Shift')
     else if (p === 'alt') labels.push(mac ? '⌥' : 'Alt')
-    else labels.push(p.length === 1 ? p.toUpperCase() : p)
+    else labels.push(ARROW_LABELS[p] ?? (p.length === 1 ? p.toUpperCase() : p))
   }
   return mac ? labels.join('') : labels.join('+')
 }

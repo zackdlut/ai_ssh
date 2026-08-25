@@ -443,7 +443,193 @@ select:focus {
   border-radius: var(--radius);
   overflow: hidden;
   box-shadow: var(--shadow-soft);
+  --pane-header-h: 24px;
 }
+
+/* Status bar: fixed height sibling after .terminal-area, so pane percentage
+   geometry is unaffected by it. */
+.status-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 22px;
+  padding: 0 10px;
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  /* Not clipped: the sync-group popover opens upward out of the bar. Long
+     values are ellipsised by the items themselves. */
+}
+
+.status-bar-name {
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+.status-bar-spacer {
+  flex: 1;
+}
+
+.status-bar-item {
+  flex: none;
+}
+
+.status-bar-size {
+  font-family: var(--font-mono, monospace);
+}
+
+.status-bar-item--on {
+  color: var(--signal);
+}
+
+.status-bar-item--warn {
+  color: var(--warning, var(--text-muted));
+}
+
+.status-bar-item--danger {
+  color: var(--danger, var(--text-muted));
+  font-weight: 600;
+}
+
+/*
+ * The sync group as one instrument: how many panes are locked, and the two ways
+ * of sending input to them. All three are facets of the same thing, so they
+ * share one enclosure and are separated by hairlines rather than floating apart
+ * as loose pills — connected because they are connected.
+ */
+.sync-bar {
+  flex: none;
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  height: 17px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+}
+
+/* Armed broadcasting is dangerous enough to colour the whole instrument, not
+   just the segment that turned it on. */
+.sync-bar:has(.is-armed) {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+.sync-seg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  /* Background alone answers the pointer; colour is reserved for state. */
+  transition: background-color 120ms ease;
+}
+
+.sync-seg + .sync-seg {
+  border-left: 1px solid var(--line-strong);
+}
+
+/* Clear the enclosure's own curve, and follow it, so hover fills stay inside.
+   Counted by type, because the popover is a sibling and would otherwise steal
+   the last slot from the segment that needs the rounded edge. */
+.sync-seg:first-of-type {
+  padding-left: 10px;
+  border-radius: 999px 0 0 999px;
+}
+
+.sync-seg:last-of-type {
+  padding-right: 10px;
+  border-radius: 0 999px 999px 0;
+}
+
+.sync-seg:only-of-type {
+  padding: 0 10px;
+  border-radius: 999px;
+}
+
+.sync-seg:hover,
+.sync-seg.is-open {
+  background: var(--surface-hover);
+}
+
+.sync-seg:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--signal) 55%, transparent);
+}
+
+/* Colour, weight and fill together, so it never rests on hue alone. */
+.sync-seg.is-armed {
+  color: var(--danger);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.sync-seg.is-armed:hover {
+  background: color-mix(in srgb, var(--danger) 24%, transparent);
+}
+
+/* Lock count: the dot says whether the group is live, the number says how big. */
+.sync-seg--lock.is-on {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.sync-seg-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+}
+
+.sync-seg--lock.is-on .sync-seg-dot {
+  background: var(--signal);
+  opacity: 1;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal) 18%, transparent);
+}
+
+/* Menu opens upward, so the caret points up until it is open. */
+.sync-seg-caret {
+  transform: rotate(180deg);
+  opacity: 0.6;
+}
+
+.sync-seg-caret.open {
+  transform: none;
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sync-seg {
+    transition: none;
+  }
+}
+
+.sync-pop {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 200;
+  width: max-content;
+  min-width: 180px;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--ink-600);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow-pop);
+}
+
 
 /* thin top sheen — matches .side-panel-header accent */
 .terminal-area::before {
@@ -457,9 +643,17 @@ select:focus {
   z-index: 2;
 }
 
+/*
+ * Terminal hosts are absolutely positioned siblings of the pane chrome and are
+ * moved by inline percentage rects. They are never re-parented, because moving
+ * a live xterm instance in the DOM tears down its renderer.
+ */
 .terminal-view-host {
   position: absolute;
-  inset: 0;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
   padding: 4px 6px;
   box-sizing: border-box;
   visibility: hidden;
@@ -467,10 +661,650 @@ select:focus {
   z-index: 0;
 }
 
-.terminal-view-host.is-active {
+/* Assigned to a pane: rendered and hit-testable. */
+.terminal-view-host.is-visible {
   visibility: visible;
   pointer-events: auto;
   z-index: 1;
+}
+
+/* Leave room for the pane header once the host's own tab is split. */
+.terminal-view-host.is-split {
+  padding: calc(var(--pane-header-h) + 5px) 9px 7px;
+}
+
+/* ---------- Split panes ---------- */
+
+.pane-frame {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.pane-frame-border {
+  position: absolute;
+  inset: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  transition:
+    border-color 130ms ease,
+    box-shadow 130ms ease;
+}
+
+/* A lone pane sits inside .terminal-area's own frame; a second border is noise. */
+.terminal-area:not(.is-split) .pane-frame-border {
+  display: none;
+}
+
+.pane-frame.is-focused .pane-frame-border {
+  border-color: var(--accent-border-strong);
+  box-shadow: inset 0 0 0 1px var(--accent-ring);
+}
+
+.pane-frame.is-locked .pane-frame-border {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+}
+
+/* Sync input armed: unmistakable, because every keystroke fans out. */
+.pane-frame.is-broadcast .pane-frame-border {
+  border-color: var(--danger);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--danger) 35%, transparent),
+    0 0 14px -5px var(--danger);
+}
+
+.pane-header {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 4px;
+  height: var(--pane-header-h);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 3px 0 8px;
+  box-sizing: border-box;
+  pointer-events: auto;
+  background: var(--panel-header-bg);
+  border-bottom: 1px solid var(--line);
+  border-radius: calc(var(--radius-sm) - 2px) calc(var(--radius-sm) - 2px) 0 0;
+  font-size: 11px;
+  color: var(--text-dim);
+  user-select: none;
+}
+
+.pane-frame.is-focused .pane-header {
+  color: var(--text);
+  background: var(--selected-row-bg);
+}
+
+.pane-header-index {
+  flex-shrink: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  text-align: center;
+  color: var(--signal);
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent-border);
+}
+
+.pane-header-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
+}
+
+.pane-header-badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.pane-header-spacer {
+  flex: 1;
+  min-width: 4px;
+}
+
+.pane-header-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    background 120ms ease;
+}
+
+.pane-header-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--btn-hover-bg);
+}
+
+.pane-header-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.pane-header-btn.active {
+  color: var(--warn);
+}
+
+.pane-header-btn.active .ui-icon--no-input {
+  color: var(--danger);
+}
+
+.pane-header-close {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.pane-header-close:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-hover-bg);
+}
+
+.pane-empty {
+  position: absolute;
+  inset: 4px;
+  pointer-events: auto;
+  overflow: auto;
+  display: flex;
+  border-radius: var(--radius-sm);
+}
+
+.pane-empty.has-header {
+  top: calc(var(--pane-header-h) + 5px);
+}
+
+.pane-empty > .empty-state {
+  flex: 1;
+}
+
+/* Split panes are short; drop the decorative parts of the empty state. */
+.pane-empty.has-header .empty-mark,
+.pane-empty.has-header .empty-sub {
+  display: none;
+}
+
+.pane-empty.has-header .empty-state {
+  gap: 12px;
+}
+
+/* Find bar, floating over the top-right of its own pane. */
+.pane-search {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-bg);
+  box-shadow: var(--shadow-md, 0 4px 14px rgba(0, 0, 0, 0.25));
+  pointer-events: auto;
+}
+
+.pane-search.has-header {
+  top: calc(var(--pane-header-h) + 6px);
+}
+
+.pane-search-input {
+  width: 150px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.pane-search-input:focus {
+  outline: none;
+  border-color: var(--signal);
+}
+
+.pane-search-status {
+  min-width: 56px;
+  padding: 0 2px;
+  font-size: 11px;
+  color: var(--text-faint);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.pane-search-status.is-empty {
+  color: var(--danger, var(--text-faint));
+}
+
+.pane-search-flag,
+.pane-search-btn {
+  flex: none;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pane-search-flag:hover:not(:disabled),
+.pane-search-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.pane-search-flag.active {
+  border-color: var(--signal);
+  background: color-mix(in srgb, var(--signal) 18%, transparent);
+  color: var(--text);
+}
+
+.pane-search-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/*
+ * Drop targets for a tab dragged out of the tab bar. Only mounted while a drag
+ * is in flight, so they never intercept terminal clicks. Edge bands are 28% so
+ * the centre stays comfortably the largest target.
+ */
+.pane-drops {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  /* `.pane-frame` is click-through, so the targets have to opt back in. */
+  pointer-events: auto;
+}
+
+.pane-drop {
+  position: absolute;
+  background: transparent;
+  transition: background 90ms ease;
+}
+
+.pane-drop.is-over {
+  background: color-mix(in srgb, var(--signal) 22%, transparent);
+  box-shadow: inset 0 0 0 1px var(--signal);
+}
+
+.pane-drop--left {
+  left: 0;
+  top: 0;
+  width: 28%;
+  height: 100%;
+}
+
+.pane-drop--right {
+  right: 0;
+  top: 0;
+  width: 28%;
+  height: 100%;
+}
+
+.pane-drop--top {
+  left: 28%;
+  top: 0;
+  width: 44%;
+  height: 34%;
+}
+
+.pane-drop--bottom {
+  left: 28%;
+  bottom: 0;
+  width: 44%;
+  height: 34%;
+}
+
+.pane-drop--center {
+  left: 28%;
+  top: 34%;
+  width: 44%;
+  height: 32%;
+}
+
+.pane-divider {
+  position: absolute;
+  z-index: 4;
+  background: transparent;
+  /* Keyboard-reachable, but the ring is drawn on the hairline below instead of
+     around the invisible 6px strip. */
+  outline: none;
+  touch-action: none;
+}
+
+/* While dragging, the pointer is captured by the handle; this only stops the
+   terminal underneath from painting a stray selection as the cursor passes. */
+.pane-divider.dragging {
+  user-select: none;
+}
+
+.pane-divider--row {
+  cursor: col-resize;
+}
+
+.pane-divider--col {
+  cursor: row-resize;
+}
+
+/* Hairline that only shows up while hovered or dragged. */
+.pane-divider::after {
+  content: '';
+  position: absolute;
+  background: var(--accent-border-hover);
+  opacity: 0;
+  transition: opacity 130ms ease;
+}
+
+.pane-divider--row::after {
+  left: 50%;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+}
+
+.pane-divider--col::after {
+  top: 50%;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 1px;
+}
+
+.pane-divider:hover::after,
+.pane-divider.dragging::after,
+.pane-divider:focus-visible::after {
+  opacity: 1;
+}
+
+/* A focused divider has to be findable without a pointer, so it gets the accent
+   colour and a little more weight than the hover hairline. */
+.pane-divider:focus-visible::after {
+  background: var(--signal);
+  box-shadow: 0 0 6px -1px var(--signal);
+}
+
+/* ---------- Terminal diff overlay ---------- */
+
+/* Floats over the terminal area so the sessions keep running underneath. */
+.diff-panel {
+  position: absolute;
+  inset: 10px;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--ink-800);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+
+.diff-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-header-bg);
+}
+
+.diff-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.diff-panel-stat {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--signal);
+  background: var(--badge-bg);
+  border: 1px solid var(--badge-border);
+}
+
+.diff-panel-spacer {
+  flex: 1;
+}
+
+.diff-panel-btn {
+  padding: 4px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--btn-bg);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.diff-panel-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--btn-hover-bg);
+}
+
+.diff-panel-close {
+  width: 26px;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.diff-panel-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.diff-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.diff-control-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.diff-control select {
+  max-width: 200px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--ink-600);
+  color: var(--text);
+  font-size: 11.5px;
+}
+
+.diff-control--checks {
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.diff-control--snapshots {
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.diff-control-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.diff-snapshot-del {
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.diff-snapshot-del:hover {
+  border-color: var(--danger, var(--border));
+  color: var(--danger, var(--text));
+}
+
+.diff-control--checks label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.diff-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.diff-panel-note {
+  margin: auto;
+  padding: 24px;
+  font-size: 12.5px;
+  color: var(--text-faint);
+  text-align: center;
+  max-width: 420px;
+  line-height: 1.6;
+}
+
+.diff-panel-note--warn {
+  color: var(--warn);
+}
+
+.diff-columns {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--line);
+}
+
+.diff-column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--ink-900);
+}
+
+.diff-column-heading {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diff-column-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.diff-hunk-heading {
+  padding: 3px 10px;
+  color: var(--azure);
+  background: var(--surface-raise);
+  font-size: 11px;
+  position: sticky;
+  top: 0;
+}
+
+.diff-line {
+  display: flex;
+  gap: 8px;
+  padding: 0 10px;
+  white-space: pre;
+}
+
+.diff-line-no {
+  flex-shrink: 0;
+  width: 4ch;
+  text-align: right;
+  color: var(--text-faint);
+  user-select: none;
+}
+
+.diff-line-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.diff-line--context {
+  color: var(--text-dim);
+}
+
+.diff-line--remove {
+  color: var(--danger);
+  background: rgba(255, 122, 147, 0.09);
+}
+
+.diff-line--add {
+  color: var(--ok);
+  background: rgba(130, 232, 182, 0.09);
+}
+
+/* Placeholder cell so the two columns stay row-aligned. */
+.diff-line--filler {
+  background: var(--surface-inset);
+}
+
+.diff-line--filler::after {
+  content: '\00a0';
 }
 
 /* Follow-app-theme: let .terminal-area --panel-bg show through (matches conn sidebar). */
@@ -487,6 +1321,17 @@ select:focus {
 .terminal-view-host .xterm .xterm-accessibility-tree:not(.debug) *::selection {
   color: var(--selection-fg);
   background: var(--selection-bg);
+}
+
+/* Search highlights sit in the decoration overlay; they must not steal clicks
+ * or stretch across the pane (a full-width overview-ruler canvas looks like a
+ * white screen). */
+.terminal-view-host .xterm-screen .xterm-decoration-container .xterm-decoration {
+  pointer-events: none;
+}
+
+.terminal-view-host .xterm-decoration-overview-ruler {
+  left: auto !important;
 }
 
 .terminal-view-layout {
@@ -1563,6 +2408,165 @@ select:focus {
   background: var(--line);
 }
 
+.toolbar-dropdown-label {
+  padding: 4px 10px 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* ---------- Split-pane toolbar menu ---------- */
+
+.pane-menu-count {
+  margin-left: 2px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--signal);
+  background: var(--badge-bg);
+  border: 1px solid var(--badge-border);
+}
+
+.pane-menu-note {
+  padding: 1px 10px 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* Saved layout list: a wide restore button plus a narrow delete affordance. */
+.pane-menu-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 6px;
+}
+
+.pane-menu-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pane-menu-row-main:hover {
+  background: var(--surface-hover);
+}
+
+.pane-menu-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-menu-row-meta {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.pane-menu-row-del {
+  flex: none;
+  width: 22px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pane-menu-row-del:hover {
+  background: var(--danger-soft, var(--surface-hover));
+  color: var(--danger, var(--text));
+}
+
+.save-layout-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+}
+
+/* An empty pane restored from a saved layout, naming the host it wants. */
+.pane-pending {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 12px;
+  text-align: center;
+}
+
+.pane-pending-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.pane-pending-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.pane-pending-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.pane-pending-btn {
+  margin-top: 8px;
+  padding: 5px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pane-pending-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--signal);
+}
+
+.pane-pending-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* How many panes a tab holds, on the chip the pane menu already uses. */
+.tab-pane-count {
+  flex: none;
+  margin-right: 2px;
+  line-height: 15px;
+}
+
 .modal-about {
   width: 420px;
 }
@@ -2165,21 +3169,81 @@ select:focus {
   color: var(--text-faint);
 }
 
-.composer textarea {
+.composer-input {
+  position: relative;
+}
+
+.composer-highlight,
+.composer-input textarea {
   resize: none;
   min-height: 56px;
   max-height: 150px;
   line-height: 1.5;
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: inherit;
+  padding: 9px 11px;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-wrap: break-word;
   border: none;
   background: transparent;
   box-shadow: none;
   border-radius: 12px 12px 0 0;
+  scrollbar-gutter: stable;
 }
 
-.composer textarea:focus {
+.composer-highlight {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  pointer-events: none;
+  color: var(--text);
+  scrollbar-width: none;
+}
+
+.composer-highlight::-webkit-scrollbar {
+  display: none;
+}
+
+.composer-input textarea {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  overflow-y: auto;
+  color: transparent;
+  caret-color: var(--text);
+  -webkit-text-fill-color: transparent;
+}
+
+.composer-input textarea::placeholder {
+  color: var(--text-faint);
+  -webkit-text-fill-color: var(--text-faint);
+}
+
+.composer-input textarea::selection {
+  background: var(--selection-bg);
+  color: transparent;
+}
+
+.composer-input textarea:focus {
   outline: none;
   border: none;
   box-shadow: none;
+}
+
+.composer-mention {
+  color: var(--signal);
+  background: var(--badge-bg);
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1px var(--badge-border);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.composer-mention-pending {
+  color: var(--signal);
 }
 
 /* Copilot model tier picker — width matches dropdown menu */
@@ -3479,11 +4543,17 @@ select:focus {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.01));
 }
 
-.copilot-panel .composer textarea {
+.copilot-panel .composer-highlight,
+.copilot-panel .composer-input textarea {
   min-height: 60px;
   padding: 10px 12px 6px;
   line-height: 1.55;
-  color: var(--text);
+}
+
+.copilot-panel .composer-input textarea {
+  color: transparent;
+  caret-color: var(--text);
+  -webkit-text-fill-color: transparent;
 }
 
 .copilot-panel .composer-box {
@@ -7443,6 +8513,109 @@ select:focus {
   border-right: 1.5px solid currentColor;
   border-bottom: 1.5px solid currentColor;
   border-radius: 0 0 2px 2px;
+}
+
+/* ---------- Split-pane glyphs ---------- */
+
+/* Shapes too fiddly for border art: paint currentColor through an SVG mask. */
+.ui-icon--lock,
+.ui-icon--no-input,
+.ui-icon--expand,
+.ui-icon--collapse,
+.ui-icon--diff,
+.ui-icon--camera {
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+.ui-icon--lock::before,
+.ui-icon--lock::after,
+.ui-icon--no-input::before,
+.ui-icon--no-input::after,
+.ui-icon--expand::before,
+.ui-icon--expand::after,
+.ui-icon--collapse::before,
+.ui-icon--collapse::after,
+.ui-icon--diff::before,
+.ui-icon--diff::after,
+.ui-icon--camera::before,
+.ui-icon--camera::after {
+  display: none;
+}
+
+.ui-icon--camera {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M9.4 4a1.5 1.5 0 0 0-1.26.68L7.2 6.1H4.5A2.5 2.5 0 0 0 2 8.6v9A2.5 2.5 0 0 0 4.5 20h15a2.5 2.5 0 0 0 2.5-2.5v-9a2.5 2.5 0 0 0-2.5-2.5h-2.7l-.94-1.42A1.5 1.5 0 0 0 14.6 4H9.4zm2.6 4.6a4.4 4.4 0 1 1 0 8.8 4.4 4.4 0 0 1 0-8.8zm0 2a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M9.4 4a1.5 1.5 0 0 0-1.26.68L7.2 6.1H4.5A2.5 2.5 0 0 0 2 8.6v9A2.5 2.5 0 0 0 4.5 20h15a2.5 2.5 0 0 0 2.5-2.5v-9a2.5 2.5 0 0 0-2.5-2.5h-2.7l-.94-1.42A1.5 1.5 0 0 0 14.6 4H9.4zm2.6 4.6a4.4 4.4 0 1 1 0 8.8 4.4 4.4 0 0 1 0-8.8zm0 2a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z'/%3E%3C/svg%3E");
+}
+
+.ui-icon--lock {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M12 1a5 5 0 0 0-5 5v3H5.5A1.5 1.5 0 0 0 4 10.5v10A1.5 1.5 0 0 0 5.5 22h13a1.5 1.5 0 0 0 1.5-1.5v-10A1.5 1.5 0 0 0 18.5 9H17V6a5 5 0 0 0-5-5zm0 2a3 3 0 0 1 3 3v3H9V6a3 3 0 0 1 3-3z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M12 1a5 5 0 0 0-5 5v3H5.5A1.5 1.5 0 0 0 4 10.5v10A1.5 1.5 0 0 0 5.5 22h13a1.5 1.5 0 0 0 1.5-1.5v-10A1.5 1.5 0 0 0 18.5 9H17V6a5 5 0 0 0-5-5zm0 2a3 3 0 0 1 3 3v3H9V6a3 3 0 0 1 3-3z'/%3E%3C/svg%3E");
+}
+
+.ui-icon--no-input {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 2c1.85 0 3.55.63 4.9 1.69L5.69 16.9A7.96 7.96 0 0 1 4 12c0-4.42 3.58-8 8-8zm6.31 3.1A7.96 7.96 0 0 1 20 12c0 4.42-3.58 8-8 8a7.96 7.96 0 0 1-4.9-1.69L18.31 7.1z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 2c1.85 0 3.55.63 4.9 1.69L5.69 16.9A7.96 7.96 0 0 1 4 12c0-4.42 3.58-8 8-8zm6.31 3.1A7.96 7.96 0 0 1 20 12c0 4.42-3.58 8-8 8a7.96 7.96 0 0 1-4.9-1.69L18.31 7.1z'/%3E%3C/svg%3E");
+}
+
+.ui-icon--expand {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z'/%3E%3C/svg%3E");
+}
+
+.ui-icon--collapse {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z'/%3E%3C/svg%3E");
+}
+
+/* Opposing arrows: compare two sides. */
+.ui-icon--diff {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M9 3 4 8l5 5v-3h9V6H9V3zm6 8v3H6v4h9v3l5-5-5-5z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M9 3 4 8l5 5v-3h9V6H9V3zm6 8v3H6v4h9v3l5-5-5-5z'/%3E%3C/svg%3E");
+}
+
+/* Frame with the half that the new pane will take shaded in. */
+.ui-icon--split-right::before,
+.ui-icon--split-down::before {
+  left: 1px;
+  top: 2px;
+  width: 12px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+.ui-icon--split-right::after {
+  left: 7.5px;
+  top: 3.5px;
+  width: 4px;
+  height: 7px;
+  background: currentColor;
+  opacity: 0.5;
+}
+.ui-icon--split-down::after {
+  left: 2.5px;
+  top: 7.5px;
+  width: 9px;
+  height: 3px;
+  background: currentColor;
+  opacity: 0.5;
+}
+
+.ui-icon--layout-grid::before {
+  left: 1.5px;
+  top: 1.5px;
+  width: 4.5px;
+  height: 4.5px;
+  background: currentColor;
+  border-radius: 1px;
+  box-shadow:
+    6.5px 0 0 currentColor,
+    0 6.5px 0 currentColor,
+    6.5px 6.5px 0 currentColor;
 }
 
 .ui-icon--browse::before {

@@ -1,11 +1,11 @@
 import { useEffect, useRef } from 'react'
-import type { TerminalTab } from '../../store/tabsStore'
-import { formatTerminalLabel } from '../../lib/pinnedTerminal'
+import type { TerminalSession } from '../../store/sessionsStore'
+import { formatTerminalLabel, mentionTokenFor } from '../../lib/pinnedTerminal'
 import { useT } from '../../lib/i18n'
 
 interface Props {
-  tabs: TerminalTab[]
-  activeTabId: string | null
+  tabs: TerminalSession[]
+  activeSessionId: string | null
   pinnedTabId?: string
   highlightIndex: number
   emptyLabel: string
@@ -16,7 +16,7 @@ interface Props {
 
 export default function TerminalTabPicker({
   tabs,
-  activeTabId,
+  activeSessionId,
   pinnedTabId,
   highlightIndex,
   emptyLabel,
@@ -43,11 +43,13 @@ export default function TerminalTabPicker({
           </button>
         ) : (
           tabs.map((tab, index) => {
+            const token = mentionTokenFor(tab)
             const label = formatTerminalLabel(tab)
-            const isActive = tab.id === activeTabId
+            const isActive = tab.id === activeSessionId
             const isPinned = tab.id === pinnedTabId
             const selected = index === highlightIndex
             const tags = [
+              label !== token ? label : null,
               isActive ? t('copilot.mentionActive') : null,
               isPinned ? t('copilot.mentionPinned') : null,
               tab.status
@@ -64,7 +66,7 @@ export default function TerminalTabPicker({
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => onSelect(tab.id)}
               >
-                <span className="mention-name">{label}</span>
+                <span className="mention-name">@{token}</span>
                 <span className="mention-desc">{tags.join(' · ')}</span>
               </button>
             )

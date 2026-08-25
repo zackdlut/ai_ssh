@@ -12,7 +12,7 @@
  * and cannot be corrupted by shell quoting. Search still shells out (there is
  * no SFTP equivalent of grep) but returns structured results.
  */
-import { useTabsStore, type TerminalTab } from '../store/tabsStore'
+import { useSessionsStore, type TerminalSession } from '../store/sessionsStore'
 import { runAgentCommand } from './agentExec'
 import { toolResultCharBudget } from './toolBudget'
 import { computeTextDiff, formatDiffStat } from '../../shared/textDiff'
@@ -53,7 +53,7 @@ const SEARCH_DEFAULT_MAX = 100
 const SEARCH_HARD_MAX = 500
 
 interface ResolvedTab {
-  tab: TerminalTab
+  tab: TerminalSession
   sessionId: string
 }
 
@@ -64,7 +64,7 @@ interface ResolvedTab {
  */
 function resolveSftpTab(tabId: string | undefined): ResolvedTab | { error: string } {
   if (!tabId) return { error: 'tab_id is required.' }
-  const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId)
+  const tab = useSessionsStore.getState().sessions.find((t) => t.id === tabId)
   if (!tab) return { error: `No open tab with id "${tabId}".` }
   if (tab.kind === 'wsl') {
     return {

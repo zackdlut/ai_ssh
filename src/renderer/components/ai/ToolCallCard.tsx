@@ -31,6 +31,7 @@ const TOOL_CATEGORY: Record<string, ToolCategory> = {
   move_connection_to_folder: 'config',
   list_ssh_configs: 'read',
   list_folders: 'read',
+  diff_panes: 'read',
   exec_command: 'command',
   run_in_terminal: 'command',
   get_app_settings: 'settings',

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useTabsStore } from '../../store/tabsStore'
+import { useSessionsStore } from '../../store/sessionsStore'
 import { isDangerous } from '../../lib/commands'
 import { useT } from '../../lib/i18n'
 import { debugLog } from '../../lib/debugLog'
@@ -13,13 +13,13 @@ export default function CommandCard({ command }: Props): JSX.Element {
   const [value, setValue] = useState(command)
   const [editing, setEditing] = useState(false)
   const [copied, setCopied] = useState(false)
-  const activeTab = useTabsStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
+  const activeSession = useSessionsStore((s) => s.sessions.find((t) => t.id === s.activeSessionId))
   const t = useT()
 
   const dangerous = isDangerous(value)
 
   const run = (): void => {
-    if (!activeTab?.sessionId || activeTab.status !== 'connected') {
+    if (!activeSession?.sessionId || activeSession.status !== 'connected') {
       window.alert(t('cmd.noTerminal'))
       return
     }
@@ -27,19 +27,19 @@ export default function CommandCard({ command }: Props): JSX.Element {
       const ok = window.confirm(
         t('cmd.dangerConfirm', {
           command: value,
-          host: `${activeTab.username}@${activeTab.host}`
+          host: `${activeSession.username}@${activeSession.host}`
         })
       )
       if (!ok) return
     }
     debugLog({
       category: 'user.action',
-      tabId: activeTab.id,
-      sessionId_ssh: activeTab.sessionId,
+      tabId: activeSession.id,
+      sessionId_ssh: activeSession.sessionId,
       message: 'commandCard.run',
       data: { command: value.trim() }
     })
-    window.api.ssh.write(activeTab.sessionId, value.trim() + '\n')
+    window.api.ssh.write(activeSession.sessionId, value.trim() + '\n')
   }
 
   const copy = async (): Promise<void> => {
@@ -66,7 +66,7 @@ export default function CommandCard({ command }: Props): JSX.Element {
         <button
           className="primary"
           onClick={run}
-          title={t('cmd.runOn', { target: activeTab?.title ?? t('cmd.terminal') })}
+          title={t('cmd.runOn', { target: activeSession?.title ?? t('cmd.terminal') })}
         >
           {t('cmd.run')}
         </button>

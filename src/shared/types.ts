@@ -19,6 +19,43 @@ export interface ConnectionConfig {
   lastUsedAt?: number
 }
 
+/**
+ * A stored split layout, as a binary tree. Live session ids are deliberately
+ * absent: they do not survive a restart, so a pane remembers the saved
+ * connection it should be filled from instead.
+ */
+export type SavedLayoutNode =
+  | { kind: 'leaf'; connectionId?: string }
+  | {
+      kind: 'split'
+      dir: 'row' | 'col'
+      ratio: number
+      a: SavedLayoutNode
+      b: SavedLayoutNode
+    }
+
+/**
+ * Format of the newest `SavedLayout` this build writes.
+ *
+ * v1 states what v0 already meant, now that it can be said: one saved layout is
+ * a template for one tab. v0 entries carry no `version` and need no conversion —
+ * a single tree was all they ever held.
+ */
+export const SAVED_LAYOUT_VERSION = 1
+
+/**
+ * A named workspace: the pane tree for one tab, plus the hosts bound to its
+ * panes. Restoring it builds a tab; it does not touch the tabs already open.
+ */
+export interface SavedLayout {
+  id: string
+  name: string
+  root: SavedLayoutNode
+  createdAt: number
+  /** Absent on entries written before the field existed, i.e. v0. */
+  version?: number
+}
+
 /** A bookmark folder used to group saved connections into a nested tree. */
 export interface BookmarkFolder {
   id: string

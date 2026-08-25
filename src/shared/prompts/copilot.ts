@@ -298,7 +298,7 @@ function promptCore(toolNames: readonly string[] = ALL_TOOL_NAMES): string {
 
 /** Live-chart authoring rules — injected only when the user asks to visualize terminal output. */
 const PROMPT_CHART = `## Output rules — Live charts (chart)
-- When the user mentions @terminal and asks to plot/chart/visualize terminal output (折线图/柱状图/图表/实时图), you MUST emit a chart block. It only renders in a fence tagged exactly chart (NOT json, NOT yaml).
+- When the user mentions a host with @hostname (or the alias @terminal) and asks to plot/chart/visualize terminal output (折线图/柱状图/图表/实时图), you MUST emit a chart block. It only renders in a fence tagged exactly chart (NOT json, NOT yaml).
 - Two-phase design: you do NOT write the chart JSON. The chart block body is a SHORT plain-text DESCRIPTION; a separate constrained step turns it into the strict JSON spec (so you never emit malformed JSON).
 - In one or two sentences describe: chart type (line/bar/pie/scatter); live (real-time stream) or static (one-shot snapshot of the buffer); the source command; and for EACH series which value to plot and how to find it (a column header name or 0-based field index for tabular tools, or the inline-labeled token for regex tools), plus a per-line label for pie/bar distributions. Name concrete columns so the spec step is unambiguous.
 - DERIVED values: a metric computed from one column (e.g. CPU 使用率 = 100 - 空闲率) is ONE series with a transform, not two — just say so (e.g. "使用率 = 100 - id 列"); never describe a second source-less series.

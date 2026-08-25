@@ -1,11 +1,13 @@
 import { useAIStore, DEFAULT_CHAT_TAB_TITLE } from '../store/aiStore'
-import { useTabsStore } from '../store/tabsStore'
+import { useSessionsStore } from '../store/sessionsStore'
 import { COPILOT_CONTEXT_MAX_LINES, COPILOT_TERMINAL_MENTION_MAX_LINES, readTerminalOutput } from './terminalRegistry'
 import {
-  TERMINAL_MENTION,
+  hasTerminalMention,
+  matchTabByMention,
   resolvePinnedTab,
   shouldPinOnSend,
-  terminalContextTabId
+  terminalContextTabId,
+  type MentionableTab
 } from './pinnedTerminal'
 import { getTabObservation } from './terminalObservation'
 import { normalizeAISettings, resolveActiveContextLength } from '../../shared/aiSettings'
@@ -126,7 +128,7 @@ interface LoopState {
   /** True once a just-in-time reflection nudge has been injected this task. */
   reflected?: boolean
   /**
-   * The user asked to VISUALIZE terminal output as a chart (@terminal + a
+   * The user asked to VISUALIZE terminal output as a chart (@host / @terminal + a
    * charting verb). For the first turn we disable function-calling and inject a
    * hard "emit a chart block" nudge: small local models otherwise almost always
    * run the collection command as a tool/bash instead of emitting the ```chart
@@ -363,7 +365,7 @@ function refreshLoopContext(loop: LoopState): void {
   // current pin without aborting a command already in flight.
   const chat = useAIStore.getState().chatTabs.find((t) => t.id === loop.tabId)
   if (chat?.pinnedTabId && chat.pinnedTabId !== loop.contextTabId) {
-    const terminal = useTabsStore.getState().tabs.find((t) => t.id === chat.pinnedTabId)
+    const terminal = useSessionsStore.getState().sessions.find((t) => t.id === chat.pinnedTabId)
     if (terminal) {
       loop.contextTabId = terminal.id
       loop.boundTabId = terminal.id
@@ -1155,16 +1157,16 @@ function tNotice(key: Parameters<typeof translate>[1], vars?: Record<string, str
   return translate(useLocaleStore.getState().locale, key, vars)
 }
 
-/** How much scrollback to include: an explicit @terminal mention asks for more. */
-function contextMaxLines(prompt: string): number {
-  return TERMINAL_MENTION.test(prompt)
+/** How much scrollback to include: an explicit @host / @terminal mention asks for more. */
+function contextMaxLines(prompt: string, tabs: readonly MentionableTab[]): number {
+  return hasTerminalMention(prompt, tabs)
     ? COPILOT_TERMINAL_MENTION_MAX_LINES
     : COPILOT_CONTEXT_MAX_LINES
 }
 
 /** Read a tab's live context (output window, host identity, observed cwd). */
 function readTabContext(tabId: string, maxLines: number): TerminalContext | undefined {
-  const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId)
+  const tab = useSessionsStore.getState().sessions.find((t) => t.id === tabId)
   if (!tab) return undefined
   return {
     recentOutput: readTerminalOutput(tab.id, maxLines),
@@ -1205,9 +1207,10 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
   let tab = ai.chatTabs.find((t) => t.id === tabId)
   if (!tab) return
 
-  const terminals = useTabsStore.getState()
-  const activeTerminalId = terminals.activeTabId
-  const nextPinId = shouldPinOnSend(tab.pinnedTabId, activeTerminalId)
+  const terminals = useSessionsStore.getState()
+  const activeTerminalId = terminals.activeSessionId
+  const mentionedTab = !tab.pinnedTabId ? matchTabByMention(prompt, terminals.sessions) : undefined
+  const nextPinId = mentionedTab?.id ?? shouldPinOnSend(tab.pinnedTabId, activeTerminalId)
   if (nextPinId && nextPinId !== tab.pinnedTabId) {
     ai.setPinnedTerminal(tabId, nextPinId)
     tab = { ...tab, pinnedTabId: nextPinId }
@@ -1216,14 +1219,14 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
   const pin = resolvePinnedTab(
     tab.pinnedTabId,
     tab.pinnedLabel,
-    terminals.tabs.map((t) => t.id)
+    terminals.sessions.map((t) => t.id)
   )
   const contextTabId = terminalContextTabId(pin, activeTerminalId)
   const contextTab = contextTabId
-    ? terminals.tabs.find((t) => t.id === contextTabId)
+    ? terminals.sessions.find((t) => t.id === contextTabId)
     : undefined
-  const mentionsTerminal = TERMINAL_MENTION.test(prompt)
-  const context = contextTabId ? readTabContext(contextTabId, contextMaxLines(prompt)) : undefined
+  const mentionsTerminal = hasTerminalMention(prompt, terminals.sessions)
+  const context = contextTabId ? readTabContext(contextTabId, contextMaxLines(prompt, terminals.sessions)) : undefined
 
   const settings = normalizeAISettings(await window.api.config.getAISettings())
   const limit = resolveActiveContextLength(settings)
@@ -1234,7 +1237,7 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
   const chartIntent = mentionsTerminal && !!contextTab && CHART_INTENT.test(prompt)
   const boundTabId = pin.status === 'live' ? pin.tabId : contextTab?.id
   const boundSessionId = boundTabId
-    ? terminals.tabs.find((t) => t.id === boundTabId)?.sessionId
+    ? terminals.sessions.find((t) => t.id === boundTabId)?.sessionId
     : undefined
 
   // Decide compression against what this turn will ACTUALLY send: the sections
@@ -1326,7 +1329,7 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
     tabId,
     context,
     contextTabId,
-    contextMaxLines: contextMaxLines(prompt),
+    contextMaxLines: contextMaxLines(prompt, terminals.sessions),
     boundSessionId,
     boundTabId,
     conversation: history,
@@ -1358,11 +1361,31 @@ export function askAboutSelection(selection: string): void {
       : text
   const prompt = translate(locale, 'copilot.selectionExplain', { selection: clipped })
   const chatId = useAIStore.getState().activeChatTabId
-  const activeTerminalId = useTabsStore.getState().activeTabId
+  const activeTerminalId = useSessionsStore.getState().activeSessionId
   if (chatId && activeTerminalId) {
     useAIStore.getState().setPinnedTerminal(chatId, activeTerminalId)
   }
   void sendPrompt(prompt)
+}
+
+/**
+ * Open the AI panel and ask the copilot to interpret a pane diff. Same budget
+ * and truncation rules as a selection, since the payload is the same kind of
+ * pasted terminal text.
+ */
+export function askAboutDiff(diffText: string, leftLabel: string, rightLabel: string): void {
+  const text = diffText.trim()
+  if (!text) return
+
+  useAIStore.getState().setPanelOpen(true)
+
+  const locale = useLocaleStore.getState().locale
+  const clipped =
+    text.length > MAX_SELECTION
+      ? `${text.slice(0, MAX_SELECTION)}\n${translate(locale, 'copilot.selectionTruncated')}`
+      : text
+  const intro = translate(locale, 'diff.explainPrompt', { left: leftLabel, right: rightLabel })
+  void sendPrompt(`${intro}\n\n\`\`\`diff\n${clipped}\n\`\`\``)
 }
 
 /**

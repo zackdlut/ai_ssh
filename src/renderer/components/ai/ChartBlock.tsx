@@ -16,7 +16,7 @@ import { createLineSplitter } from '../../lib/streamParse'
 import { COPILOT_TERMINAL_MENTION_MAX_LINES, readTerminalOutput } from '../../lib/terminalRegistry'
 import { isDangerous } from '../../lib/commands'
 import { useThemeStore } from '../../store/themeStore'
-import { useTabsStore } from '../../store/tabsStore'
+import { useSessionsStore } from '../../store/sessionsStore'
 import { useT } from '../../lib/i18n'
 import type { ChartSnapshot } from '../../../shared/types'
 
@@ -223,10 +223,10 @@ export default function ChartBlock({
    * the session id of a terminal that died with the previous app run, and
    * capturing against it would only produce "Session not found".
    */
-  const sessionLive = useTabsStore(
+  const sessionLive = useSessionsStore(
     (s) =>
       !!boundSessionId &&
-      s.tabs.some((tab) => tab.sessionId === boundSessionId && tab.status === 'connected')
+      s.sessions.some((tab) => tab.sessionId === boundSessionId && tab.status === 'connected')
   )
   /** Live capture is possible whenever a spec and a live terminal binding exist. */
   const canCapture = !!spec && sessionLive

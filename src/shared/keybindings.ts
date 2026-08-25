@@ -1,24 +1,73 @@
-export type KeybindingId = 'askCopilot' | 'toggleNlMode' | 'toggleLineNumbers'
+export type KeybindingId =
+  | 'askCopilot'
+  | 'toggleNlMode'
+  | 'toggleLineNumbers'
+  | 'splitVertical'
+  | 'splitHorizontal'
+  | 'closePane'
+  | 'zoomPane'
+  | 'focusPaneLeft'
+  | 'focusPaneRight'
+  | 'focusPaneUp'
+  | 'focusPaneDown'
+  | 'evenPanes'
+  | 'toggleSyncInput'
+  | 'openPaneDiff'
+  | 'paneSearch'
 
-export interface KeybindingsSettings {
-  askCopilot: string
-  toggleNlMode: string
-  toggleLineNumbers: string
-}
+export type KeybindingsSettings = Record<KeybindingId, string>
 
 export const KEYBINDING_IDS: KeybindingId[] = [
   'askCopilot',
   'toggleNlMode',
-  'toggleLineNumbers'
+  'toggleLineNumbers',
+  'splitVertical',
+  'splitHorizontal',
+  'closePane',
+  'zoomPane',
+  'focusPaneLeft',
+  'focusPaneRight',
+  'focusPaneUp',
+  'focusPaneDown',
+  'evenPanes',
+  'toggleSyncInput',
+  'openPaneDiff',
+  'paneSearch'
 ]
 
+/**
+ * Pane bindings all use mod+shift because a bare mod+key would shadow common
+ * shell editing keys, and `VALID_KEY` below rules out the punctuation that
+ * other terminals use for splits.
+ *
+ * Letters and arrows only when `shift` is involved: matching compares against
+ * `KeyboardEvent.key`, and shift turns a digit into punctuation (`0` arrives as
+ * `)`), so a `mod+shift+<digit>` chord could never fire.
+ */
 export const DEFAULT_KEYBINDINGS: KeybindingsSettings = {
   askCopilot: 'mod+f',
   toggleNlMode: 'f12',
-  toggleLineNumbers: 'f11'
+  toggleLineNumbers: 'f11',
+  splitVertical: 'mod+shift+e',
+  splitHorizontal: 'mod+shift+o',
+  closePane: 'mod+shift+w',
+  zoomPane: 'mod+shift+z',
+  focusPaneLeft: 'mod+shift+arrowleft',
+  focusPaneRight: 'mod+shift+arrowright',
+  focusPaneUp: 'mod+shift+arrowup',
+  focusPaneDown: 'mod+shift+arrowdown',
+  evenPanes: 'mod+shift+b',
+  toggleSyncInput: 'mod+shift+i',
+  openPaneDiff: 'mod+shift+d',
+  // mod+f is already "ask Copilot", so in-pane find takes the shifted variant.
+  paneSearch: 'mod+shift+f'
 }
 
-const VALID_KEY = /^(f([1-9]|1[0-2])|[a-z0-9])$/
+/**
+ * Arrows are spelled out the way `KeyboardEvent.key` reports them, lowercased,
+ * so `matchesKeyEvent` can compare without a lookup table.
+ */
+const VALID_KEY = /^(f([1-9]|1[0-2])|arrow(left|right|up|down)|[a-z0-9])$/
 
 export interface ParsedKeybinding {
   key: string
@@ -70,12 +119,9 @@ export function normalizeKeybindingsSettings(
   const base = DEFAULT_KEYBINDINGS
   if (!input) return { ...base }
 
-  return {
-    askCopilot: normalizeKeybinding(input.askCopilot ?? '', base.askCopilot),
-    toggleNlMode: normalizeKeybinding(input.toggleNlMode ?? '', base.toggleNlMode),
-    toggleLineNumbers: normalizeKeybinding(
-      input.toggleLineNumbers ?? '',
-      base.toggleLineNumbers
-    )
+  const out = {} as KeybindingsSettings
+  for (const id of KEYBINDING_IDS) {
+    out[id] = normalizeKeybinding(input[id] ?? '', base[id])
   }
+  return out
 }

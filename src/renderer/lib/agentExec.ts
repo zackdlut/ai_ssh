@@ -14,7 +14,7 @@
  */
 import { clampOutput, runCapturedCommand } from './execCapture'
 import { getTabObservation } from './terminalObservation'
-import type { TerminalTab } from '../store/tabsStore'
+import type { TerminalSession } from '../store/sessionsStore'
 
 export interface AgentCommandResult {
   output: string
@@ -65,7 +65,7 @@ function combineStreams(stdout: string, stderr: string): string {
  * transport was used.
  */
 export async function runAgentCommand(
-  tab: TerminalTab,
+  tab: TerminalSession,
   command: string,
   options?: AgentCommandOptions
 ): Promise<AgentCommandResult> {

@@ -1,8 +1,15 @@
-import { Suspense, lazy, useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import TabBar, { type SettingsMenuItem } from './components/TabBar'
-import TerminalEmptyState from './components/TerminalEmptyState'
 import ConnectionSidebar from './components/connection/ConnectionSidebar'
-import { useTabsStore } from './store/tabsStore'
+import PaneGrid from './components/pane/PaneGrid'
+import StatusBar from './components/StatusBar'
+import { useSessionsStore } from './store/sessionsStore'
+import { usePaneBoxes, usePaneLayoutStore } from './store/paneLayoutStore'
+import { usePaneDiffStore } from './store/paneDiffStore'
+import { attachPaneBridge } from './lib/paneBridge'
+import { attachGlobalPaneShortcuts } from './lib/paneShortcuts'
+import { attachTabDragTracking } from './store/tabDragStore'
+import { computeLayoutBoxes, type PaneRect } from './lib/paneLayout'
 import { useAIStore } from './store/aiStore'
 import { useSftpStore } from './store/sftpStore'
 import { useBookmarksStore } from './store/bookmarksStore'
@@ -19,6 +26,7 @@ import { addEmptyTab } from './lib/connect'
 import type { ConnectionConfig } from '../shared/types'
 
 const TerminalView = lazy(() => import('./components/TerminalView'))
+const TerminalDiffPanel = lazy(() => import('./components/diff/TerminalDiffPanel'))
 const SidePanel = lazy(() => import('./components/ai/SidePanel'))
 const SftpPanel = lazy(() => import('./components/sftp/SftpPanel'))
 const ConnectModal = lazy(() => import('./components/connection/ConnectModal'))
@@ -38,7 +46,7 @@ interface ConnectModalState {
 }
 
 export default function App(): JSX.Element {
-  const { tabs, activeTabId, setStatusBySession } = useTabsStore()
+  const { sessions, activeSessionId, setStatusBySession } = useSessionsStore()
   const panelOpen = useAIStore((s) => s.panelOpen)
   const sftpOpen = useSftpStore((s) => s.panelOpen)
   const loadBookmarks = useBookmarksStore((s) => s.load)
@@ -51,6 +59,39 @@ export default function App(): JSX.Element {
   const [connectModal, setConnectModal] = useState<ConnectModalState | null>(null)
   const [settingsPanel, setSettingsPanel] = useState<SettingsMenuItem | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(getConnSidebarStartupOpen)
+  const paneBoxes = usePaneBoxes()
+  const paneTabs = usePaneLayoutStore((s) => s.tabs)
+  const activeTabId = usePaneLayoutStore((s) => s.activeTabId)
+  const diffOpen = usePaneDiffStore((s) => s.open)
+
+  /*
+   * Every session's pane, in whichever tab owns it — not just the tab on screen.
+   *
+   * Terminals in background tabs stay mounted and keep their geometry; only
+   * `visible` changes, which is a CSS `visibility` flip. Unmounting them would
+   * drop the scrollback, and moving their hosts in the DOM would break the live
+   * xterm outright, so switching tabs must never do either. Keeping the rect
+   * also keeps each pty at its own pane's size, so a switch back needs no refit.
+   */
+  const homeByTerminal = useMemo(() => {
+    const map = new Map<
+      string,
+      { paneId: string; rect: PaneRect; visible: boolean; split: boolean }
+    >()
+    for (const paneTab of paneTabs) {
+      const visible = paneTab.id === activeTabId
+      const { leaves } = computeLayoutBoxes(paneTab.root, paneTab.zoomedPaneId)
+      const split = leaves.length > 1
+      for (const { leaf, rect } of leaves) {
+        if (leaf.terminalId) map.set(leaf.terminalId, { paneId: leaf.id, rect, visible, split })
+      }
+    }
+    return map
+  }, [paneTabs, activeTabId])
+
+  useEffect(() => attachPaneBridge(), [])
+  useEffect(() => attachGlobalPaneShortcuts(), [])
+  useEffect(() => attachTabDragTracking(), [])
 
   useEffect(() => {
     initAIService()
@@ -97,22 +138,33 @@ export default function App(): JSX.Element {
           />
         )}
         <div className="main-pane">
-          <div className="terminal-area">
-            {tabs.length === 0 ? (
-              <TerminalEmptyState onNewConnection={() => openNewConnection(null)} />
-            ) : (
-              <Suspense fallback={null}>
-                {tabs.map((tab) => (
+          <div className={`terminal-area${paneBoxes.leaves.length > 1 ? ' is-split' : ''}`}>
+            <Suspense fallback={null}>
+              {sessions.map((tab) => {
+                const home = homeByTerminal.get(tab.id)
+                const visible = Boolean(home?.visible)
+                return (
                   <TerminalView
                     key={tab.id}
                     tab={tab}
-                    active={tab.id === activeTabId}
+                    paneId={home?.paneId}
+                    visible={visible}
+                    split={Boolean(home?.split)}
+                    focused={visible && tab.id === activeSessionId}
+                    rect={home?.rect}
                     onNewConnection={() => openNewConnection(null)}
                   />
-                ))}
+                )
+              })}
+            </Suspense>
+            <PaneGrid boxes={paneBoxes} onNewConnection={() => openNewConnection(null)} />
+            {diffOpen && (
+              <Suspense fallback={null}>
+                <TerminalDiffPanel />
               </Suspense>
             )}
           </div>
+          <StatusBar />
         </div>
         {panelOpen && (
           <Suspense fallback={null}>

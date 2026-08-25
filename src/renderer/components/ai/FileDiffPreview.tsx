@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useTabsStore } from '../../store/tabsStore'
+import { useSessionsStore } from '../../store/sessionsStore'
 import { useT } from '../../lib/i18n'
 import { computeTextDiff, type TextDiff } from '../../../shared/textDiff'
 import { applyUniqueEdit } from '../../../shared/textEdit'
@@ -49,7 +49,7 @@ export default function FileDiffPreview({
   useEffect(() => {
     let cancelled = false
     const run = async (): Promise<void> => {
-      const tab = useTabsStore.getState().tabs.find((tt) => tt.id === tabId)
+      const tab = useSessionsStore.getState().sessions.find((tt) => tt.id === tabId)
       if (!tab?.sessionId || tab.kind === 'wsl') {
         if (!cancelled) setState({ kind: 'error', message: t('tool.diff.unavailable') })
         return

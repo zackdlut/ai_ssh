@@ -6,8 +6,10 @@ import type { ConnectionConfig } from '../../shared/types'
 
 interface Props {
   onNewConnection: () => void
-  /** When set, connect into this idle tab instead of creating a new one. */
-  tabId?: string
+  /** Idle session shown here: dial it in place rather than opening a tab. */
+  terminalId?: string
+  /** Empty pane shown here: fill it rather than opening a tab. */
+  paneId?: string
 }
 
 function connMeta(c: ConnectionConfig): string {
@@ -24,7 +26,11 @@ function connCapsuleText(c: ConnectionConfig): { primary: string; suffix?: strin
   return { primary: meta }
 }
 
-export default function TerminalEmptyState({ onNewConnection, tabId }: Props): JSX.Element {
+export default function TerminalEmptyState({
+  onNewConnection,
+  terminalId,
+  paneId
+}: Props): JSX.Element {
   const connections = useBookmarksStore((s) => s.connections)
   const getRecentConnections = useBookmarksStore((s) => s.getRecentConnections)
   const t = useT()
@@ -39,7 +45,7 @@ export default function TerminalEmptyState({ onNewConnection, tabId }: Props): J
   const handleConnect = async (c: ConnectionConfig): Promise<void> => {
     if (connectingId) return
     setConnectingId(c.id)
-    const err = await connectFromConfig(c, tabId)
+    const err = await connectFromConfig(c, { terminalId, paneId })
     if (err) window.alert(err)
     setConnectingId(null)
   }

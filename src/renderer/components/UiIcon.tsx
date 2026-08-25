@@ -34,6 +34,15 @@ export type UiIconName =
   | 'import'
   | 'export'
   | 'open'
+  | 'lock'
+  | 'no-input'
+  | 'expand'
+  | 'collapse'
+  | 'split-right'
+  | 'split-down'
+  | 'layout-grid'
+  | 'diff'
+  | 'camera'
 
 interface Props {
   name: UiIconName

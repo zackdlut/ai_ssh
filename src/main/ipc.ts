@@ -35,6 +35,7 @@ import type {
   BookmarkFolder,
   BookmarkTransferFormat,
   ConnectionConfig,
+  SavedLayout,
   ConnectOptions,
   SamplerStartResult,
   SshExecOptions,
@@ -648,6 +649,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
   ipcMain.handle('config:setConnections', (_e, list: ConnectionConfig[]) =>
     config.setConnections(list)
   )
+  ipcMain.handle('config:getLayouts', () => config.getLayouts())
+  ipcMain.handle('config:setLayouts', (_e, list: SavedLayout[]) => config.setLayouts(list))
   ipcMain.handle('config:getFolders', () => config.getFolders())
   ipcMain.handle('config:saveFolder', (_e, folder: BookmarkFolder) => config.saveFolder(folder))
   ipcMain.handle('config:setFolders', (_e, list: BookmarkFolder[]) => config.setFolders(list))

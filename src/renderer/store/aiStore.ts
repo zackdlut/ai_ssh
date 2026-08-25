@@ -9,7 +9,7 @@ import type {
 } from '../../shared/types'
 import { getCopilotStartupOpen } from './startupStore'
 import { useLocaleStore } from './localeStore'
-import { useTabsStore } from './tabsStore'
+import { useSessionsStore } from './sessionsStore'
 import { translate } from '../lib/i18n/translations'
 import { formatTerminalLabel } from '../lib/pinnedTerminal'
 
@@ -464,7 +464,7 @@ export const useAIStore = create<AIState>((set, get) => ({
       schedulePersist(get)
       return
     }
-    const tab = useTabsStore.getState().tabs.find((t) => t.id === terminalTabId)
+    const tab = useSessionsStore.getState().sessions.find((t) => t.id === terminalTabId)
     const pinnedLabel = tab ? formatTerminalLabel(tab) : undefined
     set((s) => ({
       chatTabs: updateTab(s.chatTabs, chatTabId, {

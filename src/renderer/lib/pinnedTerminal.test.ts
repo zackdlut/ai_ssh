@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   applyPinnedTabId,
+  applyMentionHotkey,
+  filterTabsForMention,
+  findMentionSpans,
+  hasTerminalMention,
+  matchTabByMention,
+  mentionTokenFor,
   needsTerminalPicker,
+  parseAtQuery,
   replaceAtMention,
   resolvePinnedTab,
+  rewriteTerminalMentions,
   shouldPinOnSend,
   snapshotTabMarkers,
   terminalContextTabId
@@ -102,8 +110,100 @@ describe('snapshotTabMarkers', () => {
   })
 })
 
+describe('mentionTokenFor', () => {
+  it('uses the SSH host, not user@host or the word terminal', () => {
+    expect(
+      mentionTokenFor({ username: 'root', host: 'prod.example.com', kind: 'ssh' })
+    ).toBe('prod.example.com')
+  })
+
+  it('uses the WSL distro when there is no host', () => {
+    expect(mentionTokenFor({ kind: 'wsl', host: '', wslDistro: 'Ubuntu-22.04' })).toBe(
+      'Ubuntu-22.04'
+    )
+  })
+})
+
+describe('parseAtQuery / filterTabsForMention', () => {
+  const tabs = [
+    { id: 'a', username: 'root', host: 'prod.example.com' },
+    { id: 'b', username: 'ubuntu', host: 'staging.internal' }
+  ]
+
+  it('treats a trailing @ as an open mention query', () => {
+    expect(parseAtQuery('see @')).toBe('')
+    expect(parseAtQuery('see @prod')).toBe('prod')
+    expect(parseAtQuery('see @prod chart')).toBe(null)
+  })
+
+  it('keeps all tabs for the @terminal alias prefix', () => {
+    expect(filterTabsForMention(tabs, 'ter').map((t) => t.id)).toEqual(['a', 'b'])
+  })
+
+  it('filters by host as you type', () => {
+    expect(filterTabsForMention(tabs, 'prod').map((t) => t.id)).toEqual(['a'])
+    expect(filterTabsForMention(tabs, 'staging').map((t) => t.id)).toEqual(['b'])
+  })
+})
+
+describe('hasTerminalMention / matchTabByMention', () => {
+  const tabs = [
+    { id: 'a', host: 'prod.example.com' },
+    { id: 'b', host: 'prod' }
+  ]
+
+  it('treats @hostname as a terminal mention, including dotted hosts', () => {
+    expect(hasTerminalMention('@prod.example.com chart cpu', tabs)).toBe(true)
+    expect(hasTerminalMention('@terminal chart cpu', tabs)).toBe(true)
+    expect(hasTerminalMention('restart nginx', tabs)).toBe(false)
+  })
+
+  it('does not match a shorter host prefix inside a dotted hostname', () => {
+    expect(matchTabByMention('@prod.example.com chart', tabs)?.id).toBe('a')
+  })
+})
+
+describe('rewriteTerminalMentions', () => {
+  it('rewrites the @terminal alias to the selected host token', () => {
+    expect(rewriteTerminalMentions('@terminal 把 CPU 画成图', 'prod.example.com')).toBe(
+      '@prod.example.com 把 CPU 画成图'
+    )
+  })
+})
+
 describe('replaceAtMention', () => {
-  it('turns a partial @ prefix into @terminal', () => {
-    expect(replaceAtMention('see @ter', 8)).toEqual({ next: 'see @terminal ', caret: 14 })
+  it('turns a partial @ prefix into @hostname', () => {
+    expect(replaceAtMention('see @ter', 8, 'prod.example.com')).toEqual({
+      next: 'see @prod.example.com ',
+      caret: 22
+    })
+  })
+})
+
+describe('findMentionSpans / applyMentionHotkey', () => {
+  const tabs = [{ id: 'a', host: 'prod.example.com' }]
+
+  it('chips a committed @host followed by a space, not an in-progress query', () => {
+    expect(findMentionSpans('@prod.example.com chart cpu', tabs)).toEqual([
+      { start: 0, end: 17, token: 'prod.example.com' }
+    ])
+    expect(findMentionSpans('@prod.example.com', tabs)).toEqual([])
+    expect(findMentionSpans('@prod', tabs)).toEqual([])
+  })
+
+  it('deletes the whole chip on Backspace at its end', () => {
+    expect(applyMentionHotkey('@prod.example.com 画图', 17, 17, 'Backspace', tabs)).toEqual({
+      type: 'edit',
+      text: ' 画图',
+      caret: 0
+    })
+  })
+
+  it('skips over the chip with ArrowLeft', () => {
+    expect(applyMentionHotkey('@prod.example.com 画图', 17, 17, 'ArrowLeft', tabs)).toEqual({
+      type: 'select',
+      start: 0,
+      end: 0
+    })
   })
 })
