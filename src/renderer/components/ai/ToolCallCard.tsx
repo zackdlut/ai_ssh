@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { allowToolForSession, approveToolCall, rejectToolCall } from '../../lib/aiService'
 import { isDangerous } from '../../lib/commands'
+import { isEmptyExecOutput, parseExecToolResult } from '../../lib/execResult'
 import { formatCaptureElapsed } from '../../lib/execCapture'
 import { isDangerousTool } from '../../../shared/aiTools'
 import { useT, type TranslationKey } from '../../lib/i18n'
 import { useAIStore } from '../../store/aiStore'
+import { restoreRemoteBackup } from '../../lib/fileTools'
+import { matchCheckpoint, parseBackupPath } from '../../lib/fileCheckpoints'
 import AppSettingsToolPanel from './AppSettingsToolPanel'
 import FileDiffPreview from './FileDiffPreview'
 import LinkifiedText from './LinkifiedText'
@@ -544,6 +547,75 @@ function LongTextOutput({ text }: { text: string }): JSX.Element {
   )
 }
 
+function execStatusTone(status?: string): 'ok' | 'bad' | 'warn' | 'muted' {
+  if (status === 'success') return 'ok'
+  if (status === 'failed') return 'bad'
+  if (status === 'unknown') return 'warn'
+  return 'muted'
+}
+
+function CommandExecResult({ result }: { result: string }): JSX.Element {
+  const t = useT()
+  const parsed = parseExecToolResult(result)
+  if (!parsed.structured) {
+    return <LongTextOutput text={result} />
+  }
+
+  const statusLabel =
+    parsed.status === 'success'
+      ? t('tool.exec.statusSuccess')
+      : parsed.status === 'failed'
+        ? t('tool.exec.statusFailed')
+        : parsed.status === 'unknown'
+          ? t('tool.exec.statusUnknown')
+          : parsed.status
+
+  const exitLabel =
+    parsed.exitCode === 'unknown' ? t('tool.exec.exitUnknown') : parsed.exitCode
+
+  const hasMeta = Boolean(parsed.status || parsed.exitCode || parsed.cwd || parsed.wait)
+
+  return (
+    <div className="tool-exec-result">
+      {hasMeta && (
+        <div className="tool-exec-meta">
+          {parsed.status && (
+            <div className={`tool-exec-stat is-status tone-${execStatusTone(parsed.status)}`}>
+              <span className="tool-exec-k">{t('tool.exec.status')}</span>
+              <span className="tool-exec-v">{statusLabel}</span>
+            </div>
+          )}
+          {exitLabel != null && exitLabel !== '' && (
+            <div className="tool-exec-stat">
+              <span className="tool-exec-k">{t('tool.exec.exitCode')}</span>
+              <span className="tool-exec-v mono">{exitLabel}</span>
+            </div>
+          )}
+          {parsed.wait && (
+            <div className="tool-exec-stat">
+              <span className="tool-exec-k">{t('tool.exec.wait')}</span>
+              <span className="tool-exec-v mono">{parsed.wait}</span>
+            </div>
+          )}
+          {parsed.cwd && (
+            <div className="tool-exec-stat is-cwd" title={parsed.cwd}>
+              <span className="tool-exec-k">{t('tool.exec.cwd')}</span>
+              <span className="tool-exec-v mono">{parsed.cwd}</span>
+            </div>
+          )}
+        </div>
+      )}
+      {parsed.verify && <div className="tool-exec-hint">{parsed.verify}</div>}
+      {parsed.note && <div className="tool-exec-hint">{parsed.note}</div>}
+      {isEmptyExecOutput(parsed.output) ? (
+        <div className="tool-exec-empty">{t('tool.exec.noOutput')}</div>
+      ) : (
+        <LongTextOutput text={parsed.output} />
+      )}
+    </div>
+  )
+}
+
 function ToolResult({ name, result }: { name: string; result?: string }): JSX.Element | null {
   if (name === 'list_ssh_configs' || name === 'list_open_tabs') {
     return <ListResult name={name} result={result} />
@@ -553,9 +625,11 @@ function ToolResult({ name, result }: { name: string; result?: string }): JSX.El
   }
   if (!result) return null
 
+  if (name === 'exec_command' || name === 'run_in_terminal') {
+    return <CommandExecResult result={result} />
+  }
+
   if (
-    name === 'exec_command' ||
-    name === 'run_in_terminal' ||
     name === 'read_skill' ||
     name === 'read_file' ||
     name === 'grep' ||
@@ -615,6 +689,9 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
     null
   )
   const cardRef = useRef<HTMLDivElement>(null)
+  const setNotice = useAIStore((s) => s.setNotice)
+  const checkpoints = useAIStore((s) => s.chatTabs.find((t) => t.id === tabId)?.checkpoints)
+  const pinnedTabId = useAIStore((s) => s.chatTabs.find((t) => t.id === tabId)?.pinnedTabId)
 
   const statusLabel =
     call.status === 'running' && isCommandTool && call.progressMs
@@ -657,6 +734,34 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
     !isSettingsReadTool &&
     (command !== null || updates !== null || Object.keys(args).length > 0)
   const hasResult = call.status === 'done' && Boolean(call.result)
+  const backupPath = parseBackupPath(call.result)
+  const checkpoint = matchCheckpoint(checkpoints, {
+    path: filePath ?? undefined,
+    backupPath
+  })
+  const restoreTab = checkpoint?.terminalTabId ?? fileTargetTab ?? pinnedTabId
+  const restorePath = checkpoint?.path ?? filePath
+  const restoreBak = checkpoint?.backupPath ?? backupPath
+  const canRestore =
+    call.status === 'done' &&
+    FILE_WRITE_TOOLS.has(call.name) &&
+    !!restorePath &&
+    !!restoreBak &&
+    !!restoreTab
+
+  const restoreFile = async (): Promise<void> => {
+    if (!restoreTab || !restorePath || !restoreBak) {
+      setNotice(t('copilot.restore.missing'))
+      return
+    }
+    const result = await restoreRemoteBackup({
+      terminalTabId: restoreTab,
+      path: restorePath,
+      backupPath: restoreBak
+    })
+    if (result.ok) setNotice(t('copilot.restore.ok', { path: restorePath }))
+    else setNotice(t('copilot.restore.fail', { error: result.error }))
+  }
   const showDetails = hasBody || (command !== null && Object.keys(args).length > 1)
   const isSettingsResult = call.name === 'get_app_settings' || call.name === 'update_app_settings'
 
@@ -706,7 +811,14 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
             <span className="tool-call-desc">{description}</span>
           </div>
         </div>
-        <StatusPill status={call.status} label={statusLabel} />
+        <div className="tool-call-head-aside">
+          <StatusPill status={call.status} label={statusLabel} />
+          {canRestore && (
+            <button type="button" className="tool-btn-restore" onClick={() => void restoreFile()}>
+              {t('copilot.restore')}
+            </button>
+          )}
+        </div>
       </div>
 
       {showDetails && (

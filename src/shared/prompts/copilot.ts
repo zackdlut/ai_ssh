@@ -133,9 +133,10 @@ function environment(t: ToolSet): string {
 }
 
 function workflow(t: ToolSet): string {
+  const shell = shellTool(t)
   const responseOptions = lines(
     '   - suggest a command the user runs themselves → a bash code block, no tool call;',
-    t.has('exec_command') && '   - need the result to decide what comes next → exec_command on a tab_id;',
+    !!shell && `   - need the result to decide what comes next → ${shell} on a tab_id;`,
     t.any(
       'open_ssh',
       'close_tab',
@@ -162,24 +163,31 @@ function workflow(t: ToolSet): string {
     steps,
     t.enabled &&
       '\nA NEW user instruction cancels any action still awaiting approval — treat the newest message as the intent, do not re-issue the old action.',
-    t.has('exec_command') &&
-      '\nExample: "restart nginx on prod and tell me if it worked" → exec_command (you need the result); "how do I restart nginx?" → a bash card.'
+    !!shell &&
+      `\nExample: "restart nginx on prod and tell me if it worked" → ${shell} (you need the result); "how do I restart nginx?" → a bash card.`
   )
+}
+
+function shellTool(t: ToolSet): 'exec_command' | 'run_in_terminal' | null {
+  if (t.has('exec_command')) return 'exec_command'
+  if (t.has('run_in_terminal')) return 'run_in_terminal'
+  return null
 }
 
 /** Plan / Verify / Recovery. Each part depends on a tool, so each is gated. */
 function execution(t: ToolSet): string {
+  const shell = shellTool(t)
   const plan = t.has('update_plan')
     ? 'Plan (multi-step tasks only — deploy, diagnose, migrate, edit-then-verify): open with update_plan and 2-6 concrete steps, then update it as each lands. Single-step requests stay direct. The plan and the Task execution history are re-injected every turn: treat them as your memory of what remains, keep going until every step is resolved instead of asking the user to say "continue", and do not redo a step the history already records unless you need fresh state.'
     : false
-  const verify = t.has('exec_command')
-    ? `Verify — never trust a command's own output alone. Every exec_command result carries a header (status, exit_code, cwd, optional verify hint); read it.
+  const verify = shell
+    ? `Verify — never trust a command's own output alone. Every ${shell} result carries a header (status, exit_code, cwd, optional verify hint); read it.
 - Judge success from exit_code/status, not from prose in the output — but in context: grep with no match and a false \`test\` exit non-zero legitimately.
 - Act on the verify hint when it flags a permission, not-found or network error.
 - A task that CHANGES state (start/restart/deploy/install/config) is confirmed only by an INDEPENDENT check, never by the change command's own output: \`systemctl is-active nginx\` or \`curl -fsS localhost/health\` after a restart, the binary's version after an install. Never announce success before that check passes; on failure, report it with the evidence.`
     : false
   const completion = `Completion. ${
-    t.has('exec_command') ? 'Change tasks end when the independent check confirms the goal. ' : ''
+    shell ? 'Change tasks end when the independent check confirms the goal. ' : ''
   }Diagnostic tasks ("why is X failing") end with a root cause, its evidence and a recommendation — fixing it is not asked unless the user says so, so stop once the cause is found or the reasonable paths are exhausted rather than re-reading the same log.`
   const recovery = `Recovery — classify a failure before retrying. Transient (network error, timeout, session disconnected): a bounded retry or reconnect is fine. Deterministic (permission denied, command not found, wrong path): do NOT repeat the same command — change strategy (sudo, install the tool, fix the path) or ask the user. An identical repeated command is stopped automatically as a loop.`
 
@@ -188,6 +196,19 @@ function execution(t: ToolSet): string {
   const body = [plan, verify, completion, recovery].filter(Boolean)
   // Heading attaches directly to the first paragraph, matching the other sections.
   return `${heading}\n${body.join('\n\n')}`
+}
+
+function howToRun(t: ToolSet): string | false {
+  if (t.has('exec_command') && t.has('run_in_terminal')) {
+    return "Choosing how to run. exec_command whenever you need the result to decide what comes next. run_in_terminal only when being watched is the point (a demo, a long build the user asked to see) or the command must leave the user's own shell in a new state — its output is scraped from the terminal, so it is noisier. A bash code block to merely SUGGEST a command, with no tool call at all."
+  }
+  if (t.has('exec_command')) {
+    return 'Choosing how to run. exec_command whenever you need the result to decide what comes next; a bash code block to merely SUGGEST a command, with no tool call at all.'
+  }
+  if (t.has('run_in_terminal')) {
+    return "Choosing how to run. ALWAYS run_in_terminal so the user watches the command in their terminal — that is the only shell tool this turn. `cd` persists in their shell. Chat is for a brief intent before acting, then a short summary and conclusion after the tools; never paste the terminal output. Do not run interactive TUIs (vim, nano, less, top). A bash code block only to SUGGEST a command the user will run themselves, with no tool call."
+  }
+  return false
 }
 
 function toolRules(t: ToolSet): string {
@@ -199,11 +220,8 @@ function toolRules(t: ToolSet): string {
   // description, which the model reads at the moment it calls the tool. What
   // stays here is only what a schema cannot say: how to CHOOSE between tools,
   // and the ordering rules that span more than one call.
-  const execTools = t.has('exec_command')
-    ? t.has('run_in_terminal')
-      ? "Choosing how to run. exec_command whenever you need the result to decide what comes next. run_in_terminal only when being watched is the point (a demo, a long build the user asked to see) or the command must leave the user's own shell in a new state — its output is scraped from the terminal, so it is noisier. A bash code block to merely SUGGEST a command, with no tool call at all."
-      : 'Choosing how to run. exec_command whenever you need the result to decide what comes next; a bash code block to merely SUGGEST a command, with no tool call at all.'
-    : false
+  const execTools = howToRun(t)
+  const shell = shellTool(t)
 
   const fileToolNames = ['read_file', 'edit_file', 'write_file', 'grep', 'glob'].filter((n) =>
     t.has(n)
@@ -211,13 +229,13 @@ function toolRules(t: ToolSet): string {
   const files = fileToolNames.length
     ? lines(
         `Files (${fileToolNames.join(' / ')}). Prefer these over shelling out: read_file beats \`cat\`, grep beats \`grep | head\`, edit_file beats \`sed -i\`, and they run over SFTP so they leave the terminal alone${
-          t.has('exec_command') ? ' (a local WSL tab has no SFTP: use exec_command there)' : ''
+          shell ? ` (a local WSL tab has no SFTP: use ${shell} there)` : ''
         }.`,
         t.has('edit_file') &&
           'ALWAYS read_file or grep the target region BEFORE edit_file, so the text you match is text you have seen; if an edit is rejected as ambiguous, include more surrounding lines rather than falling back to sed.',
         t.any('edit_file', 'write_file') &&
           `Editing is not verification: ${
-            t.has('exec_command')
+            shell
               ? "run the file's own checker (`nginx -t`, `sshd -t`, `visudo -c`) or re-read the region"
               : 're-read the region'
           } before reporting success.`
@@ -246,7 +264,9 @@ function toolRules(t: ToolSet): string {
     .filter((n) => t.has(n))
     .join(' / ')
   const noRestate = lines(
-    'Do not repeat tool output. The app already renders every result as rich UI, so never restate or reformat that same data as prose, a Markdown table or a bullet list.',
+    t.has('run_in_terminal') && !t.has('exec_command')
+      ? "Do not repeat tool output. The command already ran in the user's terminal — they watched it. Chat is for a brief intent before acting and a short conclusion after; never paste or reformat the terminal output as prose, a Markdown table or a bullet list."
+      : 'Do not repeat tool output. The app already renders every result as rich UI, so never restate or reformat that same data as prose, a Markdown table or a bullet list.',
     !!displayTools &&
       `When the user just wants to SEE what one of these reports (${displayTools}), the card IS the answer: STOP there with no trailing prose. Keep going only if the request asked for more — to ANALYZE/RECOMMEND (add a short recommendation in the same reply as the call), or to ACT on the result (emit the follow-up call).`
   )
@@ -264,18 +284,19 @@ ls -la /var/log
 Never put example output or non-runnable text in a bash block. Commands are assumed to run in the user's current shell on the connected host unless stated otherwise.`
 
 function constraints(t: ToolSet): string {
+  const shell = shellTool(t)
   return lines(
     '## Constraints & safety',
     '- Prefer non-destructive commands. Propose a destructive or irreversible one (rm -rf, mkfs, dd, shutdown) only when the intent clearly calls for it, spell out the risk, and never add destructive flags the intent did not ask for.',
-    t.has('exec_command') &&
-      '- One command or short pipeline per exec_command, and observe its result before the next — never batch mutating commands into one call. Where steps must combine, chain them with && so a failure stops the rest; never use ; to force the rest to run.',
+    !!shell &&
+      `- One command or short pipeline per ${shell}, and observe its result before the next — never batch mutating commands into one call. Where steps must combine, chain them with && so a failure stops the rest; never use ; to force the rest to run.`,
     '- Never echo, log or print passwords, private keys or API keys, and never exfiltrate secrets.',
     `- Never fabricate command output, host state or ids — if you have not run the command or lack the data, say so${
       t.enabled ? ' or run/list to find out' : ''
     }.`,
     '- Ask one brief clarifying question when the target (which tab, host, config) or the request itself is genuinely unclear, rather than guessing.',
     `- Cannot: act on hosts not already open as tabs, see scrollback beyond the recent-output snippet, reach the internet, or persist local files beyond saved SSH configs/settings${
-      t.has('exec_command') ? '; exec_command needs an open, CONNECTED tab' : ''
+      shell ? `; ${shell} needs an open, CONNECTED tab` : ''
     }.`
   )
 }

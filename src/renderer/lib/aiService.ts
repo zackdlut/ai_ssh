@@ -80,10 +80,13 @@ import { buildPlanContextMessage } from './planTool'
 import { setToolResultCharBudget } from './toolBudget'
 import { transition, type AgentEvent, type AgentPhase } from './agentPhase'
 import type { ChatMessage } from '../store/aiStore'
+import { extractFileMentionPaths, expandMentionPath } from './fileMentions'
+import { readFile } from './fileTools'
 import { useUserRulesStore } from '../store/userRulesStore'
 import type {
   AutonomyMode,
   ChatMessageDTO,
+  CopilotAgentMode,
   ModelProfile,
   TerminalContext,
   ToolCallView
@@ -165,6 +168,11 @@ interface LoopState {
    * capped against the same number when they come back.
    */
   conversationBudget?: number
+  /**
+   * File bodies injected from @path on the opening send. Held for the task so
+   * continuation turns still see what the user mentioned.
+   */
+  fileContext?: string
 }
 
 /**
@@ -182,8 +190,12 @@ const MIN_CONVERSATION_TOKENS = 1024
  */
 const toolSchemaTokens = new Map<string, number>()
 
+function toolSurfaceKey(tier: ToolTier, surface: ToolSurfaceOptions): string {
+  return `${tier}:${!!surface.hasSkills}:${!!surface.aiSettingsIntent}:${!!surface.planMode}:${!!surface.executeMode}`
+}
+
 function toolTokens(tier: ToolTier, surface: ToolSurfaceOptions): number {
-  const key = `${tier}:${!!surface.hasSkills}:${!!surface.aiSettingsIntent}`
+  const key = toolSurfaceKey(tier, surface)
   const cached = toolSchemaTokens.get(key)
   if (cached !== undefined) return cached
   const tokens = estimateTokens(JSON.stringify(buildAITools(tier, surface)))
@@ -191,12 +203,30 @@ function toolTokens(tier: ToolTier, surface: ToolSurfaceOptions): number {
   return tokens
 }
 
+function chatAgentMode(tabId: string): CopilotAgentMode {
+  return useAIStore.getState().chatTabs.find((t) => t.id === tabId)?.agentMode ?? 'agent'
+}
+
 /** The tool surface for a turn, derived from installed config plus its request. */
-function toolSurfaceFor(userIntent: string | undefined): ToolSurfaceOptions {
+function toolSurfaceFor(
+  userIntent: string | undefined,
+  agentMode: CopilotAgentMode = 'agent'
+): ToolSurfaceOptions {
   return {
     hasSkills: hasEnabledSkills(),
-    aiSettingsIntent: AI_SETTINGS_INTENT.test(userIntent ?? '')
+    aiSettingsIntent: AI_SETTINGS_INTENT.test(userIntent ?? ''),
+    planMode: agentMode === 'plan',
+    executeMode: agentMode === 'execute'
   }
+}
+
+function isPlanMode(tabId: string): boolean {
+  return chatAgentMode(tabId) === 'plan'
+}
+
+function syncQueueCount(tabId: string): void {
+  const n = queuedPrompts.get(tabId)?.length ?? 0
+  useAIStore.getState().setQueuedCount(tabId, n)
 }
 
 /**
@@ -326,7 +356,8 @@ function decideCall(chatTabId: string, name: string, argsJson: string): ReturnTy
     tool: name,
     argsJson,
     mode: autonomyMode,
-    sessionAllowlist: sessionAllowlists.get(chatTabId)
+    sessionAllowlist: sessionAllowlists.get(chatTabId),
+    agentMode: useAIStore.getState().chatTabs.find((t) => t.id === chatTabId)?.agentMode ?? 'agent'
   })
 }
 
@@ -410,9 +441,15 @@ function startTurn(loop: LoopState, epilogue = false): void {
   // A genuinely new instruction supersedes the loop, so it arrives as a new one.
   loop.mermaidIntent ??= !chartTurn && MERMAID_INTENT.test(loop.userIntent ?? '')
   loop.aiSettingsIntent ??= AI_SETTINGS_INTENT.test(loop.userIntent ?? '')
+  const chat = ai.chatTabs.find((t) => t.id === loop.tabId)
+  const agentMode = chat?.agentMode ?? 'agent'
+  const planMode = agentMode === 'plan'
+  const executeMode = agentMode === 'execute'
   const toolSurface = {
     hasSkills: hasEnabledSkills(),
-    aiSettingsIntent: loop.aiSettingsIntent
+    aiSettingsIntent: loop.aiSettingsIntent,
+    planMode,
+    executeMode
   }
   const promptSections: PromptSections = {
     chart: chartTurn,
@@ -430,13 +467,13 @@ function startTurn(loop: LoopState, epilogue = false): void {
   // conversation both preserves the cacheable prefix and gives these facts
   // recency over the long system prompt.
   const suffix: ChatMessageDTO[] = []
-  const chat = ai.chatTabs.find((t) => t.id === loop.tabId)
   const snapshot = buildToolContextMessage(loop.toolTier, chat?.pinnedTabId)
   const plan = buildPlanContextMessage(loop.tabId)
   const taskMemory = buildTaskMemoryMessage(loop.tabId)
   if (snapshot) suffix.push({ role: 'system', content: snapshot })
   if (taskMemory) suffix.push({ role: 'system', content: taskMemory })
   if (plan) suffix.push({ role: 'system', content: plan })
+  if (loop.fileContext) suffix.push({ role: 'system', content: loop.fileContext })
 
   // Bound the running conversation with what is actually left over, which is
   // why the surrounding layers are assembled first.
@@ -518,7 +555,9 @@ function startTurn(loop: LoopState, epilogue = false): void {
     enableTools: !chartTurn,
     userRules,
     promptSections,
-    aiSettingsIntent: loop.aiSettingsIntent
+    aiSettingsIntent: loop.aiSettingsIntent,
+    planMode,
+    executeMode
   })
 }
 
@@ -679,6 +718,7 @@ async function runAutoToolCalls(tabId: string, messageId: string, callIds: strin
 export function abortLoop(tabId: string): void {
   const ai = useAIStore.getState()
   queuedPrompts.delete(tabId)
+  ai.setQueuedCount(tabId, 0)
 
   for (const [requestId, entry] of pending) {
     if (entry.tabId !== tabId) continue
@@ -802,9 +842,9 @@ export function tryHandleToolApprovalFromInput(
  * rejected. Used when a new user instruction supersedes proposed actions so the
  * app does not stay stuck waiting on approvals the user has effectively dropped.
  */
-export function cancelPendingApprovals(tabId: string): void {
+export function cancelPendingApprovals(tabId: string): number {
   const refs = getPendingToolCalls(tabId)
-  if (refs.length === 0) return
+  if (refs.length === 0) return 0
   const ai = useAIStore.getState()
   for (const ref of refs) {
     loops.delete(ref.messageId)
@@ -823,6 +863,7 @@ export function cancelPendingApprovals(tabId: string): void {
   // The paused turn's request already completed; clear busy so the new prompt
   // can start a fresh turn.
   ai.setBusy(false)
+  return refs.length
 }
 
 /**
@@ -982,6 +1023,7 @@ export function initAIService(): void {
       }
       const next = queue.shift() as string
       if (queue.length === 0) queuedPrompts.delete(tabId)
+      syncQueueCount(tabId)
       void sendPrompt(next, tabId)
       return
     }
@@ -1111,10 +1153,15 @@ export function initAIService(): void {
     // stray click away.
     toolCalls.forEach((tc, i) => {
       if (decisions[i] !== 'deny') return
+      const denied = isPlanMode(tabId)
+        ? tNotice('copilot.plan.denied')
+        : chatAgentMode(tabId) === 'execute'
+          ? tNotice('copilot.execute.denied')
+          : 'Blocked by the current autonomy policy: this command is destructive.'
       ai.updateToolCall(tabId, messageId, tc.id, {
         status: 'rejected',
-        result: 'Blocked by the current autonomy policy: this command is destructive.',
-        digest: 'Blocked by the current autonomy policy: this command is destructive.'
+        result: denied,
+        digest: denied
       })
     })
     const autoIds = toolCalls.filter((_, i) => decisions[i] === 'auto').map((tc) => tc.id)
@@ -1177,9 +1224,136 @@ function readTabContext(tabId: string, maxLines: number): TerminalContext | unde
   }
 }
 
+const FILE_MENTION_LINE_LIMIT = 200
+const MAX_FILE_MENTIONS = 4
+
+async function loadFileMentionContext(
+  terminalTabId: string,
+  paths: string[],
+  username?: string
+): Promise<string | undefined> {
+  const unique = [...new Set(paths)].slice(0, MAX_FILE_MENTIONS)
+  const parts: string[] = []
+  for (const raw of unique) {
+    const path = expandMentionPath(raw, username)
+    const result = await readFile({
+      tab_id: terminalTabId,
+      path,
+      limit: FILE_MENTION_LINE_LIMIT,
+      offset: 1
+    })
+    if (!result.ok) {
+      useAIStore.getState().setNotice(
+        tNotice('copilot.path.readFail', { path: raw, error: result.error ?? 'read failed' })
+      )
+      continue
+    }
+    if (result.result) parts.push(result.result)
+  }
+  if (parts.length === 0) return undefined
+  return `User-mentioned files (from @path; treat as the current contents on the pinned host):\n\n${parts.join('\n\n')}`
+}
+
+/**
+ * LLM-summarize older messages when they no longer fit the window.
+ * Returns the number compressed, 0 if nothing needed compressing, or null on failure.
+ */
+async function compactTabHistory(
+  tabId: string,
+  prompt: string,
+  context: TerminalContext | undefined,
+  opts?: { leaveBusy?: boolean }
+): Promise<number | null> {
+  const ai = useAIStore.getState()
+  const tab = ai.chatTabs.find((t) => t.id === tabId)
+  if (!tab) return 0
+
+  const settings = normalizeAISettings(await window.api.config.getAISettings())
+  const limit = resolveActiveContextLength(settings)
+  const userRules = useUserRulesStore.getState().rules
+  const tier = toolTierForProfile(settings.copilotModelProfile)
+  const mentionsTerminal = hasTerminalMention(prompt, useSessionsStore.getState().sessions)
+  const chartIntent = mentionsTerminal && !!context && CHART_INTENT.test(prompt)
+  const surface = toolSurfaceFor(prompt, chatAgentMode(tabId))
+  const budgetParams = {
+    systemPrompt: buildEffectiveSystemPrompt(userRules, {
+      chart: chartIntent,
+      mermaid: MERMAID_INTENT.test(prompt),
+      toolNames: chartIntent ? [] : toolNamesFor(tier, surface)
+    }),
+    contextMessage: fixedOverheadText(context, tabId, chartIntent ? undefined : tier, surface),
+    draft: prompt,
+    limit
+  }
+  const existingDto: BudgetMessage[] = tab.messages.map((m) => ({
+    role: m.role,
+    content: messageBudgetText(m)
+  }))
+  const { toCompress } = selectMessagesToCompress(existingDto, budgetParams)
+  if (toCompress.length === 0) return 0
+
+  ai.setBusy(true, null, tabId)
+  ai.setNotice(tNotice('copilot.context.compressing'))
+  const result = await window.api.ai.compressHistory({
+    messages: toCompress as ChatMessageDTO[],
+    context
+  })
+  if (result.error || !result.summary) {
+    ai.setBusy(false)
+    ai.setNotice(tNotice('copilot.context.compressFailed'))
+    return null
+  }
+  const kept = tab.messages.slice(toCompress.length)
+  ai.replaceMessages(tabId, [
+    {
+      id: crypto.randomUUID(),
+      role: 'assistant' as const,
+      content: result.summary,
+      isContextSummary: true
+    },
+    ...kept
+  ])
+  if (!opts?.leaveBusy) ai.setBusy(false)
+  return toCompress.length
+}
+
+/** `/compact`: run the same history compression sendPrompt uses, without a new turn. */
+export async function compactActiveChat(): Promise<void> {
+  const ai = useAIStore.getState()
+  const tabId = ai.activeChatTabId
+  if (!tabId) return
+  if (ai.busy) {
+    ai.setNotice(tNotice('copilot.context.compressingBusy'))
+    return
+  }
+  const tab = ai.chatTabs.find((t) => t.id === tabId)
+  if (!tab || tab.messages.length === 0) {
+    ai.setNotice(tNotice('copilot.context.nothingToCompact'))
+    return
+  }
+  const terminals = useSessionsStore.getState()
+  const pin = resolvePinnedTab(
+    tab.pinnedTabId,
+    tab.pinnedLabel,
+    terminals.sessions.map((t) => t.id)
+  )
+  const contextTabId = terminalContextTabId(pin, terminals.activeSessionId)
+  const context = contextTabId
+    ? readTabContext(contextTabId, COPILOT_CONTEXT_MAX_LINES)
+    : undefined
+  const count = await compactTabHistory(tabId, '', context)
+  if (count === null) return
+  if (count === 0) {
+    ai.setNotice(tNotice('copilot.context.alreadyCompact'))
+    return
+  }
+  ai.setNotice(tNotice('copilot.context.compressed', { count }))
+}
+
 /**
  * Send a user prompt to the AI, attaching the pinned terminal's recent output
- * and host info as context. Ignored while another request is in flight.
+ * and host info as context. Mid-task prompts are queued and replayed when the
+ * loop finishes.
  */
 export async function sendPrompt(text: string, targetTabId?: string): Promise<void> {
   const prompt = text.trim()
@@ -1190,7 +1364,12 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
 
   // A new instruction while tool actions await approval supersedes them: drop
   // the paused loop and clear busy so this prompt can start a fresh turn.
-  if (hasPendingToolCalls(tabId)) cancelPendingApprovals(tabId)
+  if (hasPendingToolCalls(tabId)) {
+    const cancelled = cancelPendingApprovals(tabId)
+    if (cancelled > 0) {
+      useAIStore.getState().setNotice(tNotice('copilot.superseded', { count: cancelled }))
+    }
+  }
 
   const ai = useAIStore.getState()
 
@@ -1200,6 +1379,7 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
     const queue = queuedPrompts.get(tabId) ?? []
     queue.push(prompt)
     queuedPrompts.set(tabId, queue)
+    syncQueueCount(tabId)
     ai.setNotice(tNotice('copilot.queued', { count: queue.length }))
     return
   }
@@ -1228,10 +1408,15 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
   const mentionsTerminal = hasTerminalMention(prompt, terminals.sessions)
   const context = contextTabId ? readTabContext(contextTabId, contextMaxLines(prompt, terminals.sessions)) : undefined
 
+  const paths = extractFileMentionPaths(prompt)
+  const fileContext =
+    paths.length > 0 && contextTabId
+      ? await loadFileMentionContext(contextTabId, paths, contextTab?.username)
+      : undefined
+
   const settings = normalizeAISettings(await window.api.config.getAISettings())
   const limit = resolveActiveContextLength(settings)
   refreshAutonomyMode(settings.copilotAutonomy)
-  const userRules = useUserRulesStore.getState().rules
   const tier = toolTierForProfile(settings.copilotModelProfile)
   // Force the chart path only when a terminal is bound to read from.
   const chartIntent = mentionsTerminal && !!contextTab && CHART_INTENT.test(prompt)
@@ -1240,61 +1425,16 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
     ? terminals.sessions.find((t) => t.id === boundTabId)?.sessionId
     : undefined
 
-  // Decide compression against what this turn will ACTUALLY send: the sections
-  // and tool set for the active tier, plus every per-turn injection. Estimating
-  // from the full worst-case prompt moved the threshold for trimmed tiers.
-  const surface = toolSurfaceFor(prompt)
-  const budgetParams = {
-    systemPrompt: buildEffectiveSystemPrompt(userRules, {
-      chart: chartIntent,
-      mermaid: MERMAID_INTENT.test(prompt),
-      // A chart turn disables function calling, so it is charged for no tools.
-      toolNames: chartIntent ? [] : toolNamesFor(tier, surface)
-    }),
-    contextMessage: fixedOverheadText(context, tabId, chartIntent ? undefined : tier, surface),
-    draft: prompt,
-    limit
+  const compressed = await compactTabHistory(tabId, prompt, context, { leaveBusy: true })
+  if (compressed === null) return
+  if (compressed > 0) {
+    useAIStore.getState().setNotice(tNotice('copilot.context.compressed', { count: compressed }))
   }
 
-  // Size each message by everything it will actually replay — prose plus its
-  // tool arguments and result digests. Kept index-aligned with `tab.messages`
-  // so the compression decision below can be applied back by position.
-  const existingDto: BudgetMessage[] = tab.messages.map((m) => ({
-    role: m.role,
-    content: messageBudgetText(m)
-  }))
-
-  const { toCompress } = selectMessagesToCompress(existingDto, budgetParams)
-  if (toCompress.length > 0) {
-    ai.setBusy(true, null, tabId)
-    ai.setNotice(tNotice('copilot.context.compressing'))
-
-    const result = await window.api.ai.compressHistory({
-      messages: toCompress as ChatMessageDTO[],
-      context
-    })
-
-    if (result.error || !result.summary) {
-      ai.setBusy(false)
-      ai.setNotice(tNotice('copilot.context.compressFailed'))
-      return
-    }
-
-    const kept = tab.messages.slice(toCompress.length)
-    const summaryMsg = {
-      id: crypto.randomUUID(),
-      role: 'assistant' as const,
-      content: result.summary,
-      isContextSummary: true
-    }
-    ai.replaceMessages(tabId, [summaryMsg, ...kept])
-    ai.setNotice(tNotice('copilot.context.compressed', { count: toCompress.length }))
-
-    tab = useAIStore.getState().chatTabs.find((t) => t.id === tabId)
-    if (!tab) {
-      ai.setBusy(false)
-      return
-    }
+  tab = useAIStore.getState().chatTabs.find((t) => t.id === tabId)
+  if (!tab) {
+    useAIStore.getState().setBusy(false)
+    return
   }
 
   // Replay the full chain (assistant tool_calls + their paired tool results),
@@ -1338,7 +1478,8 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
     guard: createGuardState(),
     // Raw instruction, kept for the Verify step's display-only stop decision.
     userIntent: prompt,
-    chartIntent
+    chartIntent,
+    fileContext
   })
 }
 
@@ -1378,7 +1519,7 @@ export function askAboutSelection(selection: string): void {
 const toolsDefinitionCache = new Map<string, string>()
 
 function toolsDefinitionText(tier: ToolTier, surface: ToolSurfaceOptions): string {
-  const key = `${tier}:${!!surface.hasSkills}:${!!surface.aiSettingsIntent}`
+  const key = toolSurfaceKey(tier, surface)
   let text = toolsDefinitionCache.get(key)
   if (text === undefined) {
     text = JSON.stringify(buildAITools(tier, surface))
@@ -1428,9 +1569,15 @@ export function computeActiveTabBudget(params: {
 }) {
   const activeChatTabId = useAIStore.getState().activeChatTabId ?? undefined
   const tier = toolTierForProfile(params.profile)
-  // A gauge should read the fullest the next turn could get, so it assumes the
-  // optional sections and the heavyweight settings schema all ride along.
-  const surface: ToolSurfaceOptions = { hasSkills: hasEnabledSkills(), aiSettingsIntent: true }
+  const agentMode = activeChatTabId
+    ? (useAIStore.getState().chatTabs.find((t) => t.id === activeChatTabId)?.agentMode ?? 'agent')
+    : 'agent'
+  const surface: ToolSurfaceOptions = {
+    hasSkills: hasEnabledSkills(),
+    aiSettingsIntent: true,
+    planMode: agentMode === 'plan',
+    executeMode: agentMode === 'execute'
+  }
 
   return buildChatPayload({
     // The meter is a headroom gauge, so it keeps the worst-case chart+mermaid

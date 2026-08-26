@@ -469,7 +469,9 @@ export class AIProvider {
     const tier = toolTierForProfile(profile)
     const tools = buildAITools(tier, {
       hasSkills: this.getSkills().some((s) => s.enabled),
-      aiSettingsIntent: req.aiSettingsIntent
+      aiSettingsIntent: req.aiSettingsIntent,
+      planMode: req.planMode,
+      executeMode: req.executeMode
     })
     // Scope the prompt to what this request actually carries. Main owns the
     // decision, so the prompt cannot advertise tools the request omits — a turn

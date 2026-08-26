@@ -302,6 +302,27 @@ export interface PlanItem {
   status: PlanItemStatus
 }
 
+/** Copilot loop autonomy for this chat: plan is read-only; agent/execute can mutate. */
+export type CopilotAgentMode = 'plan' | 'agent' | 'execute'
+
+/** Coerce persisted / unknown values to a known mode. Missing means Agent. */
+export function normalizeCopilotAgentMode(mode: unknown): CopilotAgentMode {
+  if (mode === 'plan' || mode === 'execute' || mode === 'agent') return mode
+  return 'agent'
+}
+
+/** A remote-file backup taken before an agent write, so the user can Restore. */
+export interface FileCheckpoint {
+  id: string
+  /** Terminal tab the backup was written on (SFTP session). */
+  terminalTabId: string
+  /** Original remote path that was about to be overwritten. */
+  path: string
+  /** Remote backup path (`<path>.bak.<timestamp>`). */
+  backupPath: string
+  at: number
+}
+
 /** One conversation topic in the Copilot side panel. */
 export interface CopilotChatTab {
   id: string
@@ -317,6 +338,10 @@ export interface CopilotChatTab {
   pinnedTabId?: string
   /** Display label (`user@host`) kept so a closed pin still has a name. */
   pinnedLabel?: string
+  /** Plan vs Agent. Missing on older chats means Agent. */
+  agentMode?: CopilotAgentMode
+  /** Recent file backups for Restore. Newest last; persist at most a short tail. */
+  checkpoints?: FileCheckpoint[]
 }
 
 /** Persisted Copilot multi-tab chat state. */
@@ -360,6 +385,17 @@ export interface AIChatRequest {
    * schema main will send.
    */
   aiSettingsIntent?: boolean
+  /**
+   * Plan mode: main rebuilds the tool list independently of the renderer prompt
+   * gate, so this flag must ride on the request or Plan turns still receive
+   * write tools.
+   */
+  planMode?: boolean
+  /**
+   * Execute mode: drop `exec_command` and always send `run_in_terminal`, even
+   * on the core tier. Same reason as `planMode` — main rebuilds tools itself.
+   */
+  executeMode?: boolean
 }
 
 /** Summarize older Copilot turns before they exceed the context budget. */

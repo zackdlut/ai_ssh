@@ -2725,40 +2725,33 @@ select:focus {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: linear-gradient(
-    180deg,
-    rgba(91, 233, 208, 0.04),
-    var(--control-inset)
-  );
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    inset 0 -8px 16px -12px rgba(0, 0, 0, 0.18);
-  transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+  border-radius: 14px;
+  background: var(--ink-900);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
 }
 
 .composer-box:focus-within {
-  background: linear-gradient(
-    180deg,
-    rgba(91, 233, 208, 0.06),
-    rgba(255, 255, 255, 0.06)
-  );
   border-color: var(--accent-border);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
     0 0 0 3px var(--accent-ring);
 }
 
 .composer-toolbar {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  padding: 4px 6px 6px 4px;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 6px 6px 4px;
 }
 
-.composer-toolbar .composer-send {
+.composer-toolbar .composer-send-group {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .composer-send {
@@ -2862,11 +2855,11 @@ select:focus {
   resize: none;
   min-height: 56px;
   max-height: 150px;
-  line-height: 1.5;
-  font: inherit;
-  font-size: 13px;
-  letter-spacing: inherit;
-  padding: 9px 11px;
+  line-height: 1.55;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  letter-spacing: 0;
+  padding: 10px 12px 8px;
   box-sizing: border-box;
   white-space: pre-wrap;
   overflow-wrap: break-word;
@@ -2874,7 +2867,7 @@ select:focus {
   border: none;
   background: transparent;
   box-shadow: none;
-  border-radius: 12px 12px 0 0;
+  border-radius: 14px 14px 0 0;
   scrollbar-gutter: stable;
 }
 
@@ -2928,6 +2921,197 @@ select:focus {
 
 .composer-mention-pending {
   color: var(--signal);
+}
+
+.composer-mention--path {
+  color: var(--text);
+  background: color-mix(in srgb, var(--warn, #e8c07d) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn, #e8c07d) 35%, transparent);
+}
+
+.composer-mode-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.composer-mode-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 26px;
+  padding: 0 6px 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.composer-mode-trigger:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: transparent;
+}
+
+.composer-mode-trigger.open,
+.composer-mode-trigger:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  outline: none;
+  box-shadow: none;
+}
+
+.composer-mode-trigger:active {
+  transform: none;
+}
+
+.composer-mode-trigger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.composer-mode-wrap--plan .composer-mode-trigger {
+  color: var(--azure);
+}
+
+.composer-mode-wrap--execute .composer-mode-trigger {
+  color: var(--warn);
+}
+
+.composer-mode-trigger-label {
+  white-space: nowrap;
+}
+
+.composer-mode-caret {
+  opacity: 0.65;
+  transition: transform 0.14s ease, color 0.14s ease;
+}
+
+.composer-mode-caret.open {
+  transform: rotate(180deg);
+  opacity: 1;
+}
+
+.composer-mode-wrap--plan .composer-mode-caret.open,
+.composer-mode-wrap--agent .composer-mode-caret.open {
+  color: var(--signal);
+}
+
+.composer-mode-wrap--execute .composer-mode-caret.open {
+  color: var(--warn);
+}
+
+.composer-mode-menu {
+  z-index: 1200;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--ink-600);
+  box-shadow: var(--shadow-pop);
+  transform-origin: bottom left;
+  animation: model-menu-up 0.16s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.composer-mode-option {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  width: 100%;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.composer-mode-option:hover {
+  background: var(--dropdown-hover);
+  border-color: transparent;
+}
+
+.composer-mode-option:active {
+  transform: none;
+}
+
+.composer-mode-option.is-on {
+  background: var(--accent-subtle);
+  border-color: var(--accent-border);
+}
+
+.composer-mode-option-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-mode-option-name {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.composer-mode-option-check {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--signal);
+  line-height: 1;
+}
+
+.composer-mode-option--plan.is-on {
+  background: color-mix(in srgb, var(--azure) 12%, transparent);
+  border-color: color-mix(in srgb, var(--azure) 32%, transparent);
+}
+
+.composer-mode-option--plan.is-on .composer-mode-option-name,
+.composer-mode-option--plan.is-on .composer-mode-option-check {
+  color: var(--azure);
+}
+
+.composer-mode-option--execute.is-on {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 36%, transparent);
+}
+
+.composer-mode-option--execute.is-on .composer-mode-option-name,
+.composer-mode-option--execute.is-on .composer-mode-option-check {
+  color: var(--warn);
+}
+
+.composer-mode-option-desc {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-faint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-mode-menu {
+    animation: none;
+  }
+
+  .composer-mode-caret {
+    transition: none;
+  }
+}
+
+.composer-queued {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  white-space: nowrap;
 }
 
 /* Copilot model tier picker — width matches dropdown menu */
@@ -3146,7 +3330,8 @@ select:focus {
     0 0 0 3px var(--accent-ring);
 }
 
-[data-theme='dawn'] .model-select-menu {
+[data-theme='dawn'] .model-select-menu,
+[data-theme='dawn'] .composer-mode-menu {
   background: #fff;
   border-color: var(--line-strong);
   box-shadow: var(--shadow-pop);
@@ -4161,6 +4346,22 @@ select:focus {
   max-width: 100%;
 }
 
+.copilot-panel .context-hint-btn:hover {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text);
+}
+
+.copilot-panel .context-hint-btn:active {
+  transform: none;
+}
+
+.copilot-panel .context-hint-btn:focus-visible {
+  outline: none;
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+
 .copilot-panel .context-hint.pinned {
   color: var(--signal);
 }
@@ -4222,14 +4423,14 @@ select:focus {
 }
 
 .copilot-panel .composer {
-  padding: 12px 12px 14px;
-  gap: 8px;
+  padding: 10px 12px 12px;
+  gap: 6px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.01));
 }
 
 .copilot-panel .composer-highlight,
 .copilot-panel .composer-input textarea {
-  min-height: 60px;
+  min-height: 56px;
   padding: 10px 12px 6px;
   line-height: 1.55;
 }
@@ -4241,13 +4442,18 @@ select:focus {
 }
 
 .copilot-panel .composer-box {
-  border-radius: 12px;
+  border-radius: 14px;
 }
 
-.copilot-panel .composer-toolbar .model-select-wrap {
-  flex: 0 0 220px;
-  width: 220px;
+.composer-toolbar .model-select-wrap {
+  flex: 1 1 auto;
+  width: auto;
   min-width: 0;
+  max-width: 180px;
+}
+
+.composer-toolbar .context-meter-caption {
+  display: none;
 }
 
 .context-meter {
@@ -4364,12 +4570,15 @@ select:focus {
   transform: translateY(-1px);
 }
 
+[data-theme='dawn'] .composer-mode-trigger:hover:not(:disabled),
+[data-theme='dawn'] .composer-mode-trigger.open,
+[data-theme='dawn'] .composer-mode-trigger:focus-visible {
+  background: rgba(26, 31, 46, 0.05);
+  border-color: transparent;
+}
+
 [data-theme='dawn'] .copilot-panel .composer-box {
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.96),
-    rgba(244, 245, 248, 0.88)
-  );
+  background: #fff;
   border-color: var(--line-strong);
   box-shadow: inset 0 1px 2px rgba(26, 31, 46, 0.04);
 }
@@ -5066,6 +5275,13 @@ select:focus {
   height: 18px;
 }
 
+.tool-call-card .tool-call-head-aside {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .tool-call-card .tool-call-head-copy {
   display: flex;
   flex-direction: column;
@@ -5513,6 +5729,75 @@ select:focus {
   text-decoration: line-through;
 }
 
+.plan-card-actions {
+  padding: 0 11px 10px;
+}
+
+.plan-card-execute,
+.plan-card-restore,
+.tool-call-card .tool-btn-restore {
+  border: 1px solid color-mix(in srgb, var(--signal) 35%, var(--line));
+  background: color-mix(in srgb, var(--signal) 10%, transparent);
+  color: var(--text);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+
+.plan-card-execute:hover,
+.plan-card-restore:hover,
+.tool-call-card .tool-btn-restore:hover {
+  background: color-mix(in srgb, var(--signal) 18%, transparent);
+}
+
+.plan-card-checkpoints {
+  padding: 0 11px 10px;
+  border-top: 1px solid var(--line);
+}
+
+.plan-card-checkpoints-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 8px 0 4px;
+}
+
+.plan-card-checkpoint-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.plan-card-checkpoint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.plan-card-checkpoint-path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-call-card .tool-btn-restore {
+  flex-shrink: 0;
+}
+
 @keyframes plan-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
@@ -5854,6 +6139,91 @@ select:focus {
 .tool-call-card .tool-output-toggle:hover {
   background: rgba(91, 233, 208, 0.16);
   border-color: rgba(91, 233, 208, 0.42);
+}
+
+.tool-call-card .tool-exec-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-call-card .tool-exec-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tool-call-card .tool-exec-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 6px 9px 7px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+}
+
+.tool-call-card .tool-exec-stat.is-cwd {
+  flex: 1 1 100%;
+}
+
+.tool-call-card .tool-exec-k {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-faint, var(--text-dim));
+}
+
+.tool-call-card .tool-exec-v {
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.tool-call-card .tool-exec-v.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.tool-call-card .tool-exec-stat.is-cwd .tool-exec-v {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-call-card .tool-exec-stat.is-status.tone-ok .tool-exec-v {
+  color: var(--ok, #6fd59a);
+  font-weight: 650;
+}
+
+.tool-call-card .tool-exec-stat.is-status.tone-bad .tool-exec-v {
+  color: var(--danger);
+  font-weight: 650;
+}
+
+.tool-call-card .tool-exec-stat.is-status.tone-warn .tool-exec-v {
+  color: var(--warn, #e6b860);
+  font-weight: 650;
+}
+
+.tool-call-card .tool-exec-hint {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: rgba(255, 206, 106, 0.08);
+  border: 1px solid rgba(255, 206, 106, 0.2);
+}
+
+.tool-call-card .tool-exec-empty {
+  font-size: 12px;
+  color: var(--text-faint, var(--text-dim));
+  padding: 2px 2px 4px;
 }
 
 /* ---------- Tool settings preview panel (embedded in ToolCard) ----------

@@ -1,17 +1,21 @@
 import { create } from 'zustand'
-import type {
-  ChartSnapshot,
-  CopilotChatMessage,
-  CopilotChatState,
-  CopilotChatTab,
-  PlanItem,
-  ToolCallView
+import {
+  normalizeCopilotAgentMode,
+  type ChartSnapshot,
+  type CopilotAgentMode,
+  type CopilotChatMessage,
+  type CopilotChatState,
+  type CopilotChatTab,
+  type FileCheckpoint,
+  type PlanItem,
+  type ToolCallView
 } from '../../shared/types'
 import { getCopilotStartupOpen } from './startupStore'
 import { useLocaleStore } from './localeStore'
 import { useSessionsStore } from './sessionsStore'
 import { translate } from '../lib/i18n/translations'
 import { formatTerminalLabel } from '../lib/pinnedTerminal'
+import { appendCheckpoint } from '../lib/fileCheckpoints'
 
 export interface ChatMessage extends CopilotChatMessage {
   streaming?: boolean
@@ -68,7 +72,8 @@ export function createEmptyChatTab(title = DEFAULT_CHAT_TAB_TITLE): ChatTab {
     messages: [],
     draft: '',
     updatedAt: Date.now(),
-    archived: false
+    archived: false,
+    agentMode: 'agent'
   }
 }
 
@@ -141,6 +146,8 @@ function toPersistedState(
       plan: tab.plan,
       pinnedTabId: tab.pinnedTabId,
       pinnedLabel: tab.pinnedLabel,
+      agentMode: normalizeCopilotAgentMode(tab.agentMode),
+      checkpoints: tab.checkpoints?.slice(-30),
       messages: tab.messages.slice(-MAX_MESSAGES_PER_TAB).map((m) => ({
         id: m.id,
         role: m.role,
@@ -204,6 +211,7 @@ function fromPersistedState(state: CopilotChatState): { chatTabs: ChatTab[]; act
     .map((tab) => ({
       ...tab,
       archived: tab.archived ?? false,
+      agentMode: normalizeCopilotAgentMode(tab.agentMode),
       messages: tab.messages.map((m) => ({ ...m, toolCalls: sanitizeReloadedToolCalls(m.toolCalls) }))
     }))
   const migrated = migratePersistedTabs(chatTabs)
@@ -252,6 +260,8 @@ interface AIState {
   /** Tab id that owns the in-flight request (for cancel on close). */
   busyTabId: string | null
   notice: string | null
+  /** Queued user prompts waiting for this chat's loop to finish. */
+  queuedCountByTab: Record<string, number>
   togglePanel: () => void
   setPanelOpen: (open: boolean) => void
   setPanelWidth: (width: number) => void
@@ -285,6 +295,9 @@ interface AIState {
   ) => void
   setChartSnapshot: (tabId: string, messageId: string, key: string, snapshot: ChartSnapshot) => void
   setBusy: (busy: boolean, requestId?: string | null, tabId?: string | null) => void
+  setAgentMode: (tabId: string, mode: CopilotAgentMode) => void
+  addCheckpoint: (tabId: string, checkpoint: FileCheckpoint) => void
+  setQueuedCount: (tabId: string, count: number) => void
   activeChatTab: () => ChatTab | undefined
 }
 
@@ -299,6 +312,7 @@ export const useAIStore = create<AIState>((set, get) => ({
   activeRequestId: null,
   busyTabId: null,
   notice: null,
+  queuedCountByTab: {},
   togglePanel: () =>
     set((s) => {
       const panelOpen = !s.panelOpen
@@ -636,6 +650,31 @@ export const useAIStore = create<AIState>((set, get) => ({
   },
   setBusy: (busy, requestId = null, tabId = null) =>
     set({ busy, activeRequestId: requestId, busyTabId: busy ? tabId : null }),
+  setAgentMode: (tabId, mode) => {
+    set((s) => ({
+      chatTabs: updateTab(s.chatTabs, tabId, { agentMode: mode })
+    }))
+    schedulePersist(get)
+  },
+  addCheckpoint: (tabId, checkpoint) => {
+    set((s) => {
+      const tab = s.chatTabs.find((t) => t.id === tabId)
+      if (!tab) return s
+      return {
+        chatTabs: updateTab(s.chatTabs, tabId, {
+          checkpoints: appendCheckpoint(tab.checkpoints, checkpoint)
+        })
+      }
+    })
+    schedulePersist(get)
+  },
+  setQueuedCount: (tabId, count) =>
+    set((s) => {
+      const next = { ...s.queuedCountByTab }
+      if (count <= 0) delete next[tabId]
+      else next[tabId] = count
+      return { queuedCountByTab: next }
+    }),
   activeChatTab: () => {
     const { chatTabs, activeChatTabId } = get()
     return chatTabs.find((t) => t.id === activeChatTabId)

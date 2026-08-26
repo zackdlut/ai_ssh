@@ -23,6 +23,8 @@ export interface AgentCommandResult {
   timedOut: boolean
   aborted: boolean
   disconnected: boolean
+  /** True when the terminal was busy with another capture, so nothing ran. */
+  busy?: boolean
   waitMs: number
   /** Transport-level failure detail, when the command never ran. */
   error?: string
@@ -84,15 +86,18 @@ export async function runAgentCommand(
 
   if (tab.kind === 'wsl' || options?.visible) {
     const cap = await runCapturedCommand(sessionId, command, {
-      onProgress: options?.onProgress
+      onProgress: options?.onProgress,
+      visible: !!options?.visible,
+      onAbort: options?.onStart
     })
     return {
       output: cap.output,
       exitCode: cap.exitCode,
       cwd: cap.cwd,
       timedOut: cap.timedOut,
-      aborted: false,
+      aborted: cap.aborted,
       disconnected: cap.disconnected,
+      busy: cap.busy,
       waitMs: cap.waitMs
     }
   }

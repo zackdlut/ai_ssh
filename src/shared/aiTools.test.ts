@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AI_SETTINGS_INTENT, buildAITools, toolNamesFor } from './aiTools'
+import { normalizeCopilotAgentMode } from './types'
 
 const settingsTool = (opts: Parameters<typeof buildAITools>[1]) =>
   buildAITools('full', opts).find((t) => t.function.name === 'update_app_settings')!
@@ -92,5 +93,46 @@ describe('buildAITools', () => {
   it('documents that tab_id defaults to the pinned tab', () => {
     const exec = buildAITools('core').find((t) => t.function.name === 'exec_command')
     expect(JSON.stringify(exec)).toContain('pinned tab')
+  })
+
+  it('in plan mode keeps read tools, update_plan and exec_command only', () => {
+    const names = toolNamesFor('full', { planMode: true, hasSkills: true })
+    expect(names).toContain('exec_command')
+    expect(names).toContain('update_plan')
+    expect(names).toContain('read_file')
+    expect(names).not.toContain('write_file')
+    expect(names).not.toContain('edit_file')
+    expect(names).not.toContain('run_in_terminal')
+    expect(names).not.toContain('open_ssh')
+  })
+
+  it('in execute mode drops exec_command and always includes run_in_terminal', () => {
+    for (const tier of ['core', 'full'] as const) {
+      const names = toolNamesFor(tier, { executeMode: true, hasSkills: true })
+      expect(names, tier).not.toContain('exec_command')
+      expect(names, tier).toContain('run_in_terminal')
+      expect(names, tier).toContain('update_plan')
+      expect(names, tier).toContain('read_file')
+      expect(names, tier).toContain('edit_file')
+    }
+    expect(toolNamesFor('full', { executeMode: true })).toContain('open_ssh')
+    expect(toolNamesFor('core', { executeMode: true })).not.toContain('open_ssh')
+  })
+
+  it('lets planMode win when both mode flags are set', () => {
+    const names = toolNamesFor('full', { planMode: true, executeMode: true, hasSkills: true })
+    expect(names).toContain('exec_command')
+    expect(names).not.toContain('run_in_terminal')
+    expect(names).not.toContain('write_file')
+  })
+})
+
+describe('normalizeCopilotAgentMode', () => {
+  it('keeps known modes and falls back to agent', () => {
+    expect(normalizeCopilotAgentMode('plan')).toBe('plan')
+    expect(normalizeCopilotAgentMode('execute')).toBe('execute')
+    expect(normalizeCopilotAgentMode('agent')).toBe('agent')
+    expect(normalizeCopilotAgentMode(undefined)).toBe('agent')
+    expect(normalizeCopilotAgentMode('other')).toBe('agent')
   })
 })

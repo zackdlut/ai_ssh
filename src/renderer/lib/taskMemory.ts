@@ -14,6 +14,7 @@
 import { useAIStore } from '../store/aiStore'
 import type { CopilotChatMessage, ToolCallView } from '../../shared/types'
 import { isAutoApprovedTool } from '../../shared/aiTools'
+import { isEmptyExecOutput, parsedExitCode, parseExecToolResult } from './execResult'
 
 export interface TaskStep {
   index: number
@@ -39,18 +40,11 @@ function parseExecResult(result: string): {
   cwd?: string
   outputTail: string
 } {
-  const ecMatch = /^exit_code:\s*(.+)$/m.exec(result)
-  const cwdMatch = /^cwd:\s*(.+)$/m.exec(result)
-  const outIdx = result.indexOf('output:\n')
-  const output = outIdx >= 0 ? result.slice(outIdx + 'output:\n'.length) : result
-  let exitCode: number | null = null
-  if (ecMatch) {
-    const n = Number.parseInt(ecMatch[1].trim(), 10)
-    exitCode = Number.isFinite(n) ? n : null
-  }
+  const parsed = parseExecToolResult(result)
+  const output = isEmptyExecOutput(parsed.output) ? '' : parsed.output
   return {
-    exitCode,
-    cwd: cwdMatch ? cwdMatch[1].trim() : undefined,
+    exitCode: parsedExitCode(parsed.exitCode),
+    cwd: parsed.cwd,
     outputTail: output.replace(/\s+/g, ' ').trim().slice(0, SUMMARY_MAX)
   }
 }

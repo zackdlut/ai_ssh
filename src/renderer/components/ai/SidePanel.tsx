@@ -13,7 +13,8 @@ import {
   tryHandleToolApprovalFromInput,
   approveToolCall,
   rejectToolCall,
-  abortLoop
+  abortLoop,
+  compactActiveChat
 } from '../../lib/aiService'
 import { getPendingToolCalls } from '../../lib/toolApproval'
 import { normalizeAISettings, DEFAULT_CONTEXT_LENGTHS } from '../../../shared/aiSettings'
@@ -27,10 +28,12 @@ import ChatMessage from './ChatMessage'
 import ChatTabBar from './ChatTabBar'
 import ChatHistoryPanel from './ChatHistoryPanel'
 import ModelSelect from './ModelSelect'
+import ModeSelect from './ModeSelect'
 import ContextMeter from './ContextMeter'
 import PlanCard from './PlanCard'
 import TerminalTabPicker from './TerminalTabPicker'
 import ComposerInput from './ComposerInput'
+import SlashMenu from './SlashMenu'
 import { COPILOT_CONTEXT_MAX_LINES, COPILOT_TERMINAL_MENTION_MAX_LINES, readTerminalOutput } from '../../lib/terminalRegistry'
 import {
   caretOnMentionChip,
@@ -46,6 +49,17 @@ import {
   rewriteTerminalMentions,
   terminalContextTabId
 } from '../../lib/pinnedTerminal'
+import {
+  isFilePathMentionQuery,
+  needsFileMentionPicker
+} from '../../lib/fileMentions'
+import {
+  filterSlashCommands,
+  parseSlashCommand,
+  slashMenuPrefix,
+  type SlashName
+} from '../../lib/slashCommands'
+import { useSkillsStore } from '../../store/skillsStore'
 
 const EXAMPLE_KEYS = [
   'copilot.example1',
@@ -73,8 +87,13 @@ export default function SidePanel(): JSX.Element {
   const setNotice = useAIStore((s) => s.setNotice)
   const setPinnedTerminal = useAIStore((s) => s.setPinnedTerminal)
   const addChatTab = useAIStore((s) => s.addChatTab)
+  const setAgentMode = useAIStore((s) => s.setAgentMode)
+  const queuedCount = useAIStore((s) =>
+    s.activeChatTabId ? (s.queuedCountByTab[s.activeChatTabId] ?? 0) : 0
+  )
   const messages = activeChat?.messages ?? []
   const input = activeChat?.draft ?? ''
+  const agentMode = activeChat?.agentMode ?? 'agent'
 
   const terminalTabs = useSessionsStore((s) => s.sessions)
   const activeSessionId = useSessionsStore((s) => s.activeSessionId)
@@ -84,6 +103,10 @@ export default function SidePanel(): JSX.Element {
   const [picker, setPicker] = useState<PickerReason | null>(null)
   const [pickerIndex, setPickerIndex] = useState(0)
   const [mentionQuery, setMentionQuery] = useState('')
+  const [slashIndex, setSlashIndex] = useState(0)
+  const slashIndexRef = useRef(0)
+  const slashItemsRef = useRef(filterSlashCommands(''))
+  const applySlashRef = useRef<(name: SlashName) => void>(() => {})
   const pendingSendRef = useRef<string | null>(null)
   const pickerIndexRef = useRef(0)
   const pickerTabsRef = useRef(terminalTabs)
@@ -141,6 +164,16 @@ export default function SidePanel(): JSX.Element {
   )
   pickerTabsRef.current = pickerTabs
 
+  const slashPrefix = picker ? null : slashMenuPrefix(input)
+  const slashItems = slashPrefix !== null ? filterSlashCommands(slashPrefix) : []
+  const slashOpen = slashPrefix !== null
+  slashItemsRef.current = slashItems
+  slashIndexRef.current = slashIndex
+
+  useEffect(() => {
+    setSlashIndex(0)
+  }, [slashPrefix])
+
   const contextBudget = useMemo(() => {
     const limit = contextLengths[copilotProfile] ?? DEFAULT_CONTEXT_LENGTHS[copilotProfile]
     const mentionsTerminal = hasTerminalMention(input, terminalTabs)
@@ -188,6 +221,7 @@ export default function SidePanel(): JSX.Element {
   useEffect(() => {
     setPicker(null)
     pendingSendRef.current = null
+    setSlashIndex(0)
   }, [activeChatTabId])
 
   const onProfileChange = (profile: ModelProfile): void => {
@@ -232,6 +266,56 @@ export default function SidePanel(): JSX.Element {
   const setInput = (value: string): void => {
     if (activeChatTabId) updateDraft(activeChatTabId, value)
   }
+
+  const runSlash = (name: SlashName, arg: string): void => {
+    if (!activeChatTabId) return
+    if (name === 'plan') {
+      setAgentMode(activeChatTabId, 'plan')
+      setNotice(t('copilot.mode.planHint'))
+      return
+    }
+    if (name === 'agent') {
+      setAgentMode(activeChatTabId, 'agent')
+      setNotice(t('copilot.mode.agentHint'))
+      return
+    }
+    if (name === 'execute') {
+      setAgentMode(activeChatTabId, 'execute')
+      setNotice(t('copilot.mode.executeHint'))
+      return
+    }
+    if (name === 'compact') {
+      void compactActiveChat()
+      return
+    }
+    const enabled = useSkillsStore.getState().skills.filter((s) => s.enabled)
+    if (!arg) {
+      if (enabled.length === 0) {
+        setNotice(t('copilot.slash.skillsNone'))
+        return
+      }
+      setNotice(t('copilot.slash.skillsList', { names: enabled.map((s) => s.name).join(', ') }))
+      return
+    }
+    const [skillName, ...rest] = arg.split(/\s+/).filter(Boolean)
+    const found = enabled.find((s) => s.name === skillName)
+    if (!found) {
+      setNotice(t('copilot.slash.skillMissing', { name: skillName }))
+      return
+    }
+    const extra = rest.join(' ')
+    void sendPrompt(t('copilot.skill.executePrompt', { name: found.name, extra }))
+  }
+
+  const applySlash = (name: SlashName): void => {
+    if (name === 'skill') {
+      setInput('/skill ')
+      return
+    }
+    setInput('')
+    runSlash(name, '')
+  }
+  applySlashRef.current = applySlash
 
   const showChatCopyMenu = (e: React.MouseEvent, text: string): void => {
     const selection = text.trim()
@@ -327,6 +411,18 @@ export default function SidePanel(): JSX.Element {
   const sendText = (text: string): void => {
     if (!text.trim()) return
 
+    const slash = parseSlashCommand(text)
+    if (slash) {
+      if (activeChatTabId) updateDraft(activeChatTabId, '')
+      closePicker()
+      if (slash.kind === 'unknown') {
+        setNotice(t('copilot.slash.unknown', { token: slash.token }))
+        return
+      }
+      runSlash(slash.name, slash.arg)
+      return
+    }
+
     if (activeChatTabId) {
       const approval = tryHandleToolApprovalFromInput(activeChatTabId, text)
       if (approval.handled) {
@@ -341,12 +437,6 @@ export default function SidePanel(): JSX.Element {
         closePicker()
         return
       }
-      if (waitingToolApproval) {
-        updateDraft(activeChatTabId, '')
-        void sendPrompt(text)
-        closePicker()
-        return
-      }
     }
 
     if (pin.status !== 'live' && activeChatTabId) {
@@ -354,14 +444,18 @@ export default function SidePanel(): JSX.Element {
       if (matched) setPinnedTerminal(activeChatTabId, matched.id)
     }
 
-    if (needsTerminalPicker(text, pin) && !matchTabByMention(text, terminalTabs)) {
+    if (
+      (needsTerminalPicker(text, pin) || needsFileMentionPicker(text, pin)) &&
+      !matchTabByMention(text, terminalTabs)
+    ) {
       pendingSendRef.current = text
       openPicker('send')
-      setNotice(t('copilot.chooseTabToBind'))
+      setNotice(
+        needsFileMentionPicker(text, pin) ? t('copilot.path.needTerminal') : t('copilot.chooseTabToBind')
+      )
       return
     }
 
-    if (busy) return
     void sendPrompt(text)
     closePicker()
   }
@@ -374,6 +468,13 @@ export default function SidePanel(): JSX.Element {
     const query = parseAtQuery(value.slice(0, caret))
     const onChip = caretOnMentionChip(value, caret, terminalTabs)
     if (query !== null && !onChip) {
+      if (isFilePathMentionQuery(query)) {
+        if (picker === 'mention') {
+          setPicker(null)
+          setMentionQuery('')
+        }
+        return
+      }
       setMentionQuery(query)
       const filtered = filterTabsForMention(terminalTabs, query)
       setPickerIndex(defaultPickerIndex(filtered))
@@ -458,6 +559,37 @@ export default function SidePanel(): JSX.Element {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [picker])
 
+  useEffect(() => {
+    if (!slashOpen) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.isComposing || e.keyCode === 229) return
+      const items = slashItemsRef.current
+      const count = items.length
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        e.stopPropagation()
+        if (count === 0) return
+        const delta = e.key === 'ArrowDown' ? 1 : -1
+        setSlashIndex((i) => (i + delta + count) % count)
+        return
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault()
+        e.stopPropagation()
+        const cmd = items[slashIndexRef.current]
+        if (cmd) applySlashRef.current(cmd.name)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        setInput('')
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [slashOpen])
+
   const clearPin = (): void => {
     if (!activeChatTabId) return
     setPinnedTerminal(activeChatTabId, null)
@@ -488,7 +620,7 @@ export default function SidePanel(): JSX.Element {
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.nativeEvent.isComposing || e.keyCode === 229) return
-    if (picker) return
+    if (picker || slashOpen) return
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       send()
@@ -677,6 +809,14 @@ export default function SidePanel(): JSX.Element {
               footer={pickerFooter}
             />
           )}
+          {slashOpen && !picker && (
+            <SlashMenu
+              commands={slashItems}
+              highlightIndex={slashIndex}
+              onHighlight={setSlashIndex}
+              onSelect={applySlash}
+            />
+          )}
           <ComposerInput
             key={activeChatTabId ?? 'composer'}
             ref={inputRef}
@@ -686,12 +826,18 @@ export default function SidePanel(): JSX.Element {
             onKeyDown={onKeyDown}
             onContextMenu={onComposerContextMenu}
             onAtomicEdit={applyComposerEdit}
-            placeholder={
-              waitingToolApproval ? t('tool.approvalPlaceholder') : t('copilot.placeholder')
-            }
+            placeholder={t('copilot.placeholder')}
           />
           <div className="composer-toolbar">
+            <ModeSelect
+              value={agentMode}
+              disabled={busy && busyTabId === activeChatTabId}
+              onChange={(mode) => activeChatTabId && setAgentMode(activeChatTabId, mode)}
+            />
             <ContextMeter key={activeChatTabId ?? 'meter'} budget={contextBudget} />
+            {queuedCount > 0 && (
+              <span className="composer-queued">{t('copilot.queuedCount', { count: queuedCount })}</span>
+            )}
             <ModelSelect
               value={copilotProfile}
               modelNames={modelNames}
@@ -699,30 +845,31 @@ export default function SidePanel(): JSX.Element {
               disabled={busy}
               onChange={onProfileChange}
             />
-            {busy && busyTabId === activeChatTabId ? (
-              <button
-                type="button"
-                className="composer-send danger"
-                onClick={stop}
-                title={t('copilot.stop')}
-                aria-label={t('copilot.stop')}
-              >
-                <span className="composer-send-icon composer-send-icon--stop" aria-hidden />
-              </button>
-            ) : (
+            <div className="composer-send-group">
+              {busy && busyTabId === activeChatTabId && (
+                <button
+                  type="button"
+                  className="composer-send danger"
+                  onClick={stop}
+                  title={t('copilot.stop')}
+                  aria-label={t('copilot.stop')}
+                >
+                  <span className="composer-send-icon composer-send-icon--stop" aria-hidden />
+                </button>
+              )}
               <button
                 type="button"
                 className="composer-send primary"
                 onClick={send}
                 disabled={!input.trim()}
-                title={waitingToolApproval ? t('tool.approve') : t('copilot.send')}
-                aria-label={waitingToolApproval ? t('tool.approve') : t('copilot.send')}
+                title={t('copilot.send')}
+                aria-label={t('copilot.send')}
               >
                 <span className="composer-send-icon" aria-hidden>
                   ↑
                 </span>
               </button>
-            )}
+            </div>
           </div>
         </div>
       </div>

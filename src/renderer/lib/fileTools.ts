@@ -13,10 +13,12 @@
  * no SFTP equivalent of grep) but returns structured results.
  */
 import { useSessionsStore, type TerminalSession } from '../store/sessionsStore'
+import { useAIStore } from '../store/aiStore'
 import { runAgentCommand } from './agentExec'
 import { toolResultCharBudget } from './toolBudget'
 import { computeTextDiff, formatDiffStat } from '../../shared/textDiff'
 import { applyUniqueEdit, type EditOutcome } from '../../shared/textEdit'
+import { checkpointFromBackupNote } from './fileCheckpoints'
 
 export interface ToolResult {
   ok: boolean
@@ -112,15 +114,24 @@ async function readWholeFile(
   return { text: res.read.text }
 }
 
+interface BackupCtx {
+  chatTabId?: string
+  terminalTabId: string
+}
+
 /**
  * Copy a file to `<path>.bak.<timestamp>` before it is overwritten. Failures
  * are non-fatal and reported to the model as a note: losing a backup is worth
  * surfacing, but it should not block an edit the user already approved.
+ *
+ * On success the backup is indexed as a checkpoint immediately — before the
+ * target is overwritten — so Stop cannot leave an unindexed `.bak` on disk.
  */
 async function backupRemoteFile(
   sessionId: string,
   path: string,
-  content: string
+  content: string,
+  ctx?: BackupCtx
 ): Promise<string | undefined> {
   if (content.length > BACKUP_MAX_BYTES) {
     return `backup skipped (file exceeds ${BACKUP_MAX_BYTES} bytes)`
@@ -128,7 +139,18 @@ async function backupRemoteFile(
   const backupPath = `${path}.bak.${Date.now()}`
   const res = await window.api.sftp.writeText(sessionId, backupPath, content)
   if (res.error) return `backup failed: ${res.error}`
-  return `backup: ${backupPath}`
+  const note = `backup: ${backupPath}`
+  if (ctx?.chatTabId) {
+    const fields = checkpointFromBackupNote(path, note, ctx.terminalTabId)
+    if (fields) {
+      useAIStore.getState().addCheckpoint(ctx.chatTabId, {
+        id: crypto.randomUUID(),
+        at: Date.now(),
+        ...fields
+      })
+    }
+  }
+  return note
 }
 
 /** Render file contents with 1-based line numbers, as `   12|text`. */
@@ -203,7 +225,10 @@ export async function readFile(args: Record<string, unknown>): Promise<ToolResul
  * into a verifiable operation that either applies to the intended spot or fails
  * loudly with an actionable message.
  */
-export async function editFile(args: Record<string, unknown>): Promise<ToolResult> {
+export async function editFile(
+  args: Record<string, unknown>,
+  ctx?: { chatTabId?: string }
+): Promise<ToolResult> {
   const resolved = resolveSftpTab(str(args.tab_id))
   if ('error' in resolved) return { ok: false, error: resolved.error }
   const path = str(args.path)
@@ -221,7 +246,10 @@ export async function editFile(args: Record<string, unknown>): Promise<ToolResul
   const edit = applyUniqueEdit(read.text, oldString, newString, args.replace_all === true)
   if (!edit.ok) return { ok: false, error: editFailureMessage(edit, path) }
 
-  const backupNote = await backupRemoteFile(resolved.sessionId, path, read.text)
+  const backupNote = await backupRemoteFile(resolved.sessionId, path, read.text, {
+    chatTabId: ctx?.chatTabId,
+    terminalTabId: resolved.tab.id
+  })
   const written = await window.api.sftp.writeText(resolved.sessionId, path, edit.text)
   if (written.error) return { ok: false, error: written.error }
 
@@ -252,7 +280,10 @@ function editFailureMessage(edit: Extract<EditOutcome, { ok: false }>, path: str
   }
 }
 
-export async function writeFile(args: Record<string, unknown>): Promise<ToolResult> {
+export async function writeFile(
+  args: Record<string, unknown>,
+  ctx?: { chatTabId?: string }
+): Promise<ToolResult> {
   const resolved = resolveSftpTab(str(args.tab_id))
   if ('error' in resolved) return { ok: false, error: resolved.error }
   const path = str(args.path)
@@ -269,7 +300,10 @@ export async function writeFile(args: Record<string, unknown>): Promise<ToolResu
 
   let backupNote: string | undefined
   if (previous !== undefined) {
-    backupNote = await backupRemoteFile(resolved.sessionId, path, previous)
+    backupNote = await backupRemoteFile(resolved.sessionId, path, previous, {
+      chatTabId: ctx?.chatTabId,
+      terminalTabId: resolved.tab.id
+    })
   }
 
   const written = await window.api.sftp.writeText(resolved.sessionId, path, content)
@@ -363,4 +397,32 @@ export async function globFiles(args: Record<string, unknown>): Promise<ToolResu
       ? `${found.length}+ files (truncated at ${max}) matching "${pattern}" under ${path}:`
       : `${found.length} file(s) matching "${pattern}" under ${path}:`
   return { ok: true, result: `${header}\n${found.join('\n')}` }
+}
+
+/**
+ * Copy a backup file back over the original. User-initiated Restore is
+ * explicit intent, so it skips the approval card.
+ */
+export async function restoreRemoteBackup(opts: {
+  terminalTabId: string
+  path: string
+  backupPath: string
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const resolved = resolveSftpTab(opts.terminalTabId)
+  if ('error' in resolved) return { ok: false, error: resolved.error }
+  const read = await window.api.sftp.readText(resolved.sessionId, opts.backupPath, {
+    maxBytes: BACKUP_MAX_BYTES
+  })
+  if (read.error || !read.read) {
+    return { ok: false, error: read.error ?? 'Failed to read the backup file.' }
+  }
+  if (read.read.truncated) {
+    return {
+      ok: false,
+      error: `Backup "${opts.backupPath}" is larger than ${BACKUP_MAX_BYTES} bytes and cannot be restored here.`
+    }
+  }
+  const written = await window.api.sftp.writeText(resolved.sessionId, opts.path, read.read.text)
+  if (written.error) return { ok: false, error: written.error }
+  return { ok: true }
 }

@@ -89,6 +89,17 @@ describe('buildCopilotSystemPrompt tool gating', () => {
     expect(prompt).toContain('Default to the tab marked pinned')
   })
 
+  it('in execute mode documents run_in_terminal and not exec_command', () => {
+    const names = toolNamesFor('full', { executeMode: true })
+    const prompt = buildCopilotSystemPrompt({ toolNames: names })
+    expect(names).toContain('run_in_terminal')
+    expect(names).not.toContain('exec_command')
+    expect(prompt).toContain('ALWAYS run_in_terminal')
+    expect(prompt).not.toContain('exec_command')
+    const leaked = FULL.filter((n) => !names.includes(n) && prompt.includes(n))
+    expect(leaked).toEqual([])
+  })
+
   it('shrinks as the tool set shrinks', () => {
     const full = buildCopilotSystemPrompt({ toolNames: FULL }).length
     const core = buildCopilotSystemPrompt({ toolNames: CORE }).length
@@ -115,7 +126,8 @@ describe('the Available tools inventory', () => {
   }
 
   it('lists exactly the tools sent, and nothing else', () => {
-    for (const names of [FULL, CORE]) {
+    const execute = toolNamesFor('full', { executeMode: true })
+    for (const names of [FULL, CORE, execute]) {
       const listed = inventory(names)
         .replace(/^Available tools:\s*/, '')
         .replace(/\bplus read-only\b/, '')

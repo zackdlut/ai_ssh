@@ -99,4 +99,59 @@ describe('decideToolCall', () => {
     const args = JSON.stringify({ tab_id: 't1', command: 'rm -rf /' })
     expect(decideToolCall({ tool: 'run_in_terminal', argsJson: args, mode: 'autonomous' })).toBe('ask')
   })
+
+  it('in plan mode auto-runs read-only exec and denies writes', () => {
+    expect(
+      decideToolCall({
+        tool: 'exec_command',
+        argsJson: JSON.stringify({ command: 'ls -la' }),
+        mode: 'balanced',
+        agentMode: 'plan'
+      })
+    ).toBe('auto')
+    expect(
+      decideToolCall({
+        tool: 'exec_command',
+        argsJson: JSON.stringify({ command: 'systemctl restart nginx' }),
+        mode: 'balanced',
+        agentMode: 'plan'
+      })
+    ).toBe('deny')
+    expect(decideToolCall({ tool: 'edit_file', mode: 'autonomous', agentMode: 'plan' })).toBe('deny')
+    expect(
+      decideToolCall({
+        tool: 'write_file',
+        mode: 'balanced',
+        agentMode: 'plan',
+        sessionAllowlist: new Set(['write_file'])
+      })
+    ).toBe('deny')
+  })
+
+  it('in execute mode denies leftover exec_command and still asks before writes', () => {
+    expect(
+      decideToolCall({
+        tool: 'exec_command',
+        argsJson: JSON.stringify({ command: 'ls -la' }),
+        mode: 'autonomous',
+        agentMode: 'execute'
+      })
+    ).toBe('deny')
+    expect(
+      decideToolCall({
+        tool: 'run_in_terminal',
+        argsJson: JSON.stringify({ command: 'ls -la' }),
+        mode: 'balanced',
+        agentMode: 'execute'
+      })
+    ).toBe('auto')
+    expect(
+      decideToolCall({
+        tool: 'run_in_terminal',
+        argsJson: JSON.stringify({ command: 'systemctl restart nginx' }),
+        mode: 'balanced',
+        agentMode: 'execute'
+      })
+    ).toBe('ask')
+  })
 })

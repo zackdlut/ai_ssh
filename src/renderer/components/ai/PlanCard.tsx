@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { useAIStore } from '../../store/aiStore'
 import { useT } from '../../lib/i18n'
+import { sendPrompt } from '../../lib/aiService'
+import { restoreRemoteBackup } from '../../lib/fileTools'
+import { shortCheckpointPath } from '../../lib/fileCheckpoints'
 import type { PlanItem } from '../../../shared/types'
 
 function isOpen(item: PlanItem): boolean {
@@ -13,15 +16,41 @@ function isOpen(item: PlanItem): boolean {
  * instead of scrolling away behind dozens of tool cards.
  */
 export default function PlanCard(): JSX.Element | null {
-  const plan = useAIStore((s) => s.chatTabs.find((t) => t.id === s.activeChatTabId)?.plan)
+  const tab = useAIStore((s) => s.chatTabs.find((t) => t.id === s.activeChatTabId))
+  const setAgentMode = useAIStore((s) => s.setAgentMode)
+  const setNotice = useAIStore((s) => s.setNotice)
   const [collapsed, setCollapsed] = useState(false)
   const t = useT()
 
-  if (!plan || plan.length === 0) return null
+  const plan = tab?.plan
+  const checkpoints = tab?.checkpoints ?? []
+  if ((!plan || plan.length === 0) && checkpoints.length === 0) return null
 
-  const done = plan.filter((i) => i.status === 'completed').length
-  const current = plan.find((i) => i.status === 'in_progress')
-  const allResolved = plan.every((i) => !isOpen(i))
+  const done = plan?.filter((i) => i.status === 'completed').length ?? 0
+  const current = plan?.find((i) => i.status === 'in_progress')
+  const allResolved = !plan || plan.length === 0 || plan.every((i) => !isOpen(i))
+  const showExecute = (tab?.agentMode ?? 'agent') === 'plan' && !!plan && plan.length > 0
+
+  const implement = (): void => {
+    if (!tab) return
+    setAgentMode(tab.id, 'execute')
+    void sendPrompt(t('copilot.plan.executePrompt'), tab.id)
+  }
+
+  const restore = async (id: string): Promise<void> => {
+    const cp = checkpoints.find((c) => c.id === id)
+    if (!cp) {
+      setNotice(t('copilot.restore.missing'))
+      return
+    }
+    const result = await restoreRemoteBackup({
+      terminalTabId: cp.terminalTabId,
+      path: cp.path,
+      backupPath: cp.backupPath
+    })
+    if (result.ok) setNotice(t('copilot.restore.ok', { path: cp.path }))
+    else setNotice(t('copilot.restore.fail', { error: result.error }))
+  }
 
   return (
     <div className={`plan-card${allResolved ? ' plan-card--done' : ''}`}>
@@ -35,12 +64,14 @@ export default function PlanCard(): JSX.Element | null {
           {collapsed ? '▸' : '▾'}
         </span>
         <span className="plan-card-title">{t('copilot.plan.title')}</span>
-        <span className="plan-card-count">
-          {done}/{plan.length}
-        </span>
+        {plan && plan.length > 0 && (
+          <span className="plan-card-count">
+            {done}/{plan.length}
+          </span>
+        )}
         {collapsed && current && <span className="plan-card-current">{current.title}</span>}
       </button>
-      {!collapsed && (
+      {!collapsed && plan && plan.length > 0 && (
         <ol className="plan-card-list">
           {plan.map((item) => (
             <li key={item.id} className={`plan-item plan-item--${item.status}`}>
@@ -57,6 +88,34 @@ export default function PlanCard(): JSX.Element | null {
             </li>
           ))}
         </ol>
+      )}
+      {!collapsed && showExecute && (
+        <div className="plan-card-actions">
+          <button type="button" className="plan-card-execute" onClick={implement}>
+            {t('copilot.plan.execute')}
+          </button>
+        </div>
+      )}
+      {!collapsed && checkpoints.length > 0 && (
+        <div className="plan-card-checkpoints">
+          <div className="plan-card-checkpoints-title">{t('copilot.checkpoint.title')}</div>
+          <ul className="plan-card-checkpoint-list">
+            {[...checkpoints].reverse().map((cp) => (
+              <li key={cp.id} className="plan-card-checkpoint">
+                <span className="plan-card-checkpoint-path" title={cp.path}>
+                  {shortCheckpointPath(cp.path)}
+                </span>
+                <button
+                  type="button"
+                  className="plan-card-restore"
+                  onClick={() => void restore(cp.id)}
+                >
+                  {t('copilot.restore')}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   )

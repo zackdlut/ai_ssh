@@ -23,7 +23,7 @@ import { hasGpuWebgl2 } from '../lib/webglSupport'
 import { askAboutSelection } from '../lib/aiService'
 import { extractCommands, isDangerous } from '../lib/commands'
 import { stripAnsi } from '../lib/streamParse'
-import { buildMarkerCommand, parseMarker, runCapturedCommand, getCaptureTiming, hasCaptureMarker, formatCaptureElapsed, isSessionCaptureActive, stripCaptureArtifacts } from '../lib/execCapture'
+import { buildMarkerCommand, parseMarker, runCapturedCommand, getCaptureTiming, hasCaptureMarker, formatCaptureElapsed, isSessionCaptureActive, registerCaptureEcho, stripCaptureArtifacts } from '../lib/execCapture'
 import { getTabObservation, setTabObservation } from '../lib/terminalObservation'
 import { describeTabOs } from '../../shared/prompts'
 import {
@@ -961,6 +961,7 @@ function ConnectedTerminalView({
       // Every paste path (paste event, right-click, context menu) funnels here,
       // so this is the only place read-only has to swallow pasted text.
       if (isTerminalReadOnly(tab.id)) return
+      if (isSessionCaptureActive(sessionId)) return
       const nl = nlRef.current
       if (nl.mode === 'nl') {
         nlInsertPasteText(clip)
@@ -992,6 +993,12 @@ function ConnectedTerminalView({
       const nl = nlRef.current
       // A read-only pane swallows everything, including sync broadcasts.
       if (isTerminalReadOnly(tab.id)) return
+      // Agent / Execute capture owns the PTY: lock typing so a keystroke cannot
+      // splice into the wrapped command. Ctrl+C still interrupts.
+      if (isSessionCaptureActive(sessionId)) {
+        if (data.includes('\x03')) window.api.ssh.write(sessionId, '\x03')
+        return
+      }
       if (nl.mode === 'normal') {
         window.api.ssh.write(sessionId, data)
         broadcastInput(tab.id, data)
@@ -1018,8 +1025,9 @@ function ConnectedTerminalView({
     const dataUnsub = window.api.ssh.onData((e) => {
       if (e.sessionId !== sessionId) return
 
-      // Agent exec_command / silent pwd: execCapture buffers the wrapped stream;
-      // suppress echo so marker helper lines never appear in the terminal.
+      // A capture owns the stream while it runs: a silent one (agent pwd / WSL
+      // exec) is swallowed whole, and a visible one (Execute mode) is written by
+      // the capture itself through the echo filter registered below.
       if (isSessionCaptureActive(sessionId)) return
 
       const nl = nlRef.current
@@ -1043,6 +1051,16 @@ function ConnectedTerminalView({
 
       const visible = stripCaptureArtifacts(e.data)
       if (visible) term.write(visible)
+    })
+
+    // Execute mode writes here so the user watches the command run. NL mode owns
+    // the screen with its own prompt, so it stays out of the way.
+    const echoUnsub = registerCaptureEcho(sessionId, (text, first) => {
+      if (nlRef.current.mode === 'nl') return
+      // A user reading their scrollback would otherwise miss the whole run:
+      // the agent does not type, so nothing pulls the viewport back down.
+      if (first) term.scrollToBottom()
+      term.write(text)
     })
 
     registerTerminal(tab.id, {
@@ -1117,6 +1135,7 @@ function ConnectedTerminalView({
       onResizeDisposable.dispose()
       detachViewportScroll?.()
       dataUnsub()
+      echoUnsub()
       resizeObserver.disconnect()
       unregisterTerminal(tab.id)
       usePaneMetricsStore.getState().clear(tab.id)

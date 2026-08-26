@@ -16,8 +16,9 @@ import { useUserRulesStore } from '../store/userRulesStore'
 import { connect, connectFromConfig } from './connect'
 import { editFile, globFiles, grepFiles, readFile, writeFile } from './fileTools'
 import { updatePlan } from './planTool'
-import { formatCaptureElapsed } from './execCapture'
+import { formatCaptureElapsed, isSessionCaptureActive } from './execCapture'
 import { runAgentCommand } from './agentExec'
+import { isInteractiveTuiCommand } from '../../shared/interactiveCommands'
 import { getTabObservation, setTabObservation } from './terminalObservation'
 import { snapshotTabMarkers, applyPinnedTabId } from './pinnedTerminal'
 import {
@@ -28,7 +29,7 @@ import {
   type DiffSource
 } from './diffSource'
 import { usePaneLayoutStore } from '../store/paneLayoutStore'
-import { MIN_SYNC_GROUP, usePaneSyncStore } from '../store/paneSyncStore'
+import { MIN_SYNC_GROUP, isTerminalReadOnly, usePaneSyncStore } from '../store/paneSyncStore'
 import { usePaneMetricsStore } from '../store/paneMetricsStore'
 import { collectLeaves } from './paneLayout'
 import { verifyCommand } from '../../shared/verify'
@@ -355,6 +356,44 @@ async function execCommand(
     return { ok: false, error: `Tab "${tabId}" is not connected (status: ${tab.status}).` }
   }
 
+  if (opts?.visible) {
+    if (tab.nlMode) {
+      return {
+        ok: false,
+        error:
+          'The terminal is in natural-language (F12) mode. Exit NL mode before running commands in the visible terminal, or switch this chat to Agent mode to use a private channel.'
+      }
+    }
+    if (isTerminalReadOnly(tab.id)) {
+      return {
+        ok: false,
+        error: `Tab "${tabId}" is marked read-only by the user, so nothing may be typed into it. Ask the user to clear read-only, or pick another tab.`
+      }
+    }
+    if (isInteractiveTuiCommand(command)) {
+      return {
+        ok: false,
+        error:
+          'Interactive TUIs (vim, nano, less, top, htop, man, tmux, …) cannot run in the visible capture path. Use a non-interactive equivalent (e.g. sed, systemctl status --no-pager, ps) or ask the user to run the TUI themselves.'
+      }
+    }
+    if (isSessionCaptureActive(tab.sessionId)) {
+      return {
+        ok: false,
+        error: `Tab "${tabId}" is still running the previous command. Wait for it to finish before sending another one.`
+      }
+    }
+    // Only when it is off screen — in another pane tab, or hidden behind a
+    // zoomed pane. Taking the focused pane on every command would pull the
+    // keyboard out of the chat box mid-sentence.
+    const layout = usePaneLayoutStore.getState()
+    const paneId = layout.paneIdForTerminal(tab.id)
+    const zoomed = layout.activeTab().zoomedPaneId
+    if (layout.tabIdForTerminal(tab.id) !== layout.activeTabId || (zoomed && zoomed !== paneId)) {
+      layout.showTerminal(tab.id)
+    }
+  }
+
   const cap = await runAgentCommand(tab, command, {
     onProgress: ctx?.onCaptureProgress,
     onStart: ctx?.onAbortHandle,
@@ -373,6 +412,12 @@ async function execCommand(
   }
   if (cap.aborted) {
     return { ok: false, error: 'The user interrupted this command before it finished.' }
+  }
+  if (cap.busy) {
+    return {
+      ok: false,
+      error: `Tab "${tabId}" is still running another command, so this one was not sent. Retry once it finishes.`
+    }
   }
 
   // Record the observed environment so later turns' snapshot can show it without
@@ -771,9 +816,9 @@ export async function executeToolCall(
     case 'read_file':
       return readFile(args)
     case 'edit_file':
-      return editFile(args)
+      return editFile(args, ctx)
     case 'write_file':
-      return writeFile(args)
+      return writeFile(args, ctx)
     case 'grep':
       return grepFiles(args)
     case 'glob':

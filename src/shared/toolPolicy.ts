@@ -17,7 +17,7 @@
  */
 import { isDangerous } from './dangerousCommands'
 import { isAutoApprovedTool } from './aiTools'
-import type { AutonomyMode } from './types'
+import type { AutonomyMode, CopilotAgentMode } from './types'
 
 export const DEFAULT_AUTONOMY_MODE: AutonomyMode = 'balanced'
 
@@ -138,6 +138,11 @@ export interface PolicyInput {
    * task it was given for is a grant the user did not actually make.
    */
   sessionAllowlist?: ReadonlySet<string>
+  /**
+   * Plan mode is a hard gate: mutating exec and every write tool are denied
+   * even if the session allowlist would otherwise auto-run them.
+   */
+  agentMode?: CopilotAgentMode
 }
 
 function parseCommand(argsJson: string | undefined): string | null {
@@ -155,7 +160,22 @@ function parseCommand(argsJson: string | undefined): string | null {
  * auto-approved in any mode — autonomy governs convenience, not safety.
  */
 export function decideToolCall(input: PolicyInput): ToolDecision {
-  const { tool, argsJson, mode, sessionAllowlist } = input
+  const { tool, argsJson, mode, sessionAllowlist, agentMode } = input
+
+  if (agentMode === 'plan') {
+    if (isAutoApprovedTool(tool)) return 'auto'
+    if (tool === 'exec_command' || tool === 'run_in_terminal') {
+      const command = parseCommand(argsJson)
+      if (command === null) return 'deny'
+      if (!isReadOnlyCommand(command)) return 'deny'
+      return 'auto'
+    }
+    return 'deny'
+  }
+
+  // Execute mode has no silent exec channel: a leftover exec_command is deny
+  // even if the session allowlist would otherwise auto-run it.
+  if (agentMode === 'execute' && tool === 'exec_command') return 'deny'
 
   if (isAutoApprovedTool(tool)) return 'auto'
 

@@ -51,8 +51,9 @@ export default function ModelSelect({
     const trigger = triggerRef.current
     if (!trigger) return
     const rect = trigger.getBoundingClientRect()
-    const menuWidth = rect.width || MENU_WIDTH
-    let left = rect.left
+    const menuWidth = MENU_WIDTH
+    let left = rect.right - menuWidth
+    if (left < 8) left = 8
     if (left + menuWidth > window.innerWidth - 8) {
       left = Math.max(8, window.innerWidth - menuWidth - 8)
     }

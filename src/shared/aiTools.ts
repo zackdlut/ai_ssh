@@ -41,6 +41,16 @@ export const READONLY_TOOLS = new Set([
 export const LOCAL_BOOKKEEPING_TOOLS = new Set(['update_plan'])
 
 /**
+ * Tools Plan mode is allowed to advertise. `exec_command` stays so ops can
+ * `ps` / `systemctl status`; mutating commands are denied later by toolPolicy.
+ */
+export const PLAN_MODE_TOOLS = new Set([
+  ...READONLY_TOOLS,
+  'update_plan',
+  'exec_command'
+])
+
+/**
  * Read-only tools that fully render their result as a rich card the user asked
  * to see (list cards / the settings card). When a turn runs only these, the
  * card IS the answer: the agent loop must not nudge a silent follow-up turn into
@@ -133,6 +143,28 @@ export interface ToolSurfaceOptions {
    * branch, the single largest schema in the app.
    */
   aiSettingsIntent?: boolean
+  /**
+   * Restrict the advertised surface to read tools + update_plan + exec_command.
+   * Write tools are omitted so the prompt never explains how to call them.
+   */
+  planMode?: boolean
+  /**
+   * Execute mode: shell goes through the visible PTY. `exec_command` is
+   * omitted; `run_in_terminal` is added even on the core tier.
+   */
+  executeMode?: boolean
+}
+
+function applyExecuteModeTools(tools: AIToolDefinition[]): AIToolDefinition[] {
+  const withoutExec = tools.filter((t) => t.function.name !== 'exec_command')
+  if (withoutExec.some((t) => t.function.name === 'run_in_terminal')) return withoutExec
+  const rit = AI_TOOLS.find((t) => t.function.name === 'run_in_terminal')
+  if (!rit) return withoutExec
+  const insertAt = tools.findIndex((t) => t.function.name === 'exec_command')
+  const idx = insertAt < 0 ? withoutExec.length : Math.min(insertAt, withoutExec.length)
+  const next = withoutExec.slice()
+  next.splice(idx, 0, rit)
+  return next
 }
 
 export function buildAITools(tier: ToolTier, opts: ToolSurfaceOptions = {}): AIToolDefinition[] {
@@ -141,8 +173,12 @@ export function buildAITools(tier: ToolTier, opts: ToolSurfaceOptions = {}): AIT
   const withSkills = opts.hasSkills
     ? inTier
     : inTier.filter((t) => t.function.name !== 'read_skill')
-  if (!opts.aiSettingsIntent) return withSkills
-  return withSkills.map((t) =>
+  let gated = opts.planMode
+    ? withSkills.filter((t) => PLAN_MODE_TOOLS.has(t.function.name))
+    : withSkills
+  if (opts.executeMode && !opts.planMode) gated = applyExecuteModeTools(gated)
+  if (!opts.aiSettingsIntent) return gated
+  return gated.map((t) =>
     t.function.name === 'update_app_settings' ? UPDATE_APP_SETTINGS_FULL : t
   )
 }
@@ -421,7 +457,7 @@ const BASE_TOOLS: AIToolDefinition[] = [
     function: {
       name: 'run_in_terminal',
       description:
-        "Run a command in the user's visible terminal session, so they watch it execute and keep its output in their scrollback. Use ONLY when being seen matters (a demo, a long build the user asked to watch, or a command that leaves the shell in a state later commands depend on, like an interactive login). For everything else use exec_command.",
+        "Run a command in the user's visible terminal session so they watch it execute and keep its output in their scrollback. Use this when being seen matters, when the command must leave the user's own shell in a new state, or when it is the only shell tool available this turn. Do not run interactive TUIs (vim, nano, less, top) — they cannot be captured. Prefer file tools over cat/sed when those are available.",
       parameters: {
         type: 'object',
         properties: {

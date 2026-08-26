@@ -4,8 +4,10 @@ import {
   findMentionSpans,
   liveMentionRange,
   snapSelectionToMentions,
-  type MentionableTab
+  type MentionableTab,
+  type MentionSpan
 } from '../../lib/pinnedTerminal'
+import { findFileMentionSpans, isFilePathMentionQuery } from '../../lib/fileMentions'
 
 interface Props {
   value: string
@@ -17,15 +19,24 @@ interface Props {
   onAtomicEdit: (next: string, caret: number) => void
 }
 
-type Seg = { key: string; kind: 'text' | 'chip' | 'pending'; value: string }
+type Seg = { key: string; kind: 'text' | 'chip' | 'path' | 'pending'; value: string }
 
 function highlightSegments(text: string, tabs: readonly MentionableTab[], caret: number): Seg[] {
   const chips = findMentionSpans(text, tabs)
+  const paths = findFileMentionSpans(text)
   const live = liveMentionRange(text, caret)
+  const liveQuery = live ? text.slice(live.start + 1, live.end) : ''
+  const liveIsFile = live ? isFilePathMentionQuery(liveQuery) : false
   const pending =
-    live && !chips.some((c) => c.start < live.end && c.end > live.start) ? live : null
+    live &&
+    !liveIsFile &&
+    !chips.some((c) => c.start < live.end && c.end > live.start) &&
+    !paths.some((c) => c.start < live.end && c.end > live.start)
+      ? live
+      : null
   const marks = [
     ...chips.map((c) => ({ start: c.start, end: c.end, kind: 'chip' as const })),
+    ...paths.map((c) => ({ start: c.start, end: c.end, kind: 'path' as const })),
     ...(pending ? [{ start: pending.start, end: pending.end, kind: 'pending' as const }] : [])
   ].sort((a, b) => a.start - b.start)
 
@@ -33,6 +44,7 @@ function highlightSegments(text: string, tabs: readonly MentionableTab[], caret:
   let i = 0
   let n = 0
   for (const m of marks) {
+    if (m.start < i) continue
     if (m.start > i) {
       segs.push({ key: `t${n++}`, kind: 'text', value: text.slice(i, m.start) })
     }
@@ -42,6 +54,13 @@ function highlightSegments(text: string, tabs: readonly MentionableTab[], caret:
   if (i < text.length) segs.push({ key: `t${n++}`, kind: 'text', value: text.slice(i) })
   if (segs.length === 0) segs.push({ key: 'empty', kind: 'text', value: text })
   return segs
+}
+
+function allChipSpans(text: string, tabs: readonly MentionableTab[]): MentionSpan[] {
+  return [
+    ...findMentionSpans(text, tabs),
+    ...findFileMentionSpans(text).map((s) => ({ start: s.start, end: s.end, token: s.path }))
+  ]
 }
 
 const ComposerInput = forwardRef<HTMLTextAreaElement, Props>(function ComposerInput(
@@ -74,7 +93,7 @@ const ComposerInput = forwardRef<HTMLTextAreaElement, Props>(function ComposerIn
 
   const onSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>): void => {
     const el = e.currentTarget
-    const spans = findMentionSpans(value, tabs)
+    const spans = allChipSpans(value, tabs)
     const snapped = snapSelectionToMentions(spans, el.selectionStart, el.selectionEnd)
     if (snapped && (snapped.start !== el.selectionStart || snapped.end !== el.selectionEnd)) {
       el.setSelectionRange(snapped.start, snapped.end)
@@ -115,6 +134,10 @@ const ComposerInput = forwardRef<HTMLTextAreaElement, Props>(function ComposerIn
         {segs.map((seg) =>
           seg.kind === 'chip' ? (
             <span key={seg.key} className="composer-mention">
+              {seg.value}
+            </span>
+          ) : seg.kind === 'path' ? (
+            <span key={seg.key} className="composer-mention composer-mention--path">
               {seg.value}
             </span>
           ) : seg.kind === 'pending' ? (
