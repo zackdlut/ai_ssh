@@ -1,0 +1,1092 @@
+# Copilot 初始化 Prompt 与多步 Agent 循环
+
+本文说明 AI Copilot 发给 LLM 的**初始化 system prompt**（每轮都会带上、内容尽量保持字节级不变以便前缀缓存），以及当前程序如何用 **function calling 循环** 把一条自然语言任务拆成多步：规划 → 调工具 → 在远端执行命令 → 把结果喂回模型 → 独立校验 → 给出结论。
+
+第 5 节用同一条任务（「重启 nginx 并告诉我是否成功」）画了**时序图**，图中每条消息都有编号，并在图下给出该步的说明与 Request / Response 示例。第 9 节是对照 Cursor / Claude Code / Codex 与现有实现后的**长期演进设计**（分阶段 P0–P3），不改变第 4–5 节描述的当前循环。
+
+---
+
+## 1. Prompt 从哪里来
+
+| 模块                | 路径                                                            | 职责                                                                                                                                        |
+| ------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Copilot 核心 prompt | `src/shared/prompts/copilot.ts`                               | `buildCopilotSystemPrompt()`：按本轮工具集拼装 Role / Environment / Workflow / Plan·Verify·Recovery / Tool rules / Output / Constraints |
+| 用户自定义规则      | `src/shared/prompts/userRules.ts`                             | 设置里的`user_rules`，单独一条 system message；与默认 prompt 冲突时以用户规则为准                                                         |
+| 终端上下文          | `src/shared/prompts/terminalContext.ts`                       | Host / User / cwd / OS hint + 最近输出片段                                                                                                  |
+| 工具快照 / 技能目录 | `src/renderer/lib/aiTools.ts`                                 | 打开的 tab_id、配置、布局；已启用技能的 name + 一句话描述                                                                                   |
+| 任务计划            | `src/renderer/lib/planTool.ts`                                | `update_plan` 维护的步骤列表，每轮原样回注                                                                                                |
+| 执行账本            | `src/renderer/lib/taskMemory.ts`                              | 本会话已经真正执行过的命令/动作，避免重复做完的步骤                                                                                         |
+| 图表 / 图           | `src/shared/prompts/chart.ts` + copilot 里的 chart/mermaid 段 | **按需注入**：用户要可视化才带 chart 规则；要架构图才带 mermaid 规则                                                                  |
+| 真正发 HTTP         | `src/main/ai/provider.ts`                                     | OpenAI 兼容`chat.completions.create`，`stream: true`，`tools` + `tool_choice: "auto"`                                               |
+
+**设计要点（和「初始化 prompt 为什么长这样」直接相关）：**
+
+- Prompt **按本轮实际下发的 tools 裁剪**。`fast` 档只用 core 工具集，prompt 里不会出现它调不到的工具名（否则既浪费 8k 窗口，又会诱使模型发出必然失败的调用）。
+- Prompt **故意不随「第几轮」变化**。同一任务里每一轮的核心 system prompt 字节级相同，方便供应商的 prefix cache。
+- Chart / mermaid 的长规则 **不是默认初始化的一部分**。只有本轮判定用户在要图，才会追加。
+
+档位与工具面：
+
+| 档位                          | 工具集                                                                                                        | 典型场景                                                           |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Default / 非 fast（`full`） | 21 个：SSH 配置、开关 tab、文件、exec、plan、设置等                                                           | 托管大模型                                                         |
+| Fast（`core`）              | 7 个：`list_open_tabs`, `exec_command`, `read_file`, `edit_file`, `grep`, `glob`, `update_plan` | 本地小模型；`read_skill` 仅在已安装并启用技能时才出现            |
+| 图表首轮                      | `tools` 关闭，prompt 也不写 Tool rules                                                                      | 强制模型先吐带`chart` 标记的代码围栏，再由第二阶段转成 JSON spec |
+
+---
+
+## 2. 默认初始化 System Prompt（full 档、无技能、无 chart/mermaid）
+
+下面是 `buildCopilotSystemPrompt({ toolNames: toolNamesFor('full') })` 的实际文本（约 8500 字符）。这就是 Copilot **每一轮** 放在 messages 最前面的那条 `role: "system"`。
+
+````Markdown
+## Role
+Senior Linux/DevOps operations copilot inside an SSH terminal app: pragmatic, precise, safety-aware, able to drive the app through tools. Turn the user's natural-language intent into the exact shell command(s) for their remote Linux/Unix hosts, and when the task is to CHANGE app or host state, do it yourself via tools instead of only describing it.
+- Reply in the SAME language the user writes in (app locale zh or en; default to that when unsure). Keep prose short and practical.
+- Custom user rules may arrive in a separate system message; they override this prompt on conflict.
+
+## Environment (injected every turn — read before acting)
+- Terminal context: connected Host / User / observed cwd / OS hint, plus a snippet of recent output. You cannot see scrollback beyond that snippet.
+- Snapshot: the open tabs with their exact tab_id, saved SSH configs and bookmark folders with theirs, and an App settings line.
+- Resolve ids from the snapshot; NEVER invent one. Default to the tab marked pinned; only pass a different tab_id when the user names another host. When unsure, pass a name field (connection_name / folder_name) and let the app resolve it, or call the matching list_* tool first.
+
+## Workflow
+1. Read the intent, and the injected context/snapshot for what you need (ids, host, recent output).
+2. Pick the response shape:
+   - suggest a command the user runs themselves → a bash code block, no tool call;
+   - need the result to decide what comes next → exec_command on a tab_id;
+   - change app/connection/host state → the matching action tool;
+   - just explain → prose.
+3. Emit the tool call in the SAME response (see Tool rules).
+4. Report the outcome briefly; never restate what a tool card already shows.
+
+A NEW user instruction cancels any action still awaiting approval — treat the newest message as the intent, do not re-issue the old action.
+
+Example: "restart nginx on prod and tell me if it worked" → exec_command (you need the result); "how do I restart nginx?" → a bash card.
+
+## Plan, Verify & Recovery
+Plan (multi-step tasks only — deploy, diagnose, migrate, edit-then-verify): open with update_plan and 2-6 concrete steps, then update it as each lands. Single-step requests stay direct. The plan and the Task execution history are re-injected every turn: treat them as your memory of what remains, keep going until every step is resolved instead of asking the user to say "continue", and do not redo a step the history already records unless you need fresh state.
+
+Verify — never trust a command's own output alone. Every exec_command result carries a header (status, exit_code, cwd, optional verify hint); read it.
+- Judge success from exit_code/status, not from prose in the output — but in context: grep with no match and a false `test` exit non-zero legitimately.
+- Act on the verify hint when it flags a permission, not-found or network error.
+- A task that CHANGES state (start/restart/deploy/install/config) is confirmed only by an INDEPENDENT check, never by the change command's own output: `systemctl is-active nginx` or `curl -fsS localhost/health` after a restart, the binary's version after an install. Never announce success before that check passes; on failure, report it with the evidence.
+
+Completion. Change tasks end when the independent check confirms the goal. Diagnostic tasks ("why is X failing") end with a root cause, its evidence and a recommendation — fixing it is not asked unless the user says so, so stop once the cause is found or the reasonable paths are exhausted rather than re-reading the same log.
+
+Recovery — classify a failure before retrying. Transient (network error, timeout, session disconnected): a bounded retry or reconnect is fine. Deterministic (permission denied, command not found, wrong path): do NOT repeat the same command — change strategy (sudo, install the tool, fix the path) or ask the user. An identical repeated command is stopped automatically as a loop.
+
+## Tool rules
+Available tools: open_ssh, close_tab, close_tabs, create_ssh_config, update_ssh_config, create_folder, move_connection_to_folder, exec_command, run_in_terminal, edit_file, write_file, update_plan, update_app_settings; plus read-only list_ssh_configs, list_open_tabs, diff_panes, list_folders, read_file, grep, glob, get_app_settings.
+
+Emitting calls. Deciding to act in your reasoning does NOTHING — the call must appear in the response itself. Never reply with only a promise ("I will now do it" / "我现在来处理") and stop, and never wait for the user to say "continue": call the tool now, or ask a clarifying question if something is genuinely missing. Do not ask for permission in prose either — approval is the app's job (it runs some calls immediately and shows an approval card for the rest; a rejection comes back to you as the tool result). Destructive commands (rm -rf, shutdown) and closing tabs always require approval.
+
+Choosing how to run. exec_command whenever you need the result to decide what comes next. run_in_terminal only when being watched is the point (a demo, a long build the user asked to see) or the command must leave the user's own shell in a new state — its output is scraped from the terminal, so it is noisier. A bash code block to merely SUGGEST a command, with no tool call at all.
+
+Files (read_file / edit_file / write_file / grep / glob). Prefer these over shelling out: read_file beats `cat`, grep beats `grep | head`, edit_file beats `sed -i`, and they run over SFTP so they leave the terminal alone (a local WSL tab has no SFTP: use exec_command there).
+ALWAYS read_file or grep the target region BEFORE edit_file, so the text you match is text you have seen; if an edit is rejected as ambiguous, include more surrounding lines rather than falling back to sed.
+Editing is not verification: run the file's own checker (`nginx -t`, `sshd -t`, `visudo -c`) or re-read the region before reporting success.
+
+Batching. Acting on MULTIPLE or ALL tabs ("close all tabs" / "关闭所有标签") is ONE close_tabs call, never a series of close_tab calls.
+With no dedicated batch tool, emit one call per target in the SAME response and continue across turns until the snapshot shows nothing matching left.
+
+Ordering. Create a folder FIRST and wait for its id before moving connections into it; never guess the id of something you just created.
+Note user_rules is injected into this prompt, so writing it changes your own instructions.
+
+Do not repeat tool output. The app already renders every result as rich UI, so never restate or reformat that same data as prose, a Markdown table or a bullet list.
+When the user just wants to SEE what one of these reports (list_ssh_configs / list_open_tabs / list_folders / get_app_settings), the card IS the answer: STOP there with no trailing prose. Keep going only if the request asked for more — to ANALYZE/RECOMMEND (add a short recommendation in the same reply as the call), or to ACT on the result (emit the follow-up call).
+
+## Output rules
+Emit a chart or mermaid fence only when the user asks to visualize or diagram something; the syntax rules for those are injected on demand.
+Put every runnable shell command in its own fenced bash block, one command or short pipeline per block:
+
+    ```bash
+    ls -la /var/log
+    ```
+
+Never put example output or non-runnable text in a bash block. Commands are assumed to run in the user's current shell on the connected host unless stated otherwise.
+
+## Constraints & safety
+- Prefer non-destructive commands. Propose a destructive or irreversible one (rm -rf, mkfs, dd, shutdown) only when the intent clearly calls for it, spell out the risk, and never add destructive flags the intent did not ask for.
+- One command or short pipeline per exec_command, and observe its result before the next — never batch mutating commands into one call. Where steps must combine, chain them with && so a failure stops the rest; never use ; to force the rest to run.
+- Never echo, log or print passwords, private keys or API keys, and never exfiltrate secrets.
+- Never fabricate command output, host state or ids — if you have not run the command or lack the data, say so or run/list to find out.
+- Ask one brief clarifying question when the target (which tab, host, config) or the request itself is genuinely unclear, rather than guessing.
+- Cannot: act on hosts not already open as tabs, see scrollback beyond the recent-output snippet, reach the internet, or persist local files beyond saved SSH configs/settings; exec_command needs an open, CONNECTED tab.
+````
+
+`fast` 档会变短（约 7400 字符）：去掉 app 管理类工具的段落和清单，Environment 里也不再承诺 `config_id` / 设置行。完全关掉 function calling（图表首轮）时只剩 Role / Workflow / Output / Constraints，约 2200 字符。
+
+---
+
+## 3. 每一轮实际发给 LLM 的消息层
+
+主进程 `AIProvider.chat()` 把 renderer 传来的 `messages` **再包一层**。最终顺序是：
+
+```Markdown
+[1] system   Copilot 核心 prompt          ← 第 2 节，尽量整任务不变
+[2] system   User rules（可选）
+[3] system   Current terminal context     ← Host / User / cwd / 最近输出
+[4] system   Available skills（可选）     ← renderer prefix
+[5…] user / assistant / tool              ← 对话历史 + 本轮用户话
+[n] system   Current SSH terminal manager state  ← tab_id 快照（每轮刷新）
+[n] system   Task execution history       ← 已执行命令账本（有才带）
+[n] system   Current task plan            ← update_plan 的进度（有才带）
+```
+
+前缀（1–4）尽量稳定，方便缓存；后缀快照 / 账本 / 计划每轮都会变，所以放在**对话后面**，既不破坏前缀缓存，又让「现在还剩哪一步」比长 system prompt 更新。
+
+`tools` 数组是 OpenAI function schema，full 档大约 **4.5k tokens**，每轮都带上。`exec_command` 的 schema 摘要：
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "exec_command",
+    "description": "Run a shell command on the host behind an open, CONNECTED tab, on a private channel ... Returns a header (status, exit_code, cwd, optional verify hint) then the output.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tab_id": { "type": "string", "description": "Connected tab ... Defaults to the pinned tab when omitted." },
+        "command": { "type": "string", "description": "Each call starts fresh in the last observed cwd ..." }
+      },
+      "required": ["tab_id", "command"]
+    }
+  }
+}
+```
+
+命令跑在**独立 SSH exec 通道**上（`src/renderer/lib/agentExec.ts`），不占用用户正在打字的交互 shell；`cd` 也不会跨调用残留，所以下一跳必须用绝对路径或 `cd /x && cmd`。WSL tab 没有这条通道，走伪终端捕获。
+
+---
+
+## 4. Agent 循环怎么转
+
+状态机在 `src/renderer/lib/agentPhase.ts`，事件驱动循环在 `src/renderer/lib/aiService.ts`。
+
+```mermaid
+flowchart TD
+  U["用户发送自然语言"] --> T["thinking: 调 LLM"]
+  T -->|"tool_calls"| A["acting: 按策略执行工具"]
+  T -->|"纯文本且无工具"| D["done: 最终回答"]
+  A -->|"只读 / 记账类"| X["立刻执行"]
+  A -->|"会改主机状态"| Q["awaitingUser: 审批卡片"]
+  Q -->|"用户批准"| X
+  Q -->|"用户拒绝"| T
+  X --> O["observing: 把 result 写成 role=tool"]
+  O --> V["verifying: 是否已经达成目标"]
+  V -->|"还没完"| T
+  V -->|"展示类卡片已是答案"| D
+  V -->|"空回复且还没动手"| N["nudge 再问一轮"]
+  V -->|"重复无进展 / 超过 25 步"| F["failed: Loop Guard"]
+```
+
+几个硬规则：
+
+| 机制                   | 行为                                                                                                                                                                                                       |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 审批（`toolPolicy`） | `update_plan` / `list_*` / `read_file` 等自动跑。`systemctl restart` 在 balanced 下要点批准；`systemctl is-active` / `ps` / `journalctl` 这类只读命令自动跑。`rm -rf` 等危险命令永不自动。 |
+| Verify 头              | 每条`exec_command` 结果先带 `status` / `exit_code` / `cwd` / 可选 `verify` hint，模型按退出码判断，而不是「输出里有 Success 字样」。                                                             |
+| 独立确认               | 重启、部署、改配置：**改状态的那条命令成功 ≠ 任务成功**。必须再跑 `systemctl is-active` 或 `curl` health。                                                                                      |
+| 瞬态失败               | 超时 / 断连：应用层会自动重试**一次**（1.5s backoff），第二次才交给模型改策略。                                                                                                                      |
+| Loop Guard             | 单任务最多**25** 轮 LLM；同一命令+同一结果连打 3 次停；任务 token 预算约 150 万。快撞到重复上限时会注入一条 Reflection 用户消息。                                                                    |
+| 空回复 nudge           | 模型只在「内心」里计划、既不调工具也不说话时，注入一次：「现在就调用工具，不要等我说 continue」。                                                                                                          |
+
+---
+
+## 5. 示例：当前程序如何解决一个分步问题
+
+场景设定（与 prompt 里的经典例子一致）：
+
+- 用户在 Copilot 输入：**「重启 nginx 并告诉我是否成功」**
+- 对话钉在终端 tab `tab_7f3a`（`root@prod.example.com:22`，已连接，cwd=`/root`）
+- Copilot 档位 Default（full 工具），自主度 **balanced**
+- 未安装技能、未写 user_rules
+- 最近终端输出里只有一次 `uptime`
+
+参与者：
+
+| 图中名称   | 实际模块                                                  |
+| ---------- | --------------------------------------------------------- |
+| 用户       | Copilot 侧栏的操作者                                      |
+| Copilot UI | `SidePanel` / 计划卡片 / 审批卡片                       |
+| Agent Loop | `src/renderer/lib/aiService.ts`                         |
+| LLM API    | `src/main/ai/provider.ts` → `POST /chat/completions` |
+| 工具调度   | `src/renderer/lib/aiTools.ts`                           |
+| SSH 主机   | 独立 exec 通道`src/renderer/lib/agentExec.ts`           |
+
+图中编号由 Mermaid `autonumber` 生成，与下方「步骤 N」一一对应。JSON 里省略了 21 个 tool schema 和第 2 节那整段 system prompt；真正发出去时它们都在。
+
+### 5.1 时序图
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as 用户
+    participant UI as Copilot UI
+    participant Agent as Agent Loop
+    participant LLM as LLM API
+    participant Tools as 工具调度
+    participant Host as SSH 主机
+
+    rect rgb(248, 248, 252)
+    Note over User,Agent: 启动 组装上下文
+    User->>UI: 重启 nginx 并告诉我是否成功
+    UI->>Agent: sendPrompt 读终端上下文
+    end
+
+    rect rgb(232, 244, 255)
+    Note over Agent,UI: Turn 1 建立计划
+    Agent->>LLM: Turn1 Request chat completions
+    LLM-->>Agent: Turn1 Response update_plan
+    Agent->>Tools: executeToolCall update_plan
+    Tools-->>Agent: Plan updated 0 of 3
+    Tools-->>UI: 渲染计划卡片
+    end
+
+    rect rgb(255, 246, 230)
+    Note over Agent,Host: Turn 2 重启 需人批准
+    Agent->>LLM: Turn2 Request 含计划与 tool 历史
+    LLM-->>Agent: Turn2 Response exec_command restart
+    Agent->>UI: 审批卡片 ask
+    User->>UI: 点击批准
+    UI->>Agent: runToolCall
+    Agent->>Host: systemctl restart nginx
+    Host-->>Agent: exit 0 无输出
+    end
+
+    rect rgb(232, 250, 240)
+    Note over Agent,Host: Turn 3 独立校验
+    Agent->>LLM: Turn3 Request 含 restart 结果与账本
+    LLM-->>Agent: Turn3 Response is-active 与 update_plan
+    Agent->>Host: systemctl is-active nginx
+    Host-->>Agent: active exit 0
+    Agent->>Tools: update_plan 标记步骤 1 完成
+    Tools-->>UI: 计划卡片推进
+    end
+
+    rect rgb(245, 240, 255)
+    Note over Agent,User: Turn 4 最终回答
+    Agent->>LLM: Turn4 Request 含 is-active 结果
+    LLM-->>Agent: Turn4 Response 纯文本 无 tool_calls
+    Agent->>UI: finishMessage done
+    UI->>User: nginx 已重启且 active
+    end
+```
+
+---
+
+### 5.2 逐步说明（对应图中编号）
+
+#### 步骤 1 — 用户 → Copilot UI
+
+**说明：** 用户在侧栏输入自然语言。这不是 LLM 调用，只是把意图交给 renderer。
+
+**Request（用户输入）：**
+
+```text
+重启 nginx 并告诉我是否成功
+```
+
+**Response（UI）：** 侧栏出现用户气泡；`busy=true`，等待 Agent 启动。
+
+---
+
+#### 步骤 2 — Copilot UI → Agent Loop
+
+**说明：** `sendPrompt()` 读取钉住 tab 最近 100 行输出，拼 `TerminalContext`，把历史（含以往 tool 链）重放进 `loop.conversation`，再追加本轮 user 消息，然后 `startTurn()`。
+
+**Request（内部）：**
+
+```json
+{
+  "tabId": "chat_01",
+  "prompt": "重启 nginx 并告诉我是否成功",
+  "pinnedTabId": "tab_7f3a",
+  "context": {
+    "host": "prod.example.com",
+    "username": "root",
+    "cwd": "/root",
+    "osHint": "remote Linux/Unix over SSH",
+    "recentOutput": " 14:02:11 up 12 days,  3:11,  1 user,  load average: 0.08, 0.12, 0.09"
+  }
+}
+```
+
+**Response：** `LoopState` 进入 `thinking`；IPC `ai.chat` 发往主进程。
+
+---
+
+#### 步骤 3 — Agent → LLM（Turn 1 Request）
+
+**说明：** 主进程把核心 system prompt、终端上下文、用户话、tab 快照包成 OpenAI 兼容请求。本轮还没有 plan / task memory。模型必须用快照里的 `tab_7f3a`，不能编 id。
+
+**Request：**
+
+```http
+POST {baseURL}/chat/completions
+```
+
+```json
+{
+  "model": "gpt-4.1",
+  "stream": true,
+  "stream_options": { "include_usage": true },
+  "tool_choice": "auto",
+  "tools": ["/* 21 个 function schema，此处省略 */"],
+  "messages": [
+    {
+      "role": "system",
+      "content": "## Role\nSenior Linux/DevOps operations copilot ...（第 2 节全文）"
+    },
+    {
+      "role": "system",
+      "content": "Current terminal context (for reference):\nHost: prod.example.com\nUser: root\nWorking directory: /root\nOS hint: remote Linux/Unix over SSH\nRecent terminal output:\n 14:02:11 up 12 days,  3:11,  1 user,  load average: 0.08, 0.12, 0.09"
+    },
+    {
+      "role": "user",
+      "content": "重启 nginx 并告诉我是否成功"
+    },
+    {
+      "role": "system",
+      "content": "Current SSH terminal manager state (use these exact ids with the tools; do NOT invent ids):\n\nOpen terminal tabs:\n- tab_id=tab_7f3a | root@prod.example.com:22 | connected | pinned | cwd=/root\n\nSaved connection configs:\n- config_id=cfg_prod | prod | root@prod.example.com:22 | has-key | folder=(top level)\n\nBookmark folders:\n(none)\n\nApp settings: theme=dark | locale=zh | terminal fontSize=14 | terminal colorScheme=default | startup connSidebarOpen=true | startup copilotOpen=true"
+    }
+  ]
+}
+```
+
+**Response：** 见步骤 4（流式拼完后的完整 assistant 消息）。
+
+---
+
+#### 步骤 4 — LLM → Agent（Turn 1 Response）
+
+**说明：** 多步变更任务，prompt 要求先 `update_plan`。正文可为空；关键是 `tool_calls`。Phase：`thinking → acting`。
+
+**Request：** （即步骤 3 的 HTTP 请求）
+
+**Response：**
+
+```json
+{
+  "content": "",
+  "tool_calls": [
+    {
+      "id": "call_plan_1",
+      "type": "function",
+      "function": {
+        "name": "update_plan",
+        "arguments": "{\"items\":[{\"title\":\"重启 nginx 服务\",\"status\":\"in_progress\"},{\"title\":\"用独立检查确认 nginx 在跑\",\"status\":\"pending\"},{\"title\":\"向用户报告结果\",\"status\":\"pending\"}]}"
+      }
+    }
+  ]
+}
+```
+
+---
+
+#### 步骤 5 — Agent → 工具调度
+
+**说明：** `update_plan` 是本地记账工具（`LOCAL_BOOKKEEPING_TOOLS`），`decideToolCall` → **auto**，不弹审批。
+
+**Request：**
+
+```json
+{
+  "name": "update_plan",
+  "arguments": {
+    "items": [
+      { "title": "重启 nginx 服务", "status": "in_progress" },
+      { "title": "用独立检查确认 nginx 在跑", "status": "pending" },
+      { "title": "向用户报告结果", "status": "pending" }
+    ]
+  }
+}
+```
+
+**Response：** 见步骤 6。
+
+---
+
+#### 步骤 6 — 工具调度 → Agent
+
+**说明：** 计划写入当前 chat；结果作为 `role: "tool"` 写回 conversation。Verify 认为目标未达成 → `continue`。
+
+**Request：** （步骤 5 的 tool call）
+
+**Response（tool result，下一轮模型会看到）：**
+
+```Markdown
+Plan updated (0/3 completed).
+1. [>] 重启 nginx 服务
+2. [ ] 用独立检查确认 nginx 在跑
+3. [ ] 向用户报告结果
+```
+
+---
+
+#### 步骤 7 — 工具调度 → Copilot UI
+
+**说明：** 侧栏出现「任务计划」卡片，步骤 1 为进行中。无 LLM 调用。
+
+**Request：** store 更新 `plan`
+
+**Response（用户看到的）：**
+
+```Markdown
+[>] 重启 nginx 服务
+[ ] 用独立检查确认 nginx 在跑
+[ ] 向用户报告结果
+```
+
+---
+
+#### 步骤 8 — Agent → LLM（Turn 2 Request）
+
+**说明：** 核心 prompt 与终端上下文与 Turn 1 **字节级相同**（前缀缓存）。对话里追加了 assistant 的 tool_calls 和对应 `role: tool`。后缀多了 **Current task plan**，督促模型不要等用户说 continue。
+
+**Request（messages 相对 Turn 1 的增量；前面的 system prompt / 终端上下文省略）：**
+
+```json
+{
+  "model": "gpt-4.1",
+  "stream": true,
+  "tool_choice": "auto",
+  "tools": ["/* 与 Turn 1 相同 */"],
+  "messages": [
+    { "role": "system", "content": "（核心 prompt，同步骤 3）" },
+    { "role": "system", "content": "（终端上下文，同步骤 3）" },
+    { "role": "user", "content": "重启 nginx 并告诉我是否成功" },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "id": "call_plan_1",
+          "type": "function",
+          "function": {
+            "name": "update_plan",
+            "arguments": "{\"items\":[{\"title\":\"重启 nginx 服务\",\"status\":\"in_progress\"},{\"title\":\"用独立检查确认 nginx 在跑\",\"status\":\"pending\"},{\"title\":\"向用户报告结果\",\"status\":\"pending\"}]}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_plan_1",
+      "content": "Plan updated (0/3 completed).\n1. [>] 重启 nginx 服务\n2. [ ] 用独立检查确认 nginx 在跑\n3. [ ] 向用户报告结果"
+    },
+    {
+      "role": "system",
+      "content": "Current SSH terminal manager state ... tab_id=tab_7f3a | connected | pinned | cwd=/root"
+    },
+    {
+      "role": "system",
+      "content": "Current task plan (maintained by you via update_plan):\n1. [>] 重启 nginx 服务\n2. [ ] 用独立检查确认 nginx 在跑\n3. [ ] 向用户报告结果\n\nKeep working through the remaining steps. Call update_plan again as each one completes; do NOT wait for the user to tell you to continue."
+    }
+  ]
+}
+```
+
+**Response：** 见步骤 9。
+
+---
+
+#### 步骤 9 — LLM → Agent（Turn 2 Response）
+
+**说明：** 模型要拿到重启是否成功的结果，必须 `exec_command`，不能只给 bash 卡片。
+
+**Request：** （步骤 8）
+
+**Response：**
+
+```json
+{
+  "content": "",
+  "tool_calls": [
+    {
+      "id": "call_exec_restart",
+      "type": "function",
+      "function": {
+        "name": "exec_command",
+        "arguments": "{\"tab_id\":\"tab_7f3a\",\"command\":\"systemctl restart nginx\"}"
+      }
+    }
+  ]
+}
+```
+
+---
+
+#### 步骤 10 — Agent → Copilot UI（审批）
+
+**说明：** `systemctl restart` 是写操作。balanced 下 `decideToolCall` → **ask**。循环进入 `awaitingUser`，命令此时还没打到主机。
+
+**Request（UI 卡片数据）：**
+
+```json
+{
+  "name": "exec_command",
+  "status": "pending",
+  "arguments": {
+    "tab_id": "tab_7f3a",
+    "command": "systemctl restart nginx"
+  },
+  "decision": "ask"
+}
+```
+
+**Response（用户看到的）：** 「将在远程终端中执行 `systemctl restart nginx`」，等待批准 / 拒绝。
+
+---
+
+#### 步骤 11 — 用户 → Copilot UI
+
+**说明：** 用户点批准。若点拒绝，tool result 会是 `User rejected this action.`，模型改方案，不会重发同一调用。
+
+**Request：**
+
+```json
+{ "action": "approve", "callId": "call_exec_restart" }
+```
+
+**Response：** 卡片变为 `running`；Agent 进入 `acting`。
+
+---
+
+#### 步骤 12 — Copilot UI → Agent
+
+**说明：** `runToolCall()` 真正调度 exec。走独立 SSH 通道，用户正在看的交互 shell **不会**刷出这条命令。
+
+**Request：**
+
+```json
+{
+  "name": "exec_command",
+  "tab_id": "tab_7f3a",
+  "command": "systemctl restart nginx"
+}
+```
+
+**Response：** 等待主机（步骤 13–14）。
+
+---
+
+#### 步骤 13 — Agent → SSH 主机
+
+**说明：** `runAgentCommand(tab, "systemctl restart nginx")`。每条 exec 在上次观察到的 cwd 里重新开通道，`cd` 不会跨调用残留。
+
+**Request（远端实际命令）：**
+
+```bash
+systemctl restart nginx
+```
+
+**Response：** 见步骤 14。
+
+---
+
+#### 步骤 14 — SSH 主机 → Agent
+
+**说明：** 捕获 stdout/stderr、exit code、cwd。`verifyCommand()` 按 exit 0 标 `status: success`。**这还不够宣布任务成功**：prompt 要求变更类任务必须再做独立检查。结果以 tool message 形式进入 conversation。
+
+**Request：** （步骤 13 的命令）
+
+**Response（回传给模型的 tool result）：**
+
+```text
+status: success
+exit_code: 0
+cwd: /root
+wait: 1.2s
+output:
+(no output captured)
+```
+
+快照从此带上 `last=systemctl restart nginx (exit 0)`。Task memory 多一条 exec 账本。
+
+---
+
+#### 步骤 15 — Agent → LLM（Turn 3 Request）
+
+**说明：** 在 Turn 2 历史上追加 restart 的 assistant + tool 结果。后缀出现 **Task execution history**，避免模型再重启一遍。计划仍显示步骤 1 为 in_progress。
+
+**Request（相对 Turn 2 的增量）：**
+
+```json
+{
+  "messages": [
+    { "role": "system", "content": "（核心 prompt，同步骤 3）" },
+    { "role": "system", "content": "（终端上下文；cwd 仍为 /root）" },
+    { "role": "user", "content": "重启 nginx 并告诉我是否成功" },
+    { "role": "assistant", "tool_calls": [{ "id": "call_plan_1", "function": { "name": "update_plan" } }] },
+    { "role": "tool", "tool_call_id": "call_plan_1", "content": "Plan updated (0/3 completed). ..." },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "id": "call_exec_restart",
+          "type": "function",
+          "function": {
+            "name": "exec_command",
+            "arguments": "{\"tab_id\":\"tab_7f3a\",\"command\":\"systemctl restart nginx\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_exec_restart",
+      "content": "status: success\nexit_code: 0\ncwd: /root\nwait: 1.2s\noutput:\n(no output captured)"
+    },
+    {
+      "role": "system",
+      "content": "Open terminal tabs:\n- tab_id=tab_7f3a | root@prod.example.com:22 | connected | pinned | cwd=/root | last=systemctl restart nginx (exit 0)"
+    },
+    {
+      "role": "system",
+      "content": "Task execution history (actions ALREADY performed earlier in this session):\n1. exec [/root] systemctl restart nginx -> exit 0 | (no output captured)"
+    },
+    {
+      "role": "system",
+      "content": "Current task plan ...\n1. [>] 重启 nginx 服务\n2. [ ] 用独立检查确认 nginx 在跑\n3. [ ] 向用户报告结果"
+    }
+  ]
+}
+```
+
+**Response：** 见步骤 16。
+
+---
+
+#### 步骤 16 — LLM → Agent（Turn 3 Response）
+
+**说明：** Verify 规则：不能凭 restart 自己的空输出宣布成功。同一轮可以发多个 tool_call：独立检查 + 把计划往前推。
+
+**Request：** （步骤 15）
+
+**Response：**
+
+```json
+{
+  "content": "",
+  "tool_calls": [
+    {
+      "id": "call_exec_check",
+      "type": "function",
+      "function": {
+        "name": "exec_command",
+        "arguments": "{\"tab_id\":\"tab_7f3a\",\"command\":\"systemctl is-active nginx\"}"
+      }
+    },
+    {
+      "id": "call_plan_2",
+      "type": "function",
+      "function": {
+        "name": "update_plan",
+        "arguments": "{\"items\":[{\"title\":\"重启 nginx 服务\",\"status\":\"completed\"},{\"title\":\"用独立检查确认 nginx 在跑\",\"status\":\"in_progress\"},{\"title\":\"向用户报告结果\",\"status\":\"pending\"}]}"
+      }
+    }
+  ]
+}
+```
+
+两则调用并行发出；`is-active` 只读 → auto，`update_plan` 记账 → auto。
+
+---
+
+#### 步骤 17 — Agent → SSH 主机（独立检查）
+
+**说明：** 只读 allowlist 命中 `systemctl` + `is-active`，**不弹审批**。
+
+**Request：**
+
+```bash
+systemctl is-active nginx
+```
+
+**Response：** 见步骤 18。
+
+---
+
+#### 步骤 18 — SSH 主机 → Agent
+
+**说明：** exit 0 且输出 `active` 才是「重启成功」的证据。若是 `inactive` / exit 3，模型应改查 `journalctl`，而不是原样再 restart（Loop Guard 会把相同命令+相同结果当无进展）。
+
+**Request：** （步骤 17）
+
+**Response（成功时）：**
+
+```text
+status: success
+exit_code: 0
+cwd: /root
+wait: 0.08s
+output:
+active
+```
+
+**Response（失败时，不会走完后面的成功收束）：**
+
+```text
+status: failed
+exit_code: 3
+cwd: /root
+wait: 0.08s
+verify: Command exited non-zero (exit 3); confirm whether this indicates a real failure for this command.
+output:
+inactive
+```
+
+---
+
+#### 步骤 19 — Agent → 工具调度（更新计划）
+
+**说明：** 与步骤 17 同一轮发出，不碰主机。
+
+**Request：**
+
+```json
+{
+  "name": "update_plan",
+  "arguments": {
+    "items": [
+      { "title": "重启 nginx 服务", "status": "completed" },
+      { "title": "用独立检查确认 nginx 在跑", "status": "in_progress" },
+      { "title": "向用户报告结果", "status": "pending" }
+    ]
+  }
+}
+```
+
+**Response：**
+
+```text
+Plan updated (1/3 completed).
+1. [x] 重启 nginx 服务
+2. [>] 用独立检查确认 nginx 在跑
+3. [ ] 向用户报告结果
+```
+
+---
+
+#### 步骤 20 — 工具调度 → Copilot UI
+
+**说明：** 计划卡片勾掉第 1 步，第 2 步变为进行中。无 LLM 调用。
+
+**Request：** store `setPlan`
+
+**Response（用户看到的）：**
+
+```text
+[x] 重启 nginx 服务
+[>] 用独立检查确认 nginx 在跑
+[ ] 向用户报告结果
+```
+
+---
+
+#### 步骤 21 — Agent → LLM（Turn 4 Request）
+
+**说明：** 追加 `call_exec_check` / `call_plan_2` 的 assistant 与两条 tool 结果。账本现有两条 exec。独立检查已是 `active` + exit 0，模型可以收束。
+
+**Request（相对 Turn 3 的增量）：**
+
+```json
+{
+  "messages": [
+    { "role": "system", "content": "（核心 prompt，同步骤 3）" },
+    { "role": "user", "content": "重启 nginx 并告诉我是否成功" },
+    { "role": "assistant", "tool_calls": [{ "id": "call_plan_1" }] },
+    { "role": "tool", "tool_call_id": "call_plan_1", "content": "Plan updated (0/3 completed). ..." },
+    { "role": "assistant", "tool_calls": [{ "id": "call_exec_restart" }] },
+    { "role": "tool", "tool_call_id": "call_exec_restart", "content": "status: success\nexit_code: 0\n..." },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "id": "call_exec_check",
+          "type": "function",
+          "function": {
+            "name": "exec_command",
+            "arguments": "{\"tab_id\":\"tab_7f3a\",\"command\":\"systemctl is-active nginx\"}"
+          }
+        },
+        {
+          "id": "call_plan_2",
+          "type": "function",
+          "function": { "name": "update_plan", "arguments": "{... completed, in_progress, pending ...}" }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_exec_check",
+      "content": "status: success\nexit_code: 0\ncwd: /root\nwait: 0.08s\noutput:\nactive"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_plan_2",
+      "content": "Plan updated (1/3 completed).\n1. [x] 重启 nginx 服务\n2. [>] 用独立检查确认 nginx 在跑\n3. [ ] 向用户报告结果"
+    },
+    {
+      "role": "system",
+      "content": "Task execution history:\n1. exec [/root] systemctl restart nginx -> exit 0\n2. exec [/root] systemctl is-active nginx -> exit 0 | active"
+    }
+  ]
+}
+```
+
+**Response：** 见步骤 22。
+
+---
+
+#### 步骤 22 — LLM → Agent（Turn 4 Response）
+
+**说明：** **没有 `tool_calls`** = 循环结束。`onDone` → `finalAnswer` → phase `done`。语言与用户一致（中文）。模型也可以再调一次 `update_plan` 把剩余步骤标 completed；若直接收束，计划卡片可能停在「还剩步骤」——结论仍以独立检查为准。
+
+**Request：** （步骤 21）
+
+**Response：**
+
+```json
+{
+  "content": "nginx 已重启，并且独立检查 systemctl is-active nginx 返回 active（exit 0）。服务当前在跑。",
+  "tool_calls": []
+}
+```
+
+---
+
+#### 步骤 23 — Agent → Copilot UI
+
+**说明：** `finishMessage`，`busy=false`。不再发 LLM 请求。
+
+**Request（内部）：**
+
+```json
+{
+  "messageId": "asst_turn4",
+  "content": "nginx 已重启，并且独立检查 systemctl is-active nginx 返回 active（exit 0）。服务当前在跑。",
+  "streaming": false
+}
+```
+
+**Response：** 侧栏出现助手气泡。
+
+---
+
+#### 步骤 24 — Copilot UI → 用户
+
+**说明：** 用户看到的完整结果：计划卡片、一条已批准的重启、一条自动跑的 `is-active`、一句中文结论。
+
+**Request：** （无新的 API 调用）
+
+**Response（用户可见）：**
+
+```text
+nginx 已重启，并且独立检查 systemctl is-active nginx 返回 active（exit 0）。服务当前在跑。
+```
+
+整条任务打到主机上的命令只有这两条：
+
+```bash
+systemctl restart nginx
+systemctl is-active nginx
+```
+
+---
+
+## 6. 对照：如果用户问的是「怎么重启 nginx？」
+
+Workflow 第 2 步的另一条分支：**只建议、不执行**。模型不应调用 `exec_command`，而是吐一个 bash 卡片：
+
+````markdown
+```bash
+systemctl restart nginx
+```
+````
+
+循环一轮即 `done`。这就是 prompt 里那句：
+
+> `"restart nginx on prod and tell me if it worked"` → exec_command（你需要结果）
+> `"how do I restart nginx?"` → a bash card
+
+---
+
+## 7. 失败时会多出来的东西（简表）
+
+| 现象                     | 回传给模型                                                         | 下一步                                     |
+| ------------------------ | ------------------------------------------------------------------ | ------------------------------------------ |
+| Permission denied        | `status: failed` + `verify: Permission denied — try sudo ...` | 换策略（sudo / 换用户），禁止原命令重试    |
+| 命令不存在 exit 127      | `verify: Command not found (exit 127)`                           | 换工具或提示安装                           |
+| SSH 中途断开             | tool**error**（不是假成功的空 output）；`retryable`        | 应用自动重试一次；仍失败则让模型请用户重连 |
+| 用户点拒绝               | `User rejected this action.`                                     | 模型改方案或询问，不重发同一调用           |
+| 连续两次相同命令相同输出 | 第二次之后注入 Reflection 用户消息                                 | 模型必须换诊断路径                         |
+| 超过 25 轮 / token 预算  | 侧栏 Loop Guard 提示，停止                                         | 用户可新开一轮                             |
+
+---
+
+## 8. 相关源码索引
+
+| 环节                       | 文件                                      |
+| -------------------------- | ----------------------------------------- |
+| 初始化 prompt 拼装         | `src/shared/prompts/copilot.ts`         |
+| 发往 LLM 的 HTTP           | `src/main/ai/provider.ts` → `chat()` |
+| Agent 循环 / 审批续跑      | `src/renderer/lib/aiService.ts`         |
+| 工具执行（含 exec 结果头） | `src/renderer/lib/aiTools.ts`           |
+| 独立 SSH 通道跑命令        | `src/renderer/lib/agentExec.ts`         |
+| 退出码 → status/verify    | `src/shared/verify.ts`                  |
+| 是否自动跑还是弹审批       | `src/shared/toolPolicy.ts`              |
+| 计划回注                   | `src/renderer/lib/planTool.ts`          |
+| 已执行步骤账本             | `src/renderer/lib/taskMemory.ts`        |
+| 循环上限                   | `src/renderer/lib/loopGuard.ts`         |
+
+---
+
+## 9. 长期演进设计
+
+本节是 Copilot Chat 的**目标架构与分阶段路线图**，不是当前实现说明书。第 2–5 节描述「现在发给 LLM 的是什么、循环怎么转」；这里描述「在不推倒重来的前提下，往 Cursor / Claude Code 的体验靠，同时保住 SSH 运维的人在回路」。
+
+两条已经拍板的北极星：
+
+- **产品定位**：运维 Agent 为主，但要能在远程主机上改配置 / 代码仓库（可读 diff、可回滚、可复用 skill）。不做通用 IDE、浏览器 Agent 或 Computer Use。
+- **自主度上限**：Cursor 式 —— 显式 Plan 模式 + 可信任命令自动跑 + 本会话 Allowlist；破坏性命令与跨机变更默认仍要批。不引入「跳过全部权限」档。
+
+与第 4 节循环的关系：演进是在现有 ReAct + 审批 + 计划回注 + 执行账本上**加模式开关、检查点、主机记忆和可选子 Agent**，而不是另写一套 agent runtime。
+
+### 9.1 已经很强、不要推倒重来
+
+| 层 | 现状（保留） | 关键代码 |
+| --- | --- | --- |
+| 循环 | 事件驱动 ReAct；显式 phase；Loop Guard（25 步 / 重复无进展 / token 预算）；空回复 nudge；一次性 Reflection | `agentPhase.ts`、`aiService.ts`、`loopGuard.ts` |
+| 上下文 | prompt 按本轮 tools 裁剪且整任务字节不变（prefix cache）；只读并行、写操作串行；loop 内结构保持的 compact；计划与账本每轮回注 | `copilot.ts`、`conversationCompact.ts`、`planTool.ts`、`taskMemory.ts` |
+| 安全 | 三档自主度 + 只读命令白名单 + 会话 Allowlist；`edit_file` 精确匹配；审批卡 Diff 预览 | `toolPolicy.ts`、`FileDiffPreview.tsx` |
+| 文件 | 写前 `.bak.<timestamp>` 备份 | `fileTools.ts` |
+| Skills | SKILL.md + `read_skill` 渐进披露（接近 Claude Code） | `main/skills/store.ts` |
+| 多机感知 | snapshot 含 tab_id / pane / sync group；chat pin + `@terminal` | `aiTools.ts`、`pinnedTerminal.ts` |
+
+### 9.2 缺口（相对对标，以及代码里的半成品）
+
+对标 Cursor Composer、Claude Code、Codex CLI：
+
+| 能力 | 现状 | 对标 |
+| --- | --- | --- |
+| Plan vs Agent | 只有工具 `update_plan`，循环默认一直动手 | Cursor：先 Plan，用户点 Implement 再执行 |
+| 检查点 / Undo | 静默 `.bak`，UI 无一键回滚 | Cursor checkpoints；Claude Code 可还原编辑 |
+| 远程代码工作流 | `edit_file` 精确替换，无 git 工具、无 unified patch | Codex `apply_patch`；Claude Code git |
+| 上下文召回 | 终端最近 100–200 行整段塞入（README 仍写约 40 行，已过时） | 按需检索 scrollback / 日志片段，而不是加行数 |
+| 多机 | 一个 `tab_id` 上跑主循环，无隔离子 Agent | Claude Code `Task`：子 Agent 隔离上下文，只交回摘要 |
+| 主机记忆 | 仅全局 `user_rules` | Claude Code `CLAUDE.md`；Cursor 分层 rules |
+| 评测 | 策略 / prompt 有单测，无 Agent 轨迹评测 | SWE-bench 风格：edit → 语法检查 → 独立确认 |
+
+代码里已经露出、P0 必须处理的半成品：
+
+- **队列半接通**：`queuedPrompts` 存在，但侧栏在 `busy` 时直接 return，主按钮变成 Stop，正常路径很难排队。
+- **全局 `busy`**：同一时刻只能跑一个 chat 的 loop；`recovering` 阶段几乎没有自动恢复路径。
+- **Verify 过薄**：除 display-only 工具短路外一律 `continue`；「独立检查」主要靠第 2 节 prompt，harness 不判定。
+- **批准摩擦**：新用户消息会取消待批；reload 后 pending 不可恢复；busy + 待批时没有 Send。
+- **Pin 与正在看的 Tab 可分叉**（`viewingOther`），上下文容易指错主机。
+
+### 9.3 目标架构
+
+保持 **单主 Agent + 可选按主机隔离的子 Agent**。不要做成多角色辩论或「运维 / 编码两个 Copilot」。
+
+```mermaid
+flowchart TD
+  User["用户"] --> Mode{"Plan 或 Agent"}
+  Mode -->|"Plan"| PlanLoop["只读工具加 update_plan"]
+  PlanLoop --> Review["用户审计划"]
+  Review -->|"Implement"| AgentLoop["现有 ReAct 循环"]
+  Mode -->|"Agent"| AgentLoop
+  AgentLoop --> Tools["工具面"]
+  Tools --> HostA["主机 A 的 SFTP 与 exec"]
+  Tools --> HostB["子 Agent 跑主机 B"]
+  AgentLoop --> Mem["分层记忆"]
+  Mem --> Global["user_rules"]
+  Mem --> HostMd["远程 AGENTS.md"]
+  Mem --> Task["plan 与 taskMemory"]
+  AgentLoop --> Ckpt["检查点 可回滚编辑"]
+```
+
+分层记忆（对标 Claude Code / MemGPT，但绑定的是 **SSH 主机**，不是本地 git 仓库）：
+
+1. **全局** `user_rules`（已有）：注入每轮 system；冲突时覆盖默认 prompt。
+2. **每主机** 远程 `AGENTS.md`（或 `.ai-terminal.md`）：连接后按需 SFTP 读取并回注；写入走审批。
+3. **每任务** `update_plan` + Task execution history（已有）。
+4. **会话 Allowlist**（已有）：Plan 通过或用户点「本会话总允许」后更好暴露，不跨 app 重启。
+
+工具面继续按档位与 intent 门控（第 1 节）：fast 不堆 MCP / git 写 / 子 Agent schema。
+
+### 9.4 对标与可借鉴的研究
+
+- **Cursor**：Plan / Agent 切换、`@` 上下文、会话 Allowlist、检查点。自主度模型直接采用，不采用「跳过权限」。
+- **Claude Code**：`CLAUDE.md` 映射为远程 `AGENTS.md`；Skills 渐进披露已有，补「任务匹配时先 `read_skill`」的评测；`Task` 子 Agent 只用于多机并行诊断，摘要交回，避免三台机的 journal 撑爆 32k。
+- **Codex**：`apply_patch`（unified diff）比反复 `old_string` 更稳；沙箱思路映射为「独立 exec 通道 + 审批」，不引入完整 OS sandbox。
+- **ReAct**（已实现）：第 4–5 节的 think → tool → observe → verify。
+- **Reflexion**：已有一次性 Reflection checkpoint；演进为把「用户拒绝 / 独立检查失败」写成候选主机记忆，**人确认后才落盘**。
+- **Voyager 技能库**：成功轨迹可沉淀为 skill，仅 P3，且必须用户确认，避免污染技能目录。
+- **SWE-agent**：把配置变更定义成可评分轨迹（例如第 5 节：`restart` → `is-active`），而不是只看模型有没有说话。
+
+### 9.5 分阶段路线图
+
+#### P0 — 模式、回滚与侧栏诚实度
+
+目标：先补齐 Cursor 侧栏体验，改动面小，不新增 MCP / 子 Agent。
+
+| 项 | 做法 | 主要模块 | 验收 |
+| --- | --- | --- | --- |
+| Plan / Agent 切换 | Plan 档只发读工具 + `update_plan`，禁止变更类 `exec_command`、`edit_file` / `write_file`、`open_ssh` 等；用户点「按此执行」再开现有循环 | `aiService.ts` 工具面门控、`SidePanel` | Plan 下重启 nginx 只出计划卡片，不打到主机 |
+| 检查点 | 把已有 `.bak.*` 收成会话「编辑清单」；计划卡 / 审批卡提供 Restore；Stop 不留下未登记的写 | `fileTools.ts`、ToolCallCard | 改 `/etc/nginx.conf` 后可一键还原 bak |
+| `@path` | Composer 可提及钉住主机上的文件，按 `read_file` 预算注入，而不是再加终端行数 | `ComposerInput`、`pinnedTerminal.ts` | `@/etc/nginx.conf` 进入下一轮 context |
+| Slash | `/plan` `/compact` `/skill` 映射到模式切换、已有 compact、`read_skill` | `ComposerInput` | 输入 `/` 出现菜单 |
+| 队列 | 要么 busy 时仍可排队并可视化，要么删掉 `queuedPrompts` 和「已排队」文案 | `SidePanel`、`aiService.ts` | 文案与行为一致 |
+| 待批 UX | 待批时保留批准入口（不要只剩 Stop）；新消息 supersede 待批要有明确提示 | `SidePanel`、`toolApproval.ts` | busy+pending 仍能点批准 |
+
+#### P1 — 远程代码 / 配置工作流
+
+目标：在远端仓库和配置上接近 Claude Code 的「改完能看 diff、能提交、失败能验」。
+
+| 项 | 做法 | 验收 |
+| --- | --- | --- |
+| `apply_patch` | unified diff 作为 `edit_file` 之上的首选；失败回退精确替换 | 一次 patch 改 nginx 多处，审批卡仍能预览 |
+| git 只读工具 | `status` / `diff` / `log` 自动跑；`commit` 走审批 | 不问「帮我看 git 状态」时不弹批准 |
+| 主机记忆 | 连接后尝试读 `AGENTS.md`；写入审批并回注下一轮 | 主机约定「发版走 systemctl」后，后续任务默认遵守 |
+| 循环内 LLM compact | 本地 trim 不够时再摘要，locale 与 `prompts/history.ts` 一致 | 长诊断不因 drop 整轮而失忆关键 exit code |
+| 计划 verify 断言 | 步骤可带退出码 / 输出正则；harness 失败则 `continue` 且不准宣布成功 | 第 5 节轨迹：缺 `is-active` 不得 finalAnswer |
+
+#### P2 — 多机子 Agent 与检索
+
+目标：多主机任务不把三份日志塞进同一个 32k 窗口。
+
+| 项 | 做法 | 验收 |
+| --- | --- | --- |
+| per-chat busy | 各 Copilot Tab 可并行 loop；同一主机上的写操作仍互斥 | 两个 chat 钉不同主机时可同时诊断 |
+| `delegate_to_host` | 子循环隔离 conversation，只把摘要交回主 Agent | 「三台机对比 8080」主上下文不含三份完整 ss 输出 |
+| scrollback 检索 | 按会话索引 + 引用片段，替代加大 `COPILOT_TERMINAL_MENTION_MAX_LINES` | `@terminal` 问一小时前的报错能引用片段而非截断头 |
+| MCP 可选 | Prometheus / Kubernetes 以 skill 或 MCP 适配接入，**不进入 core 工具面** | fast 档 schema 不涨；default 可选用 |
+
+#### P3 — 学习与评测
+
+目标：从轨迹里学，但不自动改 prompt / 技能库。
+
+| 项 | 做法 | 验收 |
+| --- | --- | --- |
+| 拒绝 / 失败提炼 | 候选 `user_rules` 或 `AGENTS.md` 段落，人确认后写入 | 连续拒绝 `restart` 可建议「先 is-active 再动」 |
+| 轨迹评测集 | 第 5 节 nginx 时序作为 golden；再加 permission-denied 换策略、模糊 edit 失败、多机对比 | CI 能跑固定 mock 主机上的轨迹，不调真实 LLM 也可测 harness |
+| 轨迹 → skill | 仅用户确认后安装 | 默认不污染 `userData/skills` |
+
+### 9.6 刻意非目标
+
+- 不提供 bypass-permissions。
+- 不做浏览器、Computer Use、本机工程语义索引（远程 `grep` / `glob` 已经覆盖运维检索）。
+- 不把 21 个工具再堆进 fast 档；新能力继续按档位与 intent 门控（与第 1 节 prompt 设计一致）。
+- 主循环保持单线程决策；并行只发生在只读工具（已有 `Promise.all`）和隔离子 Agent 内部。
+- 不把 `recovering` 做成静默重连死循环；断连仍应表面给用户（第 7 节）。
+
+### 9.7 建议落地顺序
+
+P0 不依赖新模型能力，只改 harness 与 UI，应先做。P1 的 `apply_patch` 与 verify 断言会让第 5 节那种「重启必须独立检查」从 prompt 软约束变成可测行为。P2 在「用户经常同时开多台机」之后再上，避免过早引入子 Agent 复杂度。P3 没有 P1 的轨迹格式就没有稳定评测，故放最后。
+
