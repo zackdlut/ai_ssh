@@ -160,7 +160,10 @@ export interface SshExecResult {
 export interface SshExecOptions {
   /** Directory to enter before running the command. */
   cwd?: string
+  /** Stall window (ms): timeout if no stdout/stderr arrives for this long. */
   timeoutMs?: number
+  /** Wall-clock ceiling (ms) from start, even if the command keeps printing. */
+  absoluteMaxMs?: number
 }
 
 /**
@@ -203,6 +206,11 @@ export interface AISettings {
   httpProxy: string
   /** How much the Copilot agent may do without asking for approval. */
   copilotAutonomy: AutonomyMode
+  /**
+   * Absolute ceiling for a captured or Agent-exec command, in minutes.
+   * Output postpones the stall window up to this cap. Default 60.
+   */
+  commandTimeoutMinutes: number
 }
 
 /** How much the agent may do without stopping to ask. See shared/toolPolicy. */

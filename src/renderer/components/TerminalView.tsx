@@ -23,7 +23,7 @@ import { hasGpuWebgl2 } from '../lib/webglSupport'
 import { askAboutSelection } from '../lib/aiService'
 import { extractCommands, isDangerous } from '../lib/commands'
 import { stripAnsi } from '../lib/streamParse'
-import { buildMarkerCommand, parseMarker, runCapturedCommand, getCaptureTiming, hasCaptureMarker, formatCaptureElapsed, isSessionCaptureActive, registerCaptureEcho, stripCaptureArtifacts } from '../lib/execCapture'
+import { buildMarkerCommand, parseMarker, runCapturedCommand, getCaptureTiming, nextCaptureDeadline, hasCaptureMarker, formatCaptureElapsed, isSessionCaptureActive, interruptSessionCapture, registerCaptureEcho, stripCaptureArtifacts, CAPTURE_INTERRUPT_SETTLE_MS } from '../lib/execCapture'
 import { getTabObservation, setTabObservation } from '../lib/terminalObservation'
 import { describeTabOs } from '../../shared/prompts'
 import {
@@ -74,7 +74,7 @@ interface MenuState {
 
 /**
  * Captures the output of a single command executed in NL mode by watching the
- * SSH data stream until output goes idle.
+ * SSH data stream until the completion marker arrives (or a stall/absolute cap).
  */
 interface Capture {
   buffer: string
@@ -565,6 +565,7 @@ function ConnectedTerminalView({
         const startedAt = Date.now()
         let progressTimer: ReturnType<typeof setInterval> | undefined
         let showingWait = false
+        let cap!: Capture
 
         const clearWaitLine = (): void => {
           if (progressTimer) {
@@ -603,13 +604,26 @@ function ConnectedTerminalView({
           if (output) term.write(output.replace(/\n/g, '\r\n') + '\r\n')
           resolve({ command: cmd, output, code: exitCode })
         }
-        const cap: Capture = {
+
+        const onHardTimeout = (): void => {
+          if (cap.done) return
+          window.api.ssh.write(sessionId, '\x03')
+          cap.timer = setTimeout(done, CAPTURE_INTERRUPT_SETTLE_MS)
+        }
+
+        const armDeadline = (): void => {
+          clearTimeout(cap.timer)
+          cap.timer = setTimeout(onHardTimeout, Math.max(0, nextCaptureDeadline(startedAt, timing)))
+        }
+
+        cap = {
           buffer: '',
           done: false,
           finish: done,
           marker,
-          timer: setTimeout(done, timing.hardTimeoutMs),
+          timer: setTimeout(onHardTimeout, Math.max(0, nextCaptureDeadline(startedAt, timing))),
           bumpIdle() {
+            armDeadline()
             if (timing.idleMs === null) return
             if (cap.idleTimer) clearTimeout(cap.idleTimer)
             cap.idleTimer = setTimeout(done, timing.idleMs)
@@ -996,7 +1010,9 @@ function ConnectedTerminalView({
       // Agent / Execute capture owns the PTY: lock typing so a keystroke cannot
       // splice into the wrapped command. Ctrl+C still interrupts.
       if (isSessionCaptureActive(sessionId)) {
-        if (data.includes('\x03')) window.api.ssh.write(sessionId, '\x03')
+        if (data.includes('\x03')) {
+          if (!interruptSessionCapture(sessionId)) window.api.ssh.write(sessionId, '\x03')
+        }
         return
       }
       if (nl.mode === 'normal') {

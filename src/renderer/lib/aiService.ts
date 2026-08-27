@@ -78,12 +78,14 @@ import {
 } from './toolTrace'
 import { buildPlanContextMessage } from './planTool'
 import { setToolResultCharBudget } from './toolBudget'
+import { refreshCommandTimeoutMinutes } from './execCapture'
 import { transition, type AgentEvent, type AgentPhase } from './agentPhase'
 import type { ChatMessage } from '../store/aiStore'
 import { extractFileMentionPaths, expandMentionPath } from './fileMentions'
 import { readFile } from './fileTools'
 import { useUserRulesStore } from '../store/userRulesStore'
 import type {
+  AISettings,
   AutonomyMode,
   ChatMessageDTO,
   CopilotAgentMode,
@@ -173,6 +175,13 @@ interface LoopState {
    * continuation turns still see what the user mentioned.
    */
   fileContext?: string
+  /**
+   * True once the user interrupted a running command (Ctrl+C in the terminal).
+   * The loop then does a tools-off summary turn instead of continuing to act.
+   */
+  interruptedByUser?: boolean
+  /** Tools-off recap turn after a user interrupt. */
+  summarizeOnly?: boolean
 }
 
 /**
@@ -329,6 +338,12 @@ export function refreshAutonomyMode(mode: AutonomyMode): void {
   autonomyMode = mode
 }
 
+/** Push settings that the loop reads synchronously (autonomy, command timeout). */
+export function applyRuntimeAISettings(settings: AISettings): void {
+  refreshAutonomyMode(settings.copilotAutonomy)
+  refreshCommandTimeoutMinutes(settings.commandTimeoutMinutes)
+}
+
 /**
  * Grant a tool blanket approval for the rest of this chat. Scoped to the chat
  * and to this app run: a grant made while fixing one service should not still
@@ -428,6 +443,8 @@ function startTurn(loop: LoopState, epilogue = false): void {
   // continuation to keep nudging.
   const firstTurn = loop.phase === undefined
   const chartTurn = !!loop.chartIntent && firstTurn
+  const summarizeOnly = !!loop.summarizeOnly
+  const toolsOff = chartTurn || summarizeOnly
   // Only assemble the prompt sections this turn actually needs: the long chart
   // rules ride along only on the (first) chart turn, and mermaid rules only when
   // the request asked for a diagram. A chart turn sends no tools, so it is
@@ -453,8 +470,8 @@ function startTurn(loop: LoopState, epilogue = false): void {
   }
   const promptSections: PromptSections = {
     chart: chartTurn,
-    mermaid: loop.mermaidIntent,
-    toolNames: chartTurn ? [] : toolNamesFor(loop.toolTier ?? 'full', toolSurface)
+    mermaid: !!loop.mermaidIntent && !summarizeOnly,
+    toolNames: toolsOff ? [] : toolNamesFor(loop.toolTier ?? 'full', toolSurface)
   }
   const skillsCatalog = buildSkillsContextMessage()
   // Prefix layer: near-constant across the task, so it stays at the front where
@@ -480,7 +497,7 @@ function startTurn(loop: LoopState, epilogue = false): void {
   if (loop.contextLimit) {
     const budget = conversationBudget(
       loop,
-      chartTurn ? undefined : loop.toolTier ?? 'full',
+      toolsOff ? undefined : loop.toolTier ?? 'full',
       promptSections,
       toolSurface,
       [...prefix, ...suffix]
@@ -552,7 +569,7 @@ function startTurn(loop: LoopState, epilogue = false): void {
     requestId,
     messages,
     context: loop.context,
-    enableTools: !chartTurn,
+    enableTools: !toolsOff,
     userRules,
     promptSections,
     aiSettingsIntent: loop.aiSettingsIntent,
@@ -590,10 +607,10 @@ async function runToolCall(
   messageId: string,
   callId: string,
   opts?: { deferContinue?: boolean }
-): Promise<void> {
+): Promise<{ aborted?: boolean }> {
   const ai = useAIStore.getState()
   const call = findMessage(tabId, messageId)?.toolCalls?.find((c) => c.id === callId)
-  if (!call) return
+  if (!call) return {}
   if (!isAutoApprovedTool(call.name)) {
     const loop = loops.get(messageId)
     if (loop) loop.executedActionTool = true
@@ -610,7 +627,7 @@ async function runToolCall(
       digest: digestToolResult(`Error: ${parsed.error}`)
     })
     if (!opts?.deferContinue) maybeContinueLoop(tabId, messageId)
-    return
+    return {}
   }
 
   ai.updateToolCall(tabId, messageId, callId, { status: 'running' })
@@ -621,6 +638,7 @@ async function runToolCall(
     data: { args: parsed.args }
   })
   let unregisterAbort: (() => void) | undefined
+  let aborted = false
   const chat = ai.chatTabs.find((t) => t.id === tabId)
   try {
     const invoke = (): Promise<ToolResult> =>
@@ -645,7 +663,8 @@ async function runToolCall(
     // up) are far cheaper to retry here than to round-trip through the model,
     // which would spend a full turn deciding to do exactly this. One retry
     // only — a second failure is a real failure the model should reason about.
-    if (res.retryable) {
+    // A user interrupt is not transient: never re-run the command they stopped.
+    if (res.retryable && !res.aborted) {
       debugLog({ category: 'action.triggered', tabId, message: `tool.${call.name}.retry`, data: {} })
       await delay(RETRY_BACKOFF_MS)
       const retried = await invoke()
@@ -657,7 +676,7 @@ async function runToolCall(
       category: 'action.triggered',
       tabId,
       message: `tool.${call.name}.result`,
-      data: { ok: res.ok, result: res.ok ? res.result : res.error }
+      data: { ok: res.ok, result: res.ok ? res.result : res.error, aborted: !!res.aborted }
     })
     // The digest is captured now, while the full result is in hand: it is what
     // this call contributes to the conversation on every later user turn, and
@@ -677,6 +696,11 @@ async function runToolCall(
         digest: digestToolResult(`Error: ${error}`)
       })
     }
+    aborted = !!res.aborted
+    if (aborted && chatAgentMode(tabId) === 'execute') {
+      const loop = loops.get(messageId)
+      if (loop) loop.interruptedByUser = true
+    }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     ai.updateToolCall(tabId, messageId, callId, {
@@ -688,6 +712,7 @@ async function runToolCall(
     unregisterAbort?.()
   }
   if (!opts?.deferContinue) maybeContinueLoop(tabId, messageId)
+  return { aborted }
 }
 
 /**
@@ -703,8 +728,18 @@ async function runAutoToolCalls(tabId: string, messageId: string, callIds: strin
   const mutating = callIds.filter((id) => !readonly.includes(id))
 
   await Promise.all(readonly.map((id) => runToolCall(tabId, messageId, id, { deferContinue: true })))
-  for (const id of mutating) {
-    await runToolCall(tabId, messageId, id, { deferContinue: true })
+  for (let i = 0; i < mutating.length; i++) {
+    const out = await runToolCall(tabId, messageId, mutating[i], { deferContinue: true })
+    if (!out.aborted) continue
+    const cancelled = tNotice('copilot.interruptedCancel')
+    for (const restId of mutating.slice(i + 1)) {
+      useAIStore.getState().updateToolCall(tabId, messageId, restId, {
+        status: 'rejected',
+        result: cancelled,
+        digest: cancelled
+      })
+    }
+    break
   }
   maybeContinueLoop(tabId, messageId)
 }
@@ -931,10 +966,25 @@ function evaluateAfterObservation(
   return 'finalAnswer'
 }
 
+const INTERRUPT_SUMMARY_PROMPT =
+  'The user pressed Ctrl+C in the visible terminal and interrupted the running command. Do NOT call any tools. Write a short status update in the user\'s language: what was in progress, what the partial output indicates (success, failure, or unknown), and what remains unfinished. They already saw the terminal — do not paste or reformat its output.'
+
 /** When every tool call of a turn is resolved, feed results back and continue. */
 function maybeContinueLoop(tabId: string, messageId: string): void {
   const loop = loops.get(messageId)
   if (!loop) return
+  if (loop.interruptedByUser) {
+    const cancelled = tNotice('copilot.interruptedCancel')
+    const open = findMessage(tabId, messageId)?.toolCalls ?? []
+    for (const c of open) {
+      if (c.status !== 'pending' && c.status !== 'running') continue
+      useAIStore.getState().updateToolCall(tabId, messageId, c.id, {
+        status: 'rejected',
+        result: cancelled,
+        digest: cancelled
+      })
+    }
+  }
   const calls = findMessage(tabId, messageId)?.toolCalls
   if (!calls || calls.length === 0) return
   if (calls.some((c) => c.status === 'pending' || c.status === 'running')) return
@@ -957,6 +1007,14 @@ function maybeContinueLoop(tabId: string, messageId: string): void {
   // Tool results are now captured: observe -> verify.
   advance(loop, 'toolExecuted', tabId)
   advance(loop, 'observed', tabId)
+
+  if (loop.interruptedByUser) {
+    loop.summarizeOnly = true
+    loop.conversation.push({ role: 'user', content: INTERRUPT_SUMMARY_PROMPT })
+    debugLog({ category: 'user.action', tabId, message: 'agent.interrupt.summary', data: {} })
+    startTurn(loop)
+    return
+  }
 
   // Loop Guard: record this turn's signature and stop before continuing if a
   // hard limit is hit (max steps, no-progress repeats, or token budget).
@@ -1011,6 +1069,10 @@ export function initAIService(): void {
   if (initialized) return
   initialized = true
 
+  void window.api.config.getAISettings().then((s) => {
+    applyRuntimeAISettings(normalizeAISettings(s))
+  })
+
   // Replay whatever the user typed while the previous task was still running.
   // Watching the busy flag covers every way a loop can end (final answer, guard
   // trip, error, abort) without threading a callback through all of them.
@@ -1056,6 +1118,22 @@ export function initAIService(): void {
     // Swap this turn's estimate for the provider's real count before the guard
     // checks the task budget below.
     if (usage && loop.guard) reconcileTokens(loop.guard, usage.total)
+
+    // Terminal Ctrl+C asked for a tools-off recap. Ignore any tool_calls the
+    // model still emitted, and never nudge it to "act" on an empty reply.
+    if (loop.summarizeOnly) {
+      if (epilogue) {
+        ai.setBusy(false)
+        return
+      }
+      advance(loop, 'finalAnswer', tabId)
+      if (content.trim() === '') {
+        ai.appendToMessage(tabId, messageId, tNotice('copilot.interruptedSummary'))
+      }
+      ai.finishMessage(tabId, messageId)
+      ai.setBusy(false)
+      return
+    }
 
     if (!toolCalls || toolCalls.length === 0) {
       // An epilogue turn with no tool call is just a redundant restatement of
@@ -1416,7 +1494,7 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
 
   const settings = normalizeAISettings(await window.api.config.getAISettings())
   const limit = resolveActiveContextLength(settings)
-  refreshAutonomyMode(settings.copilotAutonomy)
+  applyRuntimeAISettings(settings)
   const tier = toolTierForProfile(settings.copilotModelProfile)
   // Force the chart path only when a terminal is bound to read from.
   const chartIntent = mentionsTerminal && !!contextTab && CHART_INTENT.test(prompt)

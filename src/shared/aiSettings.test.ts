@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { normalizeAISettings, resolveHttpProxy, shouldBypassProxy } from './aiSettings'
+import {
+  clampCommandTimeoutMinutes,
+  commandAbsoluteTimeoutMs,
+  normalizeAISettings,
+  resolveHttpProxy,
+  shouldBypassProxy
+} from './aiSettings'
 
 describe('shouldBypassProxy', () => {
   it('returns false when NO_PROXY is empty', () => {
@@ -90,5 +96,19 @@ describe('resolveHttpProxy', () => {
     process.env.NO_PROXY = '*'
     process.env.HTTP_PROXY = 'http://env-proxy:8080'
     expect(resolveHttpProxy(settings())).toBe('http://env-proxy:8080')
+  })
+})
+
+describe('commandTimeoutMinutes', () => {
+  it('defaults to 60 minutes (1 hour)', () => {
+    expect(normalizeAISettings({}).commandTimeoutMinutes).toBe(60)
+    expect(commandAbsoluteTimeoutMs()).toBe(3_600_000)
+  })
+
+  it('clamps out-of-range values', () => {
+    expect(clampCommandTimeoutMinutes(5)).toBe(10)
+    expect(clampCommandTimeoutMinutes(10_000)).toBe(24 * 60)
+    expect(clampCommandTimeoutMinutes(90)).toBe(90)
+    expect(normalizeAISettings({ commandTimeoutMinutes: 120 }).commandTimeoutMinutes).toBe(120)
   })
 })

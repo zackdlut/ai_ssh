@@ -23,8 +23,10 @@ import type {
   SamplerStartResult,
   SshDataEvent,
   SshExecResult,
+  SshExecOptions,
   SshStatusEvent
 } from '../../shared/types'
+import { nextExecDeadline } from '../../shared/execTimeout'
 import { countLocalTransferFiles } from '../local/fs'
 
 /** Default cap for a single `sftpReadText` window. */
@@ -226,12 +228,15 @@ export class SshManager {
    * The channel starts in the login directory, so `opts.cwd` re-enters the
    * directory the agent believes it is in — otherwise a `cd` in one call would
    * silently not apply to the next.
+   *
+   * Timeouts match Execute capture: stdout/stderr postpone the stall window
+   * (`opts.timeoutMs`); `opts.absoluteMaxMs` is the wall-clock ceiling.
    */
   execCommand(
     sessionId: string,
     execId: string,
     command: string,
-    opts?: { cwd?: string; timeoutMs?: number }
+    opts?: SshExecOptions
   ): Promise<SshExecResult> {
     const session = this.sessions.get(sessionId)
     if (!session) return Promise.resolve({ stdout: '', stderr: '', code: null, error: 'Session not found.' })
@@ -246,6 +251,8 @@ export class SshManager {
       let code: number | null = null
       let timedOut = false
       let timer: ReturnType<typeof setTimeout> | undefined
+      const stallMs = opts?.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 0
+      const absoluteMaxMs = opts?.absoluteMaxMs && opts.absoluteMaxMs > 0 ? opts.absoluteMaxMs : 0
 
       const finish = (extra?: Partial<SshExecResult>): void => {
         if (settled) return
@@ -276,32 +283,41 @@ export class SshManager {
           return finish()
         }
         this.execChannels.set(execId, stream)
+        const startedAt = Date.now()
+
+        const onTimeout = (): void => {
+          timedOut = true
+          try {
+            stream.close()
+          } catch {
+            // ignore
+          }
+        }
+
+        const armDeadline = (): void => {
+          if (settled) return
+          if (timer) clearTimeout(timer)
+          if (!stallMs && !absoluteMaxMs) return
+          const wait = nextExecDeadline(startedAt, stallMs, absoluteMaxMs)
+          timer = setTimeout(onTimeout, Math.max(0, wait))
+        }
 
         stream.on('data', (chunk: Buffer) => {
           stdout += chunk.toString('utf8')
           if (stdout.length > EXEC_BUFFER_MAX) stdout = stdout.slice(-EXEC_BUFFER_MAX)
+          armDeadline()
         })
         stream.stderr.on('data', (chunk: Buffer) => {
           stderr += chunk.toString('utf8')
           if (stderr.length > EXEC_BUFFER_MAX) stderr = stderr.slice(-EXEC_BUFFER_MAX)
+          armDeadline()
         })
         stream.on('exit', (exitCode: number | null) => {
           code = typeof exitCode === 'number' ? exitCode : null
         })
         stream.on('close', () => finish())
         stream.on('error', (streamErr: Error) => finish({ error: streamErr.message }))
-
-        const timeoutMs = opts?.timeoutMs
-        if (timeoutMs && timeoutMs > 0) {
-          timer = setTimeout(() => {
-            timedOut = true
-            try {
-              stream.close()
-            } catch {
-              // ignore
-            }
-          }, timeoutMs)
-        }
+        armDeadline()
       })
     })
   }

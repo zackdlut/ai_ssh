@@ -9,6 +9,7 @@ import {
   DEFAULT_CONTEXT_LENGTHS,
   DEFAULT_BASE_URLS,
   DEFAULT_API_KEYS,
+  DEFAULT_COMMAND_TIMEOUT_MINUTES,
   cloneModels,
   cloneContextLengths,
   cloneBaseURLs,
@@ -92,7 +93,8 @@ function store(): Store<StoreSchema> {
           models: { ...DEFAULT_MODELS },
           contextLengths: { ...DEFAULT_CONTEXT_LENGTHS },
           httpProxy: '',
-          copilotAutonomy: DEFAULT_AUTONOMY_MODE
+          copilotAutonomy: DEFAULT_AUTONOMY_MODE,
+          commandTimeoutMinutes: DEFAULT_COMMAND_TIMEOUT_MINUTES
         },
         theme: 'dawn',
         locale: 'zh',

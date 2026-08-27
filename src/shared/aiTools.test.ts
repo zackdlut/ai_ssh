@@ -54,7 +54,9 @@ describe('AI_SETTINGS_INTENT', () => {
       '把模型换成 qwen2.5',
       '调大上下文长度',
       '改一下 AI 设置',
-      '换个档位跑'
+      '换个档位跑',
+      'set the command timeout to 120',
+      '把命令超时改成 2 小时'
     ]) {
       expect(AI_SETTINGS_INTENT.test(req), req).toBe(true)
     }

@@ -717,6 +717,11 @@ const AI_SETTINGS_SCHEMA = {
         custom: { type: 'number' }
       },
       additionalProperties: false
+    },
+    commandTimeoutMinutes: {
+      type: 'number',
+      description:
+        'Absolute ceiling in minutes for a command captured in the visible terminal (Execute / NL). Output postpones the stall window up to this cap. Allowed range 10–1440; default 60 (1 hour).'
     }
   },
   additionalProperties: false
@@ -734,7 +739,7 @@ const AI_SETTINGS_SCHEMA = {
  * rather than a lost capability.
  */
 export const AI_SETTINGS_INTENT =
-  /\b(?:llm|api[\s_-]?keys?|base[\s_-]?urls?|ollama|openai|anthropic|deepseek|context[\s_-]?(?:length|window)|copilot\s+model|model\s+profile|ai\s+(?:settings?|model|provider|config\w*))\b|ai\s*(?:设置|配置)|模型|接口地址|密钥|上下文长度|上下文窗口|档位|供应商/i
+  /\b(?:llm|api[\s_-]?keys?|base[\s_-]?urls?|ollama|openai|anthropic|deepseek|context[\s_-]?(?:length|window)|copilot\s+model|model\s+profile|ai\s+(?:settings?|model|provider|config\w*)|command\s+timeout)\b|ai\s*(?:设置|配置)|模型|接口地址|密钥|上下文长度|上下文窗口|档位|供应商|命令超时|执行超时/i
 
 /**
  * update_app_settings, with or without the heavyweight `ai` branch. The tool

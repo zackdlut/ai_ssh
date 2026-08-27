@@ -10,6 +10,11 @@
  * boundary plus a real exit code — the signal the Verify phase needs.
  */
 import { stripAnsi } from './streamParse'
+import {
+  commandAbsoluteTimeoutMs,
+  DEFAULT_COMMAND_TIMEOUT_MINUTES
+} from '../../shared/aiSettings'
+import { nextExecDeadline } from '../../shared/execTimeout'
 
 export interface CommandCapture {
   /** Cleaned command output (ANSI stripped, echo/prompt/marker lines removed). */
@@ -22,7 +27,7 @@ export interface CommandCapture {
   timedOut: boolean
   /** True when the SSH session closed/errored mid-capture. */
   disconnected: boolean
-  /** True when Stop / abort sent Ctrl+C before the command finished. */
+  /** True when Stop or a terminal Ctrl+C sent SIGINT before the command finished. */
   aborted: boolean
   /** True when the session was already capturing, so this command never ran. */
   busy?: boolean
@@ -30,17 +35,24 @@ export interface CommandCapture {
   waitMs: number
 }
 
-/** Absolute safety cap for a typical command's capture. */
-const EXEC_HARD_TIMEOUT_MS = 60_000
-/** Hard cap for slow commands (du/find/etc.) that may emit no output for a while. */
-const EXEC_SLOW_HARD_TIMEOUT_MS = 300_000
+/**
+ * Stall window: give up only when nothing has arrived for this long.
+ * Previously this was a 60s wall-clock cap from start, which cut Execute-mode
+ * builds/installs that were still printing. Output now postpones this window.
+ */
+const EXEC_STALL_TIMEOUT_MS = 120_000
+/** Longer stall for commands that may emit nothing for minutes (sleep, apt, …). */
+const EXEC_SLOW_STALL_TIMEOUT_MS = 600_000
+/** How long to wait for the sentinel after Stop / stall timeout sends Ctrl+C. */
+export const CAPTURE_INTERRUPT_SETTLE_MS = 2000
 /** Max captured output (chars) fed back to the model. */
 const EXEC_OUTPUT_MAX = 4000
 /** How often to emit capture progress callbacks. */
 const PROGRESS_INTERVAL_MS = 1000
 
 /** Commands that may run long with little or no output before the marker appears. */
-const SLOW_COMMAND_RE = /\b(du|find|locate|mlocate|updatedb|rsync|ncdu|tree|sleep)\b/i
+const SLOW_COMMAND_RE =
+  /\b(du|find|locate|mlocate|updatedb|rsync|ncdu|tree|sleep|apt(?:-get)?|yum|dnf|pacman|zypper|npm|npx|pnpm|yarn|pip3?|conda|docker|podman|kubectl|make|cmake|ninja|cargo|mvn|gradle|git|curl|wget|scp|python3?|node|tar|unzip|gzip|xz|dd)\b/i
 
 /** Echoed helper: `__ec=$?; __m=AISSH_…; printf …` */
 const HELPER_SRC_RE = /__ec=\$\?;\s*__m=AISSH_[A-Za-z0-9]+;/
@@ -54,10 +66,21 @@ const HELPER_TAIL_RE = /\$__m|\$__ec|\$\(pwd 2>\/dev\/null\)|printf '\\n%s ec=/
 /** Anything worth line-scanning for; a chunk without these is passed straight through. */
 const ARTIFACT_HINT_RE = /AISSH_|__ec=\$\?|\$__m/
 
+/** Live absolute ceiling; Settings / app start push the configured value here. */
+let cachedAbsoluteMaxMs = commandAbsoluteTimeoutMs(DEFAULT_COMMAND_TIMEOUT_MINUTES)
+
+/** Apply a persisted minutes setting so the next capture uses the new ceiling. */
+export function refreshCommandTimeoutMinutes(minutes: number): void {
+  cachedAbsoluteMaxMs = commandAbsoluteTimeoutMs(minutes)
+}
+
 export interface CaptureTiming {
   /** Idle ms before giving up without marker; null = wait only for marker/hard cap. */
   idleMs: number | null
+  /** Stall window (ms): timeout if no output arrives for this long. */
   hardTimeoutMs: number
+  /** Wall-clock ceiling (ms) from start, regardless of activity. */
+  absoluteMaxMs: number
   slow: boolean
 }
 
@@ -82,20 +105,39 @@ export function isSlowCaptureCommand(command: string): boolean {
 }
 
 /**
- * Resolve idle/hard timeouts for a command.
+ * Resolve idle/stall/absolute timeouts for a command.
  *
  * Never idle-timeout while waiting for the marker. A short idle (previously
  * 800ms) fired during slow git prompts and silent commands (`sleep`, `pwd` in
  * a huge repo), after which the helper leaked into the visible terminal.
- * Completion is the marker itself; the hard cap is the only fallback.
+ * Completion is the marker itself. The stall window is the no-output fallback;
+ * arriving data postpones it, up to `absoluteMaxMs`.
  */
-export function getCaptureTiming(command: string): CaptureTiming {
+export function getCaptureTiming(command: string, opts?: { absoluteMaxMs?: number }): CaptureTiming {
   const slow = isSlowCaptureCommand(command)
+  const absoluteMaxMs =
+    typeof opts?.absoluteMaxMs === 'number' && opts.absoluteMaxMs > 0
+      ? opts.absoluteMaxMs
+      : cachedAbsoluteMaxMs
   return {
     slow,
     idleMs: null,
-    hardTimeoutMs: slow ? EXEC_SLOW_HARD_TIMEOUT_MS : EXEC_HARD_TIMEOUT_MS
+    hardTimeoutMs: slow ? EXEC_SLOW_STALL_TIMEOUT_MS : EXEC_STALL_TIMEOUT_MS,
+    absoluteMaxMs
   }
+}
+
+/**
+ * Ms until the next stall/absolute deadline, from `startedAt`.
+ * 0 means the absolute ceiling is already due.
+ */
+export function nextCaptureDeadline(startedAt: number, timing: CaptureTiming, now = Date.now()): number {
+  return nextExecDeadline(startedAt, timing.hardTimeoutMs, timing.absoluteMaxMs, now)
+}
+
+/** Stall window for one command (2 or 10 minutes). The absolute cap is separate. */
+export function execTimeoutMs(command: string): number {
+  return getCaptureTiming(command).hardTimeoutMs
 }
 
 /** Human-readable elapsed time for progress UI. */
@@ -124,10 +166,23 @@ function markerToken(): string {
  * newer capture that started on the same session.
  */
 const activeCaptures = new Map<string, string>()
+/** Per-session abort so a terminal Ctrl+C can interrupt the in-flight capture. */
+const captureAborts = new Map<string, () => void>()
 
 /** True while runCapturedCommand is capturing on this SSH session. */
 export function isSessionCaptureActive(sessionId: string): boolean {
   return activeCaptures.has(sessionId)
+}
+
+/**
+ * Interrupt an in-flight capture from the terminal (Ctrl+C). Sends SIGINT and
+ * marks the capture aborted so the agent loop can stop and summarize.
+ */
+export function interruptSessionCapture(sessionId: string): boolean {
+  const abort = captureAborts.get(sessionId)
+  if (!abort) return false
+  abort()
+  return true
 }
 
 function captureHelper(marker: string): string {
@@ -359,13 +414,10 @@ export function cleanCapturedOutput(raw: string, command: string, marker: string
 
 /**
  * Run a command on an SSH session and capture its output + exit code + cwd.
- * Resolves as soon as the sentinel marker is seen. Slow commands (du/find/…)
- * use the extended hard timeout. Never rejects — failures are reported via
- * the `timedOut` / `disconnected` flags.
+ * Resolves as soon as the sentinel marker is seen. Output postpones the stall
+ * window; a silent slow command (du/find/…) gets the extended stall. Never
+ * rejects — failures are reported via the `timedOut` / `disconnected` flags.
  */
-/** How long to wait for the sentinel after Stop sends Ctrl+C. */
-const ABORT_SETTLE_MS = 2000
-
 export function runCapturedCommand(
   sessionId: string,
   command: string,
@@ -398,6 +450,7 @@ export function runCapturedCommand(
     let buffer = ''
     let done = false
     let aborted = false
+    let timeoutInterrupt = false
     let idleTimer: ReturnType<typeof setTimeout> | undefined
     let hardTimer: ReturnType<typeof setTimeout> | undefined
     let progressTimer: ReturnType<typeof setInterval> | undefined
@@ -415,6 +468,7 @@ export function runCapturedCommand(
       queueMicrotask(() => {
         if (activeCaptures.get(sessionId) === marker) activeCaptures.delete(sessionId)
       })
+      captureAborts.delete(sessionId)
       if (idleTimer) clearTimeout(idleTimer)
       if (hardTimer) clearTimeout(hardTimer)
       if (progressTimer) clearInterval(progressTimer)
@@ -431,7 +485,7 @@ export function runCapturedCommand(
         output: cleanCapturedOutput(buffer, command, marker),
         exitCode: Number.isFinite(exitCode as number) ? exitCode : null,
         cwd,
-        timedOut,
+        timedOut: !aborted && (timedOut || timeoutInterrupt),
         disconnected,
         aborted,
         waitMs: elapsed()
@@ -442,6 +496,21 @@ export function runCapturedCommand(
       if (timing.idleMs === null) return
       if (idleTimer) clearTimeout(idleTimer)
       idleTimer = setTimeout(() => complete(true, false), timing.idleMs)
+    }
+
+    const beginTimeoutInterrupt = (): void => {
+      if (done || aborted || timeoutInterrupt) return
+      timeoutInterrupt = true
+      window.api.ssh.write(sessionId, '\x03')
+      if (abortTimer) return
+      abortTimer = setTimeout(() => complete(true, false), CAPTURE_INTERRUPT_SETTLE_MS)
+    }
+
+    const scheduleDeadline = (): void => {
+      if (done || aborted || timeoutInterrupt) return
+      if (hardTimer) clearTimeout(hardTimer)
+      const wait = nextCaptureDeadline(startedAt, timing)
+      hardTimer = setTimeout(beginTimeoutInterrupt, Math.max(0, wait))
     }
 
     if (options?.onProgress) {
@@ -460,6 +529,7 @@ export function runCapturedCommand(
         return
       }
       bumpIdle()
+      scheduleDeadline()
     })
 
     unsubStatus = window.api.ssh.onStatus((e) => {
@@ -467,16 +537,18 @@ export function runCapturedCommand(
       if (e.status === 'closed' || e.status === 'error') complete(false, true)
     })
 
-    hardTimer = setTimeout(() => complete(true, false), timing.hardTimeoutMs)
     activeCaptures.set(sessionId, marker)
     bumpIdle()
-    window.api.ssh.write(sessionId, buildWrappedCommand(command, marker))
-    options?.onAbort?.(() => {
+    scheduleDeadline()
+    const abort = (): void => {
       if (done || aborted) return
       aborted = true
       window.api.ssh.write(sessionId, '\x03')
       if (abortTimer) return
-      abortTimer = setTimeout(() => complete(false, false), ABORT_SETTLE_MS)
-    })
+      abortTimer = setTimeout(() => complete(false, false), CAPTURE_INTERRUPT_SETTLE_MS)
+    }
+    captureAborts.set(sessionId, abort)
+    window.api.ssh.write(sessionId, buildWrappedCommand(command, marker))
+    options?.onAbort?.(abort)
   })
 }

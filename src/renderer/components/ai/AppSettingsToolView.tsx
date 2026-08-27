@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { MODEL_PROFILES } from '../../../shared/aiSettings'
+import { MODEL_PROFILES, MIN_COMMAND_TIMEOUT_MINUTES, MAX_COMMAND_TIMEOUT_MINUTES } from '../../../shared/aiSettings'
 import { THEME_OPTIONS } from '../../lib/themes'
 import { resolveTerminalTheme, terminalSwatchColors } from '../../lib/terminalColorSchemes'
 import {
@@ -742,6 +742,27 @@ export default function AppSettingsToolView({
                   />
                 </div>
               )}
+
+              {aiUpdates?.commandTimeoutMinutes !== undefined && (
+                <div
+                  className={`tool-settings-field${aiFieldChanged(updates, 'commandTimeoutMinutes') ? ' tool-settings-changed' : ''}`}
+                >
+                  <label>{t('tool.settings.commandTimeout')}</label>
+                  <input
+                    type="number"
+                    min={MIN_COMMAND_TIMEOUT_MINUTES}
+                    max={MAX_COMMAND_TIMEOUT_MINUTES}
+                    step={10}
+                    value={ai.commandTimeoutMinutes}
+                    onChange={(e) => {
+                      const parsed = Number.parseInt(e.target.value, 10)
+                      if (Number.isFinite(parsed)) {
+                        change(patchAiUpdates(updates, { commandTimeoutMinutes: parsed }))
+                      }
+                    }}
+                  />
+                </div>
+              )}
             </>
           ) : (
             <div className="tool-settings-ai-read">
@@ -765,6 +786,12 @@ export default function AppSettingsToolView({
                   <span className="tool-settings-provider-label">{t('tool.settings.apiKey')}</span>
                   <span className={`tool-settings-keypill${ai.hasApiKey ? ' is-on' : ''}`}>
                     {ai.hasApiKey ? t('tool.settings.keyConfigured') : t('tool.settings.keyMissing')}
+                  </span>
+                </div>
+                <div className="tool-settings-provider-row">
+                  <span className="tool-settings-provider-label">{t('tool.settings.commandTimeout')}</span>
+                  <span className="tool-settings-provider-value">
+                    {t('tool.settings.commandTimeoutValue', { minutes: ai.commandTimeoutMinutes })}
                   </span>
                 </div>
               </div>

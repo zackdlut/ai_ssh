@@ -175,6 +175,9 @@ const zh = {
     '只读命令（ls/cat/ps/systemctl status 等）与应用内设置自动执行；写文件、改服务、装包等仍需批准；危险命令始终需要批准。',
   'settings.ai.autonomy.autonomous.hint':
     '除危险命令外全部自动执行，仍受循环守卫的步数与预算限制约束。',
+  'settings.ai.commandTimeout': '命令最长运行时间（分钟）',
+  'settings.ai.commandTimeoutHint':
+    'Execute 与 Agent 跑命令时的绝对上限。持续有输出会等到此时限；卡住无输出仍按 2 或 10 分钟静默窗口中断。默认 60 分钟（1 小时），可设 10–1440。',
   'settings.ai.hint':
     '兼容 OpenAI、DeepSeek、本地 vLLM/Ollama 等 OpenAI 兼容端点。密钥仅保存在本地，由主进程调用。每个配置档可使用不同的模型、Base URL 和 API Key；非 Default 档位留空时自动继承 Default 档位的值。可在上方配置 HTTP 代理以访问需经代理的 API。Copilot 模型档位可在此或侧栏下拉切换；终端 AI 模式模型档位在此配置（默认：Fast）。',
   'settings.debugLog.enabled': '启用 Debug 日志',
@@ -357,6 +360,8 @@ const zh = {
   'copilot.send': '发送',
   'copilot.plan.title': '任务计划',
   'copilot.emptyReply': '未能生成回应，请换种方式描述你的需求。',
+  'copilot.interruptedCancel': '已因终端 Ctrl+C 中止，后续步骤已取消。',
+  'copilot.interruptedSummary': '命令已被 Ctrl+C 中断。请根据终端输出判断当前进度。',
   'copilot.loopGuard.maxSteps':
     '已达到本轮任务的最大执行步数（{max} 步）仍未完成，已停止以避免无限循环。请检查进度，或用更具体的指令继续。',
   'copilot.loopGuard.repeat':
@@ -494,6 +499,8 @@ const zh = {
   'tool.settings.activeModels': '生效模型',
   'tool.settings.tagCopilot': 'Copilot',
   'tool.settings.tagNl': '终端 AI',
+  'tool.settings.commandTimeout': '命令最长运行时间',
+  'tool.settings.commandTimeoutValue': '{minutes} 分钟',
   'tool.auth.password': '密码',
   'tool.auth.key': '密钥',
   'tool.list.empty': '（无）',
@@ -891,6 +898,9 @@ const en: Record<keyof typeof zh, string> = {
     'Read-only commands (ls/cat/ps/systemctl status…) and in-app settings run automatically; writing files, changing services and installing packages still ask. Destructive commands always ask.',
   'settings.ai.autonomy.autonomous.hint':
     'Everything except destructive commands runs automatically, still bounded by the loop guard’s step and token limits.',
+  'settings.ai.commandTimeout': 'Command time limit (minutes)',
+  'settings.ai.commandTimeoutHint':
+    'Absolute ceiling for Execute and Agent commands. Output postpones the stall window up to this cap; a hung command with no output still stops after 2 or 10 minutes. Default 60 minutes (1 hour); allowed range 10–1440.',
   'settings.ai.hint':
     'Works with OpenAI, DeepSeek, local vLLM/Ollama and other OpenAI-compatible endpoints. The key is stored locally and only used by the main process. Each profile can use a different model, Base URL and API Key; non-Default profiles inherit the Default profile when left empty. Configure an HTTP proxy above when the API must be reached through a proxy. Switch the Copilot model tier here or from the sidebar dropdown; configure the terminal AI mode model tier here (default: Fast).',
   'settings.debugLog.enabled': 'Enable debug logging',
@@ -1084,6 +1094,9 @@ const en: Record<keyof typeof zh, string> = {
   'copilot.stop': 'Stop',
   'copilot.plan.title': 'Task plan',
   'copilot.emptyReply': 'No response was generated. Please try rephrasing your request.',
+  'copilot.interruptedCancel': 'Stopped by Ctrl+C in the terminal; remaining steps were cancelled.',
+  'copilot.interruptedSummary':
+    'The command was interrupted with Ctrl+C. Check the terminal for current progress.',
   'copilot.loopGuard.maxSteps':
     'Reached the maximum number of steps ({max}) for this task without finishing; stopped to avoid an infinite loop. Review the progress or continue with a more specific instruction.',
   'copilot.loopGuard.repeat':
@@ -1226,6 +1239,8 @@ const en: Record<keyof typeof zh, string> = {
   'tool.settings.activeModels': 'Active models',
   'tool.settings.tagCopilot': 'Copilot',
   'tool.settings.tagNl': 'Terminal AI',
+  'tool.settings.commandTimeout': 'Command time limit',
+  'tool.settings.commandTimeoutValue': '{minutes} min',
   'tool.auth.password': 'Password',
   'tool.auth.key': 'Key',
   'tool.list.empty': '(none)',

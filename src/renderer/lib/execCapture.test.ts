@@ -1,16 +1,21 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildMarkerCommand,
   createCaptureEchoFilter,
+  execTimeoutMs,
   getCaptureTiming,
   hasCaptureMarker,
+  interruptSessionCapture,
   isSessionCaptureActive,
   isSlowCaptureCommand,
+  nextCaptureDeadline,
   parseMarker,
+  refreshCommandTimeoutMinutes,
   registerCaptureEcho,
   runCapturedCommand,
   stripCaptureArtifacts
 } from './execCapture'
+import { DEFAULT_COMMAND_TIMEOUT_MINUTES } from '../../shared/aiSettings'
 
 describe('buildMarkerCommand', () => {
   it('chains the helper with a semicolon so PS1 is not printed in between', () => {
@@ -67,11 +72,52 @@ describe('parseMarker', () => {
 })
 
 describe('getCaptureTiming', () => {
+  afterEach(() => {
+    refreshCommandTimeoutMinutes(DEFAULT_COMMAND_TIMEOUT_MINUTES)
+  })
+
   it('does not idle-timeout while waiting for the marker', () => {
     expect(getCaptureTiming('pwd').idleMs).toBeNull()
     expect(getCaptureTiming('ls -la').idleMs).toBeNull()
     expect(isSlowCaptureCommand('sleep 5')).toBe(true)
     expect(getCaptureTiming('sleep 5').idleMs).toBeNull()
+  })
+
+  it('uses a 2-minute stall for typical commands and a 1-hour default ceiling', () => {
+    const typical = getCaptureTiming('ls -la')
+    expect(typical.slow).toBe(false)
+    expect(typical.hardTimeoutMs).toBe(120_000)
+    expect(typical.absoluteMaxMs).toBe(3_600_000)
+
+    const slow = getCaptureTiming('npm install')
+    expect(slow.slow).toBe(true)
+    expect(slow.hardTimeoutMs).toBe(600_000)
+    expect(slow.absoluteMaxMs).toBe(3_600_000)
+  })
+
+  it('treats builds, installs and transfers as slow even with sudo/env prefixes', () => {
+    expect(isSlowCaptureCommand('docker build .')).toBe(true)
+    expect(isSlowCaptureCommand('make all')).toBe(true)
+    expect(isSlowCaptureCommand('sudo apt-get update')).toBe(true)
+    expect(isSlowCaptureCommand('FOO=1 git clone https://example.com/repo.git')).toBe(true)
+    expect(isSlowCaptureCommand('echo hi')).toBe(false)
+    expect(execTimeoutMs('pwd')).toBe(120_000)
+    expect(execTimeoutMs('cargo build')).toBe(600_000)
+  })
+
+  it('postpones the stall window on activity until the absolute ceiling', () => {
+    const timing = getCaptureTiming('ls')
+    expect(nextCaptureDeadline(0, timing, 0)).toBe(120_000)
+    expect(nextCaptureDeadline(0, timing, 100_000)).toBe(120_000)
+    expect(nextCaptureDeadline(0, timing, 3_550_000)).toBe(50_000)
+    expect(nextCaptureDeadline(0, timing, 3_600_000)).toBe(0)
+  })
+
+  it('honours a configured absolute ceiling and clamps below the minimum', () => {
+    refreshCommandTimeoutMinutes(120)
+    expect(getCaptureTiming('ls').absoluteMaxMs).toBe(120 * 60_000)
+    refreshCommandTimeoutMinutes(5)
+    expect(getCaptureTiming('ls').absoluteMaxMs).toBe(10 * 60_000)
   })
 })
 
@@ -169,6 +215,7 @@ describe('runCapturedCommand', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     delete (globalThis as unknown as { window?: unknown }).window
   })
 
@@ -227,5 +274,51 @@ describe('runCapturedCommand', () => {
     expect((await run).cwd).toBe('/tmp')
     expect(shown).toBe('')
     unregister()
+  })
+
+  it('does not stall-timeout while the command keeps producing output', async () => {
+    vi.useFakeTimers()
+    const run = runCapturedCommand('s1', 'pwd')
+    const marker = markerOf(writes[0])
+
+    await vi.advanceTimersByTimeAsync(100_000)
+    emit('still going\n')
+    await vi.advanceTimersByTimeAsync(100_000)
+    expect(writes.some((w) => w === '\x03')).toBe(false)
+
+    emit(`\n${marker} ec=0 cwd=/tmp ${marker}\n`)
+    const cap = await run
+    expect(cap.timedOut).toBe(false)
+    expect(cap.exitCode).toBe(0)
+  })
+
+  it('sends Ctrl+C when the stall window expires with no marker', async () => {
+    vi.useFakeTimers()
+    const run = runCapturedCommand('s1', 'pwd')
+    expect(writes).toHaveLength(1)
+
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(writes).toContain('\x03')
+
+    await vi.advanceTimersByTimeAsync(2000)
+    const cap = await run
+    expect(cap.timedOut).toBe(true)
+    expect(cap.aborted).toBe(false)
+  })
+
+  it('interruptSessionCapture sends Ctrl+C and marks the capture aborted', async () => {
+    vi.useFakeTimers()
+    const run = runCapturedCommand('s1', 'pwd')
+    expect(interruptSessionCapture('s1')).toBe(true)
+    expect(writes).toContain('\x03')
+
+    await vi.advanceTimersByTimeAsync(2000)
+    const cap = await run
+    expect(cap.aborted).toBe(true)
+    expect(cap.timedOut).toBe(false)
+  })
+
+  it('interruptSessionCapture returns false when no capture is active', () => {
+    expect(interruptSessionCapture('s1')).toBe(false)
   })
 })

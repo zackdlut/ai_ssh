@@ -5,7 +5,8 @@ import {
   resolveModel,
   DEFAULT_CONTEXT_LENGTHS,
   DEFAULT_BASE_URLS,
-  DEFAULT_API_KEYS
+  DEFAULT_API_KEYS,
+  DEFAULT_COMMAND_TIMEOUT_MINUTES
 } from '../../../shared/aiSettings'
 import { DEFAULT_AUTONOMY_MODE } from '../../../shared/toolPolicy'
 import type { ModelProfile } from '../../../shared/types'
@@ -43,7 +44,8 @@ export default function ModelSelect({
     models: modelNames,
     contextLengths: { ...DEFAULT_CONTEXT_LENGTHS },
     httpProxy: '',
-    copilotAutonomy: DEFAULT_AUTONOMY_MODE
+    copilotAutonomy: DEFAULT_AUTONOMY_MODE,
+    commandTimeoutMinutes: DEFAULT_COMMAND_TIMEOUT_MINUTES
   }
   const activeModelName = resolveModel(settings, value)
 

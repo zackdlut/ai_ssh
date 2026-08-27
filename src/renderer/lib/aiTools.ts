@@ -16,7 +16,7 @@ import { useUserRulesStore } from '../store/userRulesStore'
 import { connect, connectFromConfig } from './connect'
 import { editFile, globFiles, grepFiles, readFile, writeFile } from './fileTools'
 import { updatePlan } from './planTool'
-import { formatCaptureElapsed, isSessionCaptureActive } from './execCapture'
+import { formatCaptureElapsed, isSessionCaptureActive, refreshCommandTimeoutMinutes } from './execCapture'
 import { runAgentCommand } from './agentExec'
 import { isInteractiveTuiCommand } from '../../shared/interactiveCommands'
 import { getTabObservation, setTabObservation } from './terminalObservation'
@@ -33,7 +33,7 @@ import { MIN_SYNC_GROUP, isTerminalReadOnly, usePaneSyncStore } from '../store/p
 import { usePaneMetricsStore } from '../store/paneMetricsStore'
 import { collectLeaves } from './paneLayout'
 import { verifyCommand } from '../../shared/verify'
-import { normalizeAISettings } from '../../shared/aiSettings'
+import { normalizeAISettings, clampCommandTimeoutMinutes } from '../../shared/aiSettings'
 import { normalizeForDiff, toSideBySideRows } from '../../shared/diffRows'
 import { computeTextDiff } from '../../shared/textDiff'
 import { toolNamesFor, type ToolTier } from '../../shared/aiTools'
@@ -57,6 +57,8 @@ export interface ToolResult {
    * spending a whole model turn to decide the same thing.
    */
   retryable?: boolean
+  /** True when the user interrupted the command (terminal Ctrl+C / Stop). */
+  aborted?: boolean
 }
 
 function genId(): string {
@@ -411,7 +413,17 @@ async function execCommand(
     }
   }
   if (cap.aborted) {
-    return { ok: false, error: 'The user interrupted this command before it finished.' }
+    const lines: string[] = []
+    lines.push('status: interrupted')
+    lines.push(`exit_code: ${cap.exitCode === null ? 'unknown' : cap.exitCode}`)
+    if (cap.cwd) lines.push(`cwd: ${cap.cwd}`)
+    if (cap.waitMs > 0) lines.push(`wait: ${formatCaptureElapsed(cap.waitMs)}`)
+    lines.push(
+      'note: the user interrupted this command with Ctrl+C before it finished; output may be partial.'
+    )
+    lines.push('output:')
+    lines.push(cap.output || '(no output captured)')
+    return { ok: true, result: lines.join('\n'), aborted: true }
   }
   if (cap.busy) {
     return {
@@ -572,7 +584,8 @@ function sanitizeAISettings(ai: AISettings): Record<string, unknown> {
     copilotModelProfile: ai.copilotModelProfile,
     nlModelProfile: ai.nlModelProfile,
     models: { ...ai.models },
-    contextLengths: { ...ai.contextLengths }
+    contextLengths: { ...ai.contextLengths },
+    commandTimeoutMinutes: ai.commandTimeoutMinutes
   }
 }
 
@@ -730,7 +743,12 @@ async function updateAppSettings(args: Record<string, unknown>): Promise<ToolRes
       }
     }
 
-    await window.api.config.setAISettings(normalizeAISettings(merged))
+    if (aiUpdates.commandTimeoutMinutes !== undefined) {
+      merged.commandTimeoutMinutes = clampCommandTimeoutMinutes(aiUpdates.commandTimeoutMinutes)
+    }
+
+    const saved = await window.api.config.setAISettings(normalizeAISettings(merged))
+    refreshCommandTimeoutMinutes(saved.commandTimeoutMinutes)
   }
 
   const settings = await readAppSettings()

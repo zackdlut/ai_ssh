@@ -15,6 +15,13 @@ const DEFAULT_STORE_MODEL = 'qwen3.5:9b'
 const MIN_CONTEXT_LENGTH = 1024
 const MAX_CONTEXT_LENGTH = 2_000_000
 
+/** Floor so the absolute cap cannot undercut the 10-minute slow-command stall. */
+export const MIN_COMMAND_TIMEOUT_MINUTES = 10
+/** Default absolute ceiling for a captured command: 1 hour. */
+export const DEFAULT_COMMAND_TIMEOUT_MINUTES = 60
+/** 24 hours. */
+export const MAX_COMMAND_TIMEOUT_MINUTES = 24 * 60
+
 /** Fresh-install defaults: only default is pre-filled; other profiles start empty. */
 export const DEFAULT_MODELS: Record<ModelProfile, string> = {
   default: DEFAULT_STORE_MODEL,
@@ -68,6 +75,21 @@ function isAutonomyMode(value: unknown): value is AutonomyMode {
 function clampContextLength(value: number, fallback: number): number {
   if (!Number.isFinite(value) || value < MIN_CONTEXT_LENGTH) return fallback
   return Math.min(MAX_CONTEXT_LENGTH, Math.round(value))
+}
+
+/** Clamp a persisted command-timeout setting to 10–1440 minutes. */
+export function clampCommandTimeoutMinutes(value: unknown): number {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  if (!Number.isFinite(n)) return DEFAULT_COMMAND_TIMEOUT_MINUTES
+  return Math.min(
+    MAX_COMMAND_TIMEOUT_MINUTES,
+    Math.max(MIN_COMMAND_TIMEOUT_MINUTES, Math.round(n))
+  )
+}
+
+/** Absolute capture ceiling in milliseconds for a minutes setting. */
+export function commandAbsoluteTimeoutMs(minutes?: number): number {
+  return clampCommandTimeoutMinutes(minutes ?? DEFAULT_COMMAND_TIMEOUT_MINUTES) * 60_000
 }
 
 export function cloneModels(
@@ -181,7 +203,8 @@ export function normalizeAISettings(raw: unknown): AISettings {
     httpProxy,
     copilotAutonomy: isAutonomyMode(input.copilotAutonomy)
       ? input.copilotAutonomy
-      : DEFAULT_AUTONOMY_MODE
+      : DEFAULT_AUTONOMY_MODE,
+    commandTimeoutMinutes: clampCommandTimeoutMinutes(input.commandTimeoutMinutes)
   }
 }
 

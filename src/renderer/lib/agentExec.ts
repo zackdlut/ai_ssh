@@ -10,9 +10,10 @@
  * which is restored explicitly from the tab's observed cwd.
  *
  * WSL tabs are local pseudo-terminals with no SSH client behind them, so they
- * keep the sentinel-capture path.
+ * keep the sentinel-capture path. SSH exec uses the same stall + absolute
+ * ceiling as Execute: output postpones the stall window up to the configured cap.
  */
-import { clampOutput, runCapturedCommand } from './execCapture'
+import { clampOutput, getCaptureTiming, runCapturedCommand } from './execCapture'
 import { getTabObservation } from './terminalObservation'
 import type { TerminalSession } from '../store/sessionsStore'
 
@@ -41,17 +42,7 @@ export interface AgentCommandOptions {
   visible?: boolean
 }
 
-/** Absolute cap for one agent command. */
-const EXEC_TIMEOUT_MS = 120_000
-/** Longer cap for commands that legitimately take minutes. */
-const SLOW_EXEC_TIMEOUT_MS = 600_000
 const PROGRESS_INTERVAL_MS = 1000
-
-const SLOW_COMMAND_RE = /\b(du|find|locate|updatedb|rsync|ncdu|tree|apt|apt-get|yum|dnf|npm|pnpm|yarn|pip|docker|make|cargo|mvn|gradle)\b/i
-
-function timeoutFor(command: string): number {
-  return SLOW_COMMAND_RE.test(command) ? SLOW_EXEC_TIMEOUT_MS : EXEC_TIMEOUT_MS
-}
 
 /** Merge stdout and stderr the way a terminal would, keeping stderr labelled. */
 function combineStreams(stdout: string, stderr: string): string {
@@ -113,9 +104,11 @@ export async function runAgentCommand(
   options?.onStart?.(() => window.api.ssh.abortExec(execId))
 
   try {
+    const timing = getCaptureTiming(command)
     const res = await window.api.ssh.exec(sessionId, execId, command, {
       cwd: getTabObservation(tab.id)?.cwd,
-      timeoutMs: timeoutFor(command)
+      timeoutMs: timing.hardTimeoutMs,
+      absoluteMaxMs: timing.absoluteMaxMs
     })
     return {
       output: clampOutput(combineStreams(res.stdout, res.stderr)),

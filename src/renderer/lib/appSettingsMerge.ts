@@ -1,4 +1,4 @@
-import { normalizeAISettings } from '../../shared/aiSettings'
+import { clampCommandTimeoutMinutes, normalizeAISettings } from '../../shared/aiSettings'
 import type { AISettings, AppLocale, AppTheme, ModelProfile } from '../../shared/types'
 import {
   DEFAULT_TERMINAL_APPEARANCE,
@@ -25,6 +25,7 @@ export interface AppSettingsSnapshot {
     nlModelProfile: ModelProfile
     models: Record<ModelProfile, string>
     contextLengths: Record<ModelProfile, number>
+    commandTimeoutMinutes: number
   }
 }
 
@@ -83,7 +84,10 @@ function parseAiSnapshot(raw: unknown, fallback?: AISettings): AppSettingsSnapsh
       ? input.nlModelProfile
       : base.nlModelProfile,
     models,
-    contextLengths
+    contextLengths,
+    commandTimeoutMinutes: clampCommandTimeoutMinutes(
+      typeof input.commandTimeoutMinutes === 'number' ? input.commandTimeoutMinutes : base.commandTimeoutMinutes
+    )
   }
 }
 
@@ -136,7 +140,8 @@ export async function buildCurrentAppSettingsSnapshot(): Promise<AppSettingsSnap
       copilotModelProfile: ai.copilotModelProfile,
       nlModelProfile: ai.nlModelProfile,
       models: { ...ai.models },
-      contextLengths: { ...ai.contextLengths }
+      contextLengths: { ...ai.contextLengths },
+      commandTimeoutMinutes: ai.commandTimeoutMinutes
     }
   }
 }
@@ -195,6 +200,9 @@ export function mergeAppSettingsUpdates(
       for (const [key, value] of Object.entries(ai.contextLengths as Record<string, unknown>)) {
         if (isModelProfile(key) && typeof value === 'number') next.ai.contextLengths[key] = value
       }
+    }
+    if (ai.commandTimeoutMinutes !== undefined) {
+      next.ai.commandTimeoutMinutes = clampCommandTimeoutMinutes(ai.commandTimeoutMinutes)
     }
   }
 

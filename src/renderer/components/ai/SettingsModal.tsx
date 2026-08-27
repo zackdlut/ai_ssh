@@ -5,13 +5,17 @@ import {
   DEFAULT_CONTEXT_LENGTHS,
   DEFAULT_MODELS,
   MODEL_PROFILES,
-  normalizeAISettings
+  normalizeAISettings,
+  DEFAULT_COMMAND_TIMEOUT_MINUTES,
+  MIN_COMMAND_TIMEOUT_MINUTES,
+  MAX_COMMAND_TIMEOUT_MINUTES,
+  clampCommandTimeoutMinutes
 } from '../../../shared/aiSettings'
 import { DEFAULT_AUTONOMY_MODE } from '../../../shared/toolPolicy'
 import type { AISettings, AutonomyMode, ModelProfile } from '../../../shared/types'
 import { modelProfileLabel, useT, type TranslationKey } from '../../lib/i18n'
 import { useLocaleStore } from '../../store/localeStore'
-import { refreshAutonomyMode } from '../../lib/aiService'
+import { applyRuntimeAISettings } from '../../lib/aiService'
 
 const AUTONOMY_MODES: AutonomyMode[] = ['conservative', 'balanced', 'autonomous']
 
@@ -32,6 +36,7 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
   })
   const [httpProxy, setHttpProxy] = useState('')
   const [copilotAutonomy, setCopilotAutonomy] = useState<AutonomyMode>(DEFAULT_AUTONOMY_MODE)
+  const [commandTimeoutMinutes, setCommandTimeoutMinutes] = useState(DEFAULT_COMMAND_TIMEOUT_MINUTES)
   const [loaded, setLoaded] = useState(false)
   const locale = useLocaleStore((s) => s.locale)
 
@@ -46,6 +51,7 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
       setContextLengths({ ...normalized.contextLengths })
       setHttpProxy(normalized.httpProxy)
       setCopilotAutonomy(normalized.copilotAutonomy)
+      setCommandTimeoutMinutes(normalized.commandTimeoutMinutes)
       setLoaded(true)
     })
   }, [])
@@ -72,7 +78,7 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
 
   const handleSave = async (): Promise<void> => {
     const current = normalizeAISettings(await window.api.config.getAISettings())
-    await window.api.config.setAISettings({
+    const saved = await window.api.config.setAISettings({
       ...current,
       baseURLs: { ...baseURLs },
       apiKeys: { ...apiKeys },
@@ -81,12 +87,10 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
       models: { ...models },
       contextLengths: { ...contextLengths },
       httpProxy,
-      copilotAutonomy
+      copilotAutonomy,
+      commandTimeoutMinutes: clampCommandTimeoutMinutes(commandTimeoutMinutes)
     })
-    // The agent loop caches the mode so its approval decision can run inside a
-    // synchronous stream callback; push the new value through immediately
-    // rather than waiting for the next prompt to reload settings.
-    refreshAutonomyMode(copilotAutonomy)
+    applyRuntimeAISettings(normalizeAISettings(saved))
     onClose()
   }
 
@@ -210,6 +214,21 @@ export default function SettingsModal({ onClose }: Props): JSX.Element {
             <div className="context-hint">
               {t(`settings.ai.autonomy.${copilotAutonomy}.hint` as TranslationKey)}
             </div>
+          </div>
+          <div className="field">
+            <label>{t('settings.ai.commandTimeout')}</label>
+            <input
+              type="number"
+              min={MIN_COMMAND_TIMEOUT_MINUTES}
+              max={MAX_COMMAND_TIMEOUT_MINUTES}
+              step={10}
+              value={commandTimeoutMinutes}
+              onChange={(e) => {
+                const parsed = Number.parseInt(e.target.value, 10)
+                if (Number.isFinite(parsed)) setCommandTimeoutMinutes(parsed)
+              }}
+            />
+            <div className="context-hint">{t('settings.ai.commandTimeoutHint')}</div>
           </div>
           <div className="context-hint">{t('settings.ai.hint')}</div>
         </div>
