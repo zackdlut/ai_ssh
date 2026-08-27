@@ -344,6 +344,8 @@ function constraints(t: ToolSet): string {
     '- Prefer non-destructive commands. Propose a destructive or irreversible one (rm -rf, mkfs, dd, shutdown) only when the intent clearly calls for it, spell out the risk, and never add destructive flags the intent did not ask for.',
     !!shell &&
       `- One command or short pipeline per ${shell}, and observe its result before the next — never batch mutating commands into one call. Where steps must combine, chain them with && so a failure stops the rest; never use ; to force the rest to run.`,
+    !!shell &&
+      '- Starting a long-lived service (a dev server, `python3 -m http.server`, a daemon) needs `&` to apply to the `nohup` command ALONE, with all three streams redirected: `cd /srv || exit 1; nohup cmd > log 2>&1 < /dev/null & echo "started pid $!"`. `&` binding to an `&&` list (`cd /srv && nohup cmd > log 2>&1 &`) leaves an intermediate subshell holding the channel, which hangs the call until it times out — this is the one place `;` beats `&&`, and `nohup`/`setsid`/`disown` do not fix it. Then confirm the service separately (`curl -fsS localhost:PORT`, `ss -ltnp | grep PORT`).',
     '- Never echo, log or print passwords, private keys or API keys, and never exfiltrate secrets.',
     `- Never fabricate command output, host state or ids — if you have not run the command or lack the data, say so${
       t.enabled ? ' or run/list to find out' : ''

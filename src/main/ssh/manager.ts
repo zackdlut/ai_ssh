@@ -41,6 +41,13 @@ const EXEC_CWD_MARKER = '__AISSH_CWD__:'
 /** How long an abort flag waits for a channel that may still be opening. */
 const ABORT_FLAG_TTL_MS = 30_000
 
+/**
+ * Quiet period after exit-status before an exec settles without channel close.
+ * Long enough for output already in the pipe to arrive, short enough that a
+ * backgrounded server does not look like a hang.
+ */
+const EXEC_EXIT_GRACE_MS = 500
+
 /** Quote a value for safe interpolation into a POSIX shell command. */
 function shellSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
@@ -231,6 +238,10 @@ export class SshManager {
    *
    * Timeouts match Execute capture: stdout/stderr postpone the stall window
    * (`opts.timeoutMs`); `opts.absoluteMaxMs` is the wall-clock ceiling.
+   *
+   * Completion is exit-status plus a quiet period, NOT channel close. A command
+   * that leaves a process holding the channel's stdout never closes the channel,
+   * so waiting for close turned every backgrounded service into a stall-timeout.
    */
   execCommand(
     sessionId: string,
@@ -250,7 +261,9 @@ export class SshManager {
       let stderr = ''
       let code: number | null = null
       let timedOut = false
+      let exited = false
       let timer: ReturnType<typeof setTimeout> | undefined
+      let graceTimer: ReturnType<typeof setTimeout> | undefined
       const stallMs = opts?.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 0
       const absoluteMaxMs = opts?.absoluteMaxMs && opts.absoluteMaxMs > 0 ? opts.absoluteMaxMs : 0
 
@@ -258,6 +271,7 @@ export class SshManager {
         if (settled) return
         settled = true
         if (timer) clearTimeout(timer)
+        if (graceTimer) clearTimeout(graceTimer)
         this.execChannels.delete(execId)
         const { text, cwd } = splitCwdMarker(stdout)
         resolve({
@@ -302,18 +316,44 @@ export class SshManager {
           timer = setTimeout(onTimeout, Math.max(0, wait))
         }
 
+        /**
+         * Settle a command whose exit status has arrived but whose channel will
+         * not close. `cmd &` leaves the async list's subshell holding the
+         * channel's stdout — for a backgrounded server, forever — so 'close'
+         * waits on the service rather than on the command. The status is proof
+         * the command finished; arriving output only postpones the settle so a
+         * pipe that still holds real output is drained first.
+         */
+        const armExitGrace = (): void => {
+          if (!exited || settled) return
+          if (graceTimer) clearTimeout(graceTimer)
+          graceTimer = setTimeout(() => {
+            // Drop our end, or the channel leaks for the life of the service.
+            try {
+              stream.close()
+            } catch {
+              // ignore
+            }
+            finish()
+          }, EXEC_EXIT_GRACE_MS)
+        }
+
         stream.on('data', (chunk: Buffer) => {
           stdout += chunk.toString('utf8')
           if (stdout.length > EXEC_BUFFER_MAX) stdout = stdout.slice(-EXEC_BUFFER_MAX)
           armDeadline()
+          armExitGrace()
         })
         stream.stderr.on('data', (chunk: Buffer) => {
           stderr += chunk.toString('utf8')
           if (stderr.length > EXEC_BUFFER_MAX) stderr = stderr.slice(-EXEC_BUFFER_MAX)
           armDeadline()
+          armExitGrace()
         })
         stream.on('exit', (exitCode: number | null) => {
           code = typeof exitCode === 'number' ? exitCode : null
+          exited = true
+          armExitGrace()
         })
         stream.on('close', () => finish())
         stream.on('error', (streamErr: Error) => finish({ error: streamErr.message }))
