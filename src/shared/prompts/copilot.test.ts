@@ -117,6 +117,29 @@ describe('buildCopilotSystemPrompt tool gating', () => {
     expect(noGit).not.toContain('Version control')
   })
 
+  it('stops claiming scrollback is unreachable once search_terminal is sent', () => {
+    const full = buildCopilotSystemPrompt({ toolNames: FULL })
+    expect(FULL).toContain('search_terminal')
+    // The old wording ("you cannot see scrollback beyond that snippet") is a
+    // false limit with this tool in hand, and a model that believes it will
+    // re-run the command instead of searching.
+    expect(full).not.toContain('cannot see scrollback beyond')
+    expect(full).toContain('Earlier scrollback is NOT injected')
+
+    const noSearch = buildCopilotSystemPrompt({
+      toolNames: FULL.filter((n) => n !== 'search_terminal')
+    })
+    expect(noSearch).toContain('cannot see scrollback beyond')
+  })
+
+  it('explains when to delegate only when delegate_to_host is sent', () => {
+    expect(buildCopilotSystemPrompt({ toolNames: FULL })).toContain('Several hosts.')
+    const noDelegate = buildCopilotSystemPrompt({
+      toolNames: FULL.filter((n) => n !== 'delegate_to_host')
+    })
+    expect(noDelegate).not.toContain('Several hosts.')
+  })
+
   it('shrinks as the tool set shrinks', () => {
     const full = buildCopilotSystemPrompt({ toolNames: FULL }).length
     const core = buildCopilotSystemPrompt({ toolNames: CORE }).length

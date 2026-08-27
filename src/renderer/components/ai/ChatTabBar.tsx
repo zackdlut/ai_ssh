@@ -4,6 +4,7 @@ import {
   DEFAULT_CHAT_TAB_TITLE,
   MAX_CHAT_TABS,
   openChatTabs,
+  isChatBusy,
   type ChatTab
 } from '../../store/aiStore'
 import { useT } from '../../lib/i18n'
@@ -21,8 +22,7 @@ export default function ChatTabBar({ onOpenHistory }: Props): JSX.Element {
   const {
     chatTabs,
     activeChatTabId,
-    busy,
-    busyTabId,
+    busyByTab,
     addChatTab,
     archiveChatTab,
     setActiveChatTab,
@@ -39,6 +39,7 @@ export default function ChatTabBar({ onOpenHistory }: Props): JSX.Element {
   const atTabLimit = openTabs.length >= MAX_CHAT_TABS
   const activeTab = chatTabs.find((t) => t.id === activeChatTabId)
   const canClear = (activeTab?.messages.length ?? 0) > 0
+  const activeBusy = isChatBusy(busyByTab, activeChatTabId)
 
   const updateScrollEdges = useCallback((): void => {
     const el = scrollRef.current
@@ -80,7 +81,7 @@ export default function ChatTabBar({ onOpenHistory }: Props): JSX.Element {
 
   const handleClose = (e: React.MouseEvent, tab: ChatTab): void => {
     e.stopPropagation()
-    if (busy && busyTabId === tab.id) abortLoop(tab.id)
+    if (isChatBusy(busyByTab, tab.id)) abortLoop(tab.id)
     archiveChatTab(tab.id)
   }
 
@@ -114,7 +115,7 @@ export default function ChatTabBar({ onOpenHistory }: Props): JSX.Element {
         >
           {openTabs.map((tab) => {
             const isActive = tab.id === activeChatTabId
-            const isStreaming = busy && busyTabId === tab.id
+            const isStreaming = isChatBusy(busyByTab, tab.id)
             return (
               <div
                 key={tab.id}
@@ -183,7 +184,7 @@ export default function ChatTabBar({ onOpenHistory }: Props): JSX.Element {
           type="button"
           className="copilot-tab-action copilot-tab-clear"
           onClick={clearActiveTab}
-          disabled={!canClear || busy}
+          disabled={!canClear || activeBusy}
           title={t('copilot.clearTitle')}
           aria-label={t('copilot.clearTitle')}
         >

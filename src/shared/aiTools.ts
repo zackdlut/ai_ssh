@@ -27,6 +27,8 @@ export const READONLY_TOOLS = new Set([
   'read_file',
   'grep',
   'glob',
+  // Reads the terminal buffer the app already holds; it never reaches the host.
+  'search_terminal',
   // Safe to list here because the tool composes the command itself from a fixed
   // subcommand enum and shell-quoted arguments — unlike `exec_command`, whose
   // read-only-ness has to be inferred from a string the model wrote.
@@ -47,11 +49,15 @@ export const LOCAL_BOOKKEEPING_TOOLS = new Set(['update_plan'])
 /**
  * Tools Plan mode is allowed to advertise. `exec_command` stays so ops can
  * `ps` / `systemctl status`; mutating commands are denied later by toolPolicy.
+ * `delegate_to_host` belongs here for the same reason: surveying several hosts
+ * before proposing a plan is exactly the read-only work Plan mode is for, and
+ * the sub-agent it spawns is held to this same policy.
  */
 export const PLAN_MODE_TOOLS = new Set([
   ...READONLY_TOOLS,
   'update_plan',
-  'exec_command'
+  'exec_command',
+  'delegate_to_host'
 ])
 
 /**
@@ -66,6 +72,40 @@ export const DISPLAY_TOOLS = new Set([
   'list_folders',
   'get_app_settings'
 ])
+
+/**
+ * Tools that write to a HOST (not to the app's own state). Two chat tabs run
+ * their loops in parallel, so these are serialized per terminal tab: overlapping
+ * writes to one machine produce a state neither task asked for. Reads are left
+ * to overlap freely, which is most of the traffic.
+ *
+ * `delegate_to_host` is deliberately absent even though it drives commands: it
+ * holds no lock itself, and each command its sub-agent runs takes the lock on
+ * its own — taking it here as well would deadlock against its own child.
+ */
+export const HOST_MUTATING_TOOLS = new Set([
+  'exec_command',
+  'run_in_terminal',
+  'edit_file',
+  'apply_patch',
+  'write_file',
+  'git_commit'
+])
+
+/**
+ * The surface a delegated sub-agent gets: inspect the host, read and search its
+ * files, read its scrollback. No writes, no app management, and no
+ * `delegate_to_host` — a sub-agent that can delegate is a fork bomb with a
+ * token budget.
+ */
+export const SUB_AGENT_TOOLS = [
+  'exec_command',
+  'read_file',
+  'grep',
+  'glob',
+  'git_read',
+  'search_terminal'
+] as const
 
 /** Action tools whose effect is destructive and deserves a stronger warning. */
 export const DANGEROUS_TOOLS = new Set([
@@ -160,7 +200,12 @@ export interface ToolSurfaceOptions {
 }
 
 function applyExecuteModeTools(tools: AIToolDefinition[]): AIToolDefinition[] {
-  const withoutExec = tools.filter((t) => t.function.name !== 'exec_command')
+  // Execute mode's whole premise is that the user watches every command land in
+  // their own terminal. A sub-agent works on a private channel and reports a
+  // summary, which is the opposite deal — so it is not offered here.
+  const withoutExec = tools.filter(
+    (t) => t.function.name !== 'exec_command' && t.function.name !== 'delegate_to_host'
+  )
   if (withoutExec.some((t) => t.function.name === 'run_in_terminal')) return withoutExec
   const rit = AI_TOOLS.find((t) => t.function.name === 'run_in_terminal')
   if (!rit) return withoutExec
@@ -253,6 +298,40 @@ const BASE_TOOLS: AIToolDefinition[] = [
           }
         },
         required: ['left_tab_id', 'right_tab_id'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_terminal',
+      description:
+        "Search a terminal tab's own scrollback — everything the user has seen in that session, far beyond the short recent-output snippet injected each turn. Use it when the question is about output that already scrolled past (\"the error from an hour ago\", \"what did that build print\") instead of re-running the command. Returns the matching regions with line numbers; it reads a buffer the app already holds, so it touches neither the host nor the terminal.",
+      parameters: {
+        type: 'object',
+        properties: {
+          tab_id: TAB_ID_PARAM,
+          pattern: {
+            type: 'string',
+            description:
+              'Extended regular expression matched per line, case-insensitive by default, e.g. "error|failed" or "Permission denied".'
+          },
+          context_lines: {
+            type: 'number',
+            description: 'Lines of context kept around each match (default 3, max 20).'
+          },
+          max_matches: {
+            type: 'number',
+            description:
+              'Matching regions to return, newest kept first (default 6, max 30). Raise it when the reply says older regions were omitted.'
+          },
+          case_sensitive: {
+            type: 'boolean',
+            description: 'Match case exactly (default false).'
+          }
+        },
+        required: ['tab_id', 'pattern'],
         additionalProperties: false
       }
     }
@@ -469,6 +548,31 @@ const BASE_TOOLS: AIToolDefinition[] = [
           command: { type: 'string', description: 'The shell command to execute.' }
         },
         required: ['tab_id', 'command'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delegate_to_host',
+      description:
+        "Hand ONE self-contained investigation on ONE other host to a sub-agent with its own private context, and get back only its short report — the commands it runs and their raw output never enter this conversation. Use it when a task spans several machines (\"compare who listens on 8080 across these three hosts\", \"which of these nodes is out of disk\"): emit one call per host in the SAME response and they investigate in parallel. Do NOT use it for the host you are already working on, or for anything needing more than a handful of read-only commands — just run those yourself. The sub-agent is READ-ONLY: it can inspect, read and search, but cannot restart, install or write anything, so ask it what the state IS, not to change it.",
+      parameters: {
+        type: 'object',
+        properties: {
+          tab_id: {
+            type: 'string',
+            description:
+              'Connected tab of the host to investigate, by tab_id from the snapshot. Required — this tool has no pinned-tab default.'
+          },
+          task: {
+            type: 'string',
+            description:
+              'The whole assignment, self-contained: the sub-agent sees NONE of this conversation. State what to find out, any path/service/port it needs, and exactly what to report back.'
+          }
+        },
+        required: ['tab_id', 'task'],
         additionalProperties: false
       }
     }

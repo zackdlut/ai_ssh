@@ -430,6 +430,32 @@ export interface AIChatRequest {
   executeMode?: boolean
 }
 
+/**
+ * One function-calling turn outside the main chat loop, for a delegated host
+ * sub-agent.
+ *
+ * Separate from `AIChatRequest` because everything that request implies is
+ * wrong here: no streaming (nothing renders a sub-agent's tokens), no copilot
+ * system prompt, no user rules, and a tool surface that must be narrower than
+ * any tier. The caller therefore supplies the prompt and the tool names
+ * verbatim, and gets the whole turn back as one value.
+ */
+export interface AIAgentTurnRequest {
+  /** Cancellable id, shared with `ai.cancel`. */
+  requestId: string
+  systemPrompt: string
+  messages: ChatMessageDTO[]
+  /** Tools to send, by name. Empty/omitted disables function calling. */
+  toolNames?: string[]
+}
+
+export interface AIAgentTurnResult {
+  content?: string
+  toolCalls?: ToolCallDTO[]
+  usage?: AITokenUsage
+  error?: string
+}
+
 /** Summarize older Copilot turns before they exceed the context budget. */
 export interface AICompressHistoryRequest {
   messages: ChatMessageDTO[]

@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  AIAgentTurnRequest,
+  AIAgentTurnResult,
   AIChatRequest,
   AIChartSpecRequest,
   AIChartSpecResult,
@@ -170,6 +172,8 @@ const api = {
   },
   ai: {
     chat: (req: AIChatRequest): void => ipcRenderer.send('ai:chat', req),
+    agentTurn: (req: AIAgentTurnRequest): Promise<AIAgentTurnResult> =>
+      ipcRenderer.invoke('ai:agentTurn', req),
     compressHistory: (req: AICompressHistoryRequest): Promise<AICompressHistoryResult> =>
       ipcRenderer.invoke('ai:compressHistory', req),
     chartSpec: (req: AIChartSpecRequest): Promise<AIChartSpecResult> =>

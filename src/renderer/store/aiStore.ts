@@ -61,6 +61,39 @@ export function isOpenTab(tab: ChatTab): boolean {
   return !tab.archived
 }
 
+/** Whether THIS chat has a loop in flight. The only question the UI should ask. */
+export function isChatBusy(busyByTab: Record<string, string | null>, tabId?: string | null): boolean {
+  return !!tabId && tabId in busyByTab
+}
+
+/** Whether any chat is running, for app-wide affordances (e.g. quitting). */
+export function anyChatBusy(busyByTab: Record<string, string | null>): boolean {
+  return Object.keys(busyByTab).length > 0
+}
+
+/**
+ * Chats marked busy that no event can ever reach again, and so must be freed.
+ *
+ * Busy-with-nothing-pending is NOT by itself a stuck chat: a turn parked on a
+ * summarization, and one whose tool calls await approval, both sit exactly like
+ * that and are revived later. So a tab counts as stuck only when its requestId
+ * is gone from `pending` AND nothing revivable is registered for it. A `null`
+ * requestId means busy without an LLM turn (history compression), which is owned
+ * by the code that set it and is never swept here.
+ */
+export function unreachableBusyTabs(
+  busyByTab: Record<string, string | null>,
+  liveRequestIds: ReadonlySet<string>,
+  revivableTabIds: ReadonlySet<string>
+): string[] {
+  return Object.entries(busyByTab)
+    .filter(([tabId, requestId]) => {
+      if (requestId === null) return false
+      return !liveRequestIds.has(requestId) && !revivableTabIds.has(tabId)
+    })
+    .map(([tabId]) => tabId)
+}
+
 export function openChatTabs(tabs: ChatTab[]): ChatTab[] {
   return tabs.filter(isOpenTab)
 }
@@ -255,10 +288,16 @@ interface AIState {
   panelWidth: number
   chatTabs: ChatTab[]
   activeChatTabId: string | null
-  busy: boolean
-  activeRequestId: string | null
-  /** Tab id that owns the in-flight request (for cancel on close). */
-  busyTabId: string | null
+  /**
+   * The chats with a loop in flight, mapped to the requestId being streamed
+   * (null while a chat is busy without an LLM request of its own, e.g. history
+   * compression). Per chat rather than one global flag: each Copilot tab drives
+   * its own agent loop against its own pinned host, so one long diagnosis must
+   * not block a question asked in another tab. Mutual exclusion that IS still
+   * required — two loops writing to the same host — is enforced per host in
+   * `hostLock`, not by making the whole app single-flight.
+   */
+  busyByTab: Record<string, string | null>
   notice: string | null
   /** Queued user prompts waiting for this chat's loop to finish. */
   queuedCountByTab: Record<string, number>
@@ -294,7 +333,8 @@ interface AIState {
     patch: Partial<ToolCallView>
   ) => void
   setChartSnapshot: (tabId: string, messageId: string, key: string, snapshot: ChartSnapshot) => void
-  setBusy: (busy: boolean, requestId?: string | null, tabId?: string | null) => void
+  setTabBusy: (tabId: string, requestId?: string | null) => void
+  clearTabBusy: (tabId: string) => void
   setAgentMode: (tabId: string, mode: CopilotAgentMode) => void
   addCheckpoint: (tabId: string, checkpoint: FileCheckpoint) => void
   setQueuedCount: (tabId: string, count: number) => void
@@ -308,9 +348,7 @@ export const useAIStore = create<AIState>((set, get) => ({
   panelWidth: loadPanelWidth(),
   chatTabs: [initialTab],
   activeChatTabId: initialTab.id,
-  busy: false,
-  activeRequestId: null,
-  busyTabId: null,
+  busyByTab: {},
   notice: null,
   queuedCountByTab: {},
   togglePanel: () =>
@@ -648,8 +686,15 @@ export const useAIStore = create<AIState>((set, get) => ({
     }))
     schedulePersist(get)
   },
-  setBusy: (busy, requestId = null, tabId = null) =>
-    set({ busy, activeRequestId: requestId, busyTabId: busy ? tabId : null }),
+  setTabBusy: (tabId, requestId = null) =>
+    set((s) => ({ busyByTab: { ...s.busyByTab, [tabId]: requestId } })),
+  clearTabBusy: (tabId) =>
+    set((s) => {
+      if (!(tabId in s.busyByTab)) return s
+      const next = { ...s.busyByTab }
+      delete next[tabId]
+      return { busyByTab: next }
+    }),
   setAgentMode: (tabId, mode) => {
     set((s) => ({
       chatTabs: updateTab(s.chatTabs, tabId, { agentMode: mode })

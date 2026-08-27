@@ -138,6 +138,33 @@ describe('buildAITools', () => {
     expect(toolNamesFor('core', { executeMode: true })).not.toContain('open_ssh')
   })
 
+  it('keeps search_terminal on every tier and mode', () => {
+    // Reaching scrollback is how the agent avoids re-running a command, and it
+    // touches no host — there is no configuration where that is the wrong offer.
+    for (const opts of [{}, { planMode: true }, { executeMode: true }]) {
+      expect(toolNamesFor('full', opts), JSON.stringify(opts)).toContain('search_terminal')
+    }
+  })
+
+  it('offers delegate_to_host for planning but never in execute mode', () => {
+    // Execute mode's premise is that the user watches every command land in
+    // their own terminal; a sub-agent works on a private channel.
+    expect(toolNamesFor('full')).toContain('delegate_to_host')
+    expect(toolNamesFor('full', { planMode: true })).toContain('delegate_to_host')
+    expect(toolNamesFor('full', { executeMode: true })).not.toContain('delegate_to_host')
+    // A small local model cannot drive sub-agents reliably.
+    expect(toolNamesFor('core')).not.toContain('delegate_to_host')
+  })
+
+  it('requires an explicit tab_id for delegate_to_host', () => {
+    // Defaulting it to the pinned tab would delegate the host the parent is
+    // already on, which is the one case the tool must not be used for.
+    const del = buildAITools('full').find((t) => t.function.name === 'delegate_to_host')!
+    const params = del.function.parameters as { required: string[] }
+    expect(params.required).toEqual(['tab_id', 'task'])
+    expect(JSON.stringify(del)).not.toContain('Defaults to the pinned tab')
+  })
+
   it('lets planMode win when both mode flags are set', () => {
     const names = toolNamesFor('full', { planMode: true, executeMode: true, hasSkills: true })
     expect(names).toContain('exec_command')

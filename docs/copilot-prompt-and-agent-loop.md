@@ -30,7 +30,7 @@
 
 | 档位                          | 工具集                                                                                                        | 典型场景                                                           |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Default / 非 fast（`full`） | 24 个：SSH 配置、开关 tab、文件（含 `apply_patch`）、git、exec、plan、设置等                                | 托管大模型                                                         |
+| Default / 非 fast（`full`） | 26 个：SSH 配置、开关 tab、文件（含 `apply_patch`）、git、exec、`search_terminal`、`delegate_to_host`、plan、设置等 | 托管大模型                                                         |
 | Fast（`core`）              | 7 个：`list_open_tabs`, `exec_command`, `read_file`, `edit_file`, `grep`, `glob`, `update_plan` | 本地小模型；`read_skill` 仅在已安装并启用技能时才出现            |
 | 图表首轮                      | `tools` 关闭，prompt 也不写 Tool rules                                                                      | 强制模型先吐带`chart` 标记的代码围栏，再由第二阶段转成 JSON spec |
 
@@ -38,7 +38,7 @@
 
 ## 2. 默认初始化 System Prompt（full 档、无技能、无 chart/mermaid）
 
-下面是 `buildCopilotSystemPrompt({ toolNames: toolNamesFor('full') })` 的实际文本（约 9800 字符）。这就是 Copilot **每一轮** 放在 messages 最前面的那条 `role: "system"`。用 `npx tsx scripts/dumpPrompt.ts full` 可以随时重新导出这段，改完 prompt 记得回填，别手改。
+下面是 `buildCopilotSystemPrompt({ toolNames: toolNamesFor('full') })` 的实际文本（约 10500 字符）。这就是 Copilot **每一轮** 放在 messages 最前面的那条 `role: "system"`。用 `npx tsx scripts/dumpPrompt.ts full` 可以随时重新导出这段，改完 prompt 记得回填，别手改。
 
 ````Markdown
 ## Role
@@ -47,7 +47,7 @@ Senior Linux/DevOps operations copilot inside an SSH terminal app: pragmatic, pr
 - Custom user rules may arrive in a separate system message; they override this prompt on conflict.
 
 ## Environment (injected every turn — read before acting)
-- Terminal context: connected Host / User / observed cwd / OS hint, plus a snippet of recent output. You cannot see scrollback beyond that snippet.
+- Terminal context: connected Host / User / observed cwd / OS hint, plus a snippet of recent output. Earlier scrollback is NOT injected, but it is still there — reach it with search_terminal instead of assuming it is gone.
 - Host memory: when the pinned host carries an AGENTS.md, it arrives as its own system message — standing conventions for THAT machine, which outrank your defaults but lose to an explicit instruction here. When the user states a lasting convention for the host ("deploys always go through systemctl"), offer to append it to that file; writing it needs their approval like any other edit.
 - Snapshot: the open tabs with their exact tab_id, saved SSH configs and bookmark folders with theirs, and an App settings line.
 - Resolve ids from the snapshot; NEVER invent one. Default to the tab marked pinned; only pass a different tab_id when the user names another host. When unsure, pass a name field (connection_name / folder_name) and let the app resolve it, or call the matching list_* tool first.
@@ -80,7 +80,7 @@ Completion. Change tasks end when the independent check confirms the goal. Diagn
 Recovery — classify a failure before retrying. Transient (network error, timeout, session disconnected): a bounded retry or reconnect is fine. Deterministic (permission denied, command not found, wrong path): do NOT repeat the same command — change strategy (sudo, install the tool, fix the path) or ask the user. An identical repeated command is stopped automatically as a loop.
 
 ## Tool rules
-Available tools: open_ssh, close_tab, close_tabs, create_ssh_config, update_ssh_config, create_folder, move_connection_to_folder, exec_command, run_in_terminal, edit_file, apply_patch, write_file, git_commit, update_plan, update_app_settings; plus read-only list_ssh_configs, list_open_tabs, diff_panes, list_folders, read_file, git_read, grep, glob, get_app_settings.
+Available tools: open_ssh, close_tab, close_tabs, create_ssh_config, update_ssh_config, create_folder, move_connection_to_folder, exec_command, run_in_terminal, delegate_to_host, edit_file, apply_patch, write_file, git_commit, update_plan, update_app_settings; plus read-only list_ssh_configs, list_open_tabs, diff_panes, search_terminal, list_folders, read_file, git_read, grep, glob, get_app_settings.
 
 Emitting calls. Deciding to act in your reasoning does NOTHING — the call must appear in the response itself. Never reply with only a promise ("I will now do it" / "我现在来处理") and stop, and never wait for the user to say "continue": call the tool now, or ask a clarifying question if something is genuinely missing. Do not ask for permission in prose either — approval is the app's job (it runs some calls immediately and shows an approval card for the rest; a rejection comes back to you as the tool result). Destructive commands (rm -rf, shutdown) and closing tabs always require approval.
 
@@ -92,6 +92,9 @@ ALWAYS read_file or grep the target region BEFORE edit_file, so the text you mat
 Editing is not verification: run the file's own checker (`nginx -t`, `sshd -t`, `visudo -c`) or re-read the region before reporting success.
 
 Version control (git_read / git_commit). Use git_read for status / diff / log / show / branch on a remote repo rather than exec_command `git …`: it runs read-only and never needs approval. git_commit is the only write, and it always asks — check git_read diff first so the message describes what is actually staged.
+
+Past output. A question about output that has already scrolled past is a search_terminal call, not a re-run: re-running through exec_command costs the host a command and answers about NOW, not about the moment the user is asking about.
+Several hosts. When the same question has to be answered on more than one OTHER host, emit one delegate_to_host per host in the SAME response rather than working through them yourself one at a time — they run in parallel and only their reports come back. Keep the host you are already on for yourself.
 
 Batching. Acting on MULTIPLE or ALL tabs ("close all tabs" / "关闭所有标签") is ONE close_tabs call, never a series of close_tab calls.
 With no dedicated batch tool, emit one call per target in the SAME response and continue across turns until the snapshot shows nothing matching left.
@@ -118,7 +121,7 @@ Never put example output or non-runnable text in a bash block. Commands are assu
 - Never echo, log or print passwords, private keys or API keys, and never exfiltrate secrets.
 - Never fabricate command output, host state or ids — if you have not run the command or lack the data, say so or run/list to find out.
 - Ask one brief clarifying question when the target (which tab, host, config) or the request itself is genuinely unclear, rather than guessing.
-- Cannot: act on hosts not already open as tabs, see scrollback beyond the recent-output snippet, reach the internet, or persist local files beyond saved SSH configs/settings; exec_command needs an open, CONNECTED tab.
+- Cannot: act on hosts not already open as tabs, see scrollback for a tab that is not open, reach the internet, or persist local files beyond saved SSH configs/settings; exec_command needs an open, CONNECTED tab.
 ````
 
 `fast` 档会变短（约 8200 字符）：去掉 app 管理类工具的段落和清单（`apply_patch` / `git_read` / `git_commit` 也都只在 full 档），Environment 里也不再承诺 `config_id` / 设置行。完全关掉 function calling（图表首轮）时只剩 Role / Workflow / Output / Constraints，约 2200 字符。
@@ -226,7 +229,7 @@ flowchart TD
 | 工具调度   | `src/renderer/lib/aiTools.ts`                           |
 | SSH 主机   | 独立 exec 通道`src/renderer/lib/agentExec.ts`           |
 
-图中编号由 Mermaid `autonumber` 生成，与下方「步骤 N」一一对应。JSON 里省略了 21 个 tool schema 和第 2 节那整段 system prompt；真正发出去时它们都在。
+图中编号由 Mermaid `autonumber` 生成，与下方「步骤 N」一一对应。JSON 里省略了 26 个 tool schema 和第 2 节那整段 system prompt；真正发出去时它们都在。
 
 ### 5.1 时序图
 
@@ -299,7 +302,7 @@ sequenceDiagram
 重启 nginx 并告诉我是否成功
 ```
 
-**Response（UI）：** 侧栏出现用户气泡；`busy=true`，等待 Agent 启动。
+**Response（UI）：** 侧栏出现用户气泡；`busyByTab[thisChat]` 置上，等待 Agent 启动。注意 busy 是**按 chat**记的，别的 Copilot Tab 不受影响。
 
 ---
 
@@ -344,7 +347,7 @@ POST {baseURL}/chat/completions
   "stream": true,
   "stream_options": { "include_usage": true },
   "tool_choice": "auto",
-  "tools": ["/* 21 个 function schema，此处省略 */"],
+  "tools": ["/* 26 个 function schema，此处省略 */"],
   "messages": [
     {
       "role": "system",
@@ -898,7 +901,7 @@ succeed — diagnose it, or report the failure with the evidence. ...
 
 #### 步骤 23 — Agent → Copilot UI
 
-**说明：** `finishMessage`，`busy=false`。不再发 LLM 请求。
+**说明：** `finishMessage`，`clearTabBusy(tabId)`。不再发 LLM 请求。
 
 **Request（内部）：**
 
@@ -1007,11 +1010,11 @@ systemctl restart nginx
 | 层 | 现状（保留） | 关键代码 |
 | --- | --- | --- |
 | 循环 | 事件驱动 ReAct；显式 phase；Loop Guard（25 步 / 重复无进展 / token 预算）；空回复 nudge；一次性 Reflection | `agentPhase.ts`、`aiService.ts`、`loopGuard.ts` |
-| 上下文 | prompt 按本轮 tools 裁剪且整任务字节不变（prefix cache）；只读并行、写操作串行；loop 内结构保持的 compact；计划与账本每轮回注 | `copilot.ts`、`conversationCompact.ts`、`planTool.ts`、`taskMemory.ts` |
+| 上下文 | prompt 按本轮 tools 裁剪且整任务字节不变（prefix cache）；只读并行、写操作串行；loop 内结构保持的 compact；计划与账本每轮回注；scrollback 按需检索而不整段注入 | `copilot.ts`、`conversationCompact.ts`、`planTool.ts`、`taskMemory.ts`、`scrollbackSearch.ts` |
 | 安全 | 三档自主度 + 只读命令白名单 + 会话 Allowlist；`edit_file` 精确匹配；审批卡 Diff 预览 | `toolPolicy.ts`、`FileDiffPreview.tsx` |
 | 文件 | 写前 `.bak.<timestamp>` 备份 | `fileTools.ts` |
 | Skills | SKILL.md + `read_skill` 渐进披露（接近 Claude Code） | `main/skills/store.ts` |
-| 多机感知 | snapshot 含 tab_id / pane / sync group；chat pin + `@terminal` | `aiTools.ts`、`pinnedTerminal.ts` |
+| 多机感知 | snapshot 含 tab_id / pane / sync group；chat pin + `@terminal`；各 Copilot Tab 并行 loop，写操作按主机互斥；`delegate_to_host` 隔离子 Agent | `aiTools.ts`、`pinnedTerminal.ts`、`hostLock.ts`、`subAgent.ts` |
 
 ### 9.2 缺口（相对对标，以及代码里的半成品）
 
@@ -1019,17 +1022,16 @@ systemctl restart nginx
 
 | 能力 | 现状 | 对标 |
 | --- | --- | --- |
-P0 与 P1 已经落地，下面只留仍然存在的缺口：
+P0、P1 与 P2 的非 MCP 部分已经落地，下面只留仍然存在的缺口：
 
 | 能力 | 现状 | 对标 |
 | --- | --- | --- |
-| 上下文召回 | 终端最近 100–200 行整段塞入 | 按需检索 scrollback / 日志片段，而不是加行数 |
-| 多机 | 一个 `tab_id` 上跑主循环，无隔离子 Agent | Claude Code `Task`：子 Agent 隔离上下文，只交回摘要 |
-| 并发 | 全局 `busy`，同一时刻只能跑一个 chat 的 loop；`recovering` 阶段几乎没有自动恢复路径 | per-chat 并行 |
-| 评测 | 策略 / prompt / patch / verify 有单测，无 Agent 轨迹评测 | SWE-bench 风格：edit → 语法检查 → 独立确认 |
+| 外部可观测性 | 只能通过 SSH 上的命令看主机 | Prometheus / K8s 等以 skill 或 MCP 适配接入 |
+| 恢复 | `recovering` 阶段仍主要靠模型换策略，没有自动重连路径 | 断连后有界重连，且失败要表面给用户 |
+| 评测 | 策略 / prompt / patch / verify / 子 Agent / scrollback 有单测，无 Agent 轨迹评测 | SWE-bench 风格：edit → 语法检查 → 独立确认 |
 | 记忆写回 | `AGENTS.md` 能读能写，但「从被拒绝的操作里提炼约定」仍靠人开口 | Reflexion：失败轨迹沉淀为候选规则 |
 
-已经补掉的（P0 / P1）：Plan / Agent 模式切换、`.bak` 检查点与一键 Restore、`@path`、Slash 命令、队列与待批 UX（P0）；`apply_patch`、`git_read` / `git_commit`、远程 `AGENTS.md` 主机记忆、循环内 LLM 摘要、计划 verify 断言的 harness 拦截（P1）。
+已经补掉的（P0 / P1 / P2）：Plan / Agent 模式切换、`.bak` 检查点与一键 Restore、`@path`、Slash 命令、队列与待批 UX（P0）；`apply_patch`、`git_read` / `git_commit`、远程 `AGENTS.md` 主机记忆、循环内 LLM 摘要、计划 verify 断言的 harness 拦截（P1）；per-chat busy 与按主机写互斥、`delegate_to_host` 隔离子 Agent、`search_terminal` scrollback 检索（P2）。
 
 仍然要小心的两处摩擦，没有代码缺陷但会咬用户：
 
@@ -1103,16 +1105,17 @@ flowchart TD
 | 循环内 LLM compact | `planCompaction` 提前一轮看出本地压缩「将要整轮丢弃步骤」，命中才花一次 `compressHistory({ mode: 'loop' })`；`prompts/history.ts` 新增 loop 档提示词 | 只在**会丢步骤**时才付这次网络往返：裁结果正文是有损但可恢复的（还看得见跑了什么），丢整轮不是。每任务上限 3 次，失败静默退回本地压缩——摘要服务挂掉不该让任务失败。 |
 | 计划 verify 断言 | `PlanItem.verify` + `src/shared/planVerify.ts`；收尾那一轮若还有「已完成但校验未过」的步骤，撤掉整轮回答并注入 checkpoint | 命令匹配**对形式宽松、对结果严格**：忽略引号 / `sudo` / `.service` / 短选项，多余 token 也放行（加了 `--no-pager` 仍算跑过），但退出码和输出正则不对就是没过。只拦一次——拦不住的模型不会被第三份同样的消息说服，而一个结束不了的循环比一个未验证的回答更糟。`update_plan` 本身只对「校验跑过且失败」发警告，不对「还没跑」发：模型经常在同一轮里同时发校验命令和这次 update，那时兄弟调用的证据合法地还不存在。 |
 
-#### P2 — 多机子 Agent 与检索
+#### P2 — 多机子 Agent 与检索（✅ 已完成，MCP 除外）
 
 目标：多主机任务不把三份日志塞进同一个 32k 窗口。
 
-| 项 | 做法 | 验收 |
+| 项 | 落地方式 | 关键取舍 |
 | --- | --- | --- |
-| per-chat busy | 各 Copilot Tab 可并行 loop；同一主机上的写操作仍互斥 | 两个 chat 钉不同主机时可同时诊断 |
-| `delegate_to_host` | 子循环隔离 conversation，只把摘要交回主 Agent | 「三台机对比 8080」主上下文不含三份完整 ss 输出 |
-| scrollback 检索 | 按会话索引 + 引用片段，替代加大 `COPILOT_TERMINAL_MENTION_MAX_LINES` | `@terminal` 问一小时前的报错能引用片段而非截断头 |
-| MCP 可选 | Prometheus / Kubernetes 以 skill 或 MCP 适配接入，**不进入 core 工具面** | fast 档 schema 不涨；default 可选用 |
+| per-chat busy | 全局 `busy` / `busyTabId` 换成 `busyByTab: Record<tabId, requestId \| null>`；`setTabBusy` / `clearTabBusy` 按 chat 记，`isChatBusy` / `anyChatBusy` 供 UI 判定；队列回放的 store 订阅改成逐 tab 比较前后状态，谁空闲谁回放自己的队列 | 关键是**每条退出路径都要清自己那一格**：abort、guard 停机、待批被 supersede、summarizeOnly、epilogue 的两个分支、`onError`——漏一个就是那个 chat 永久卡住，而不再是全局卡住（后者至少一眼能看出来）。反过来，`onError` / `onComplete` 收到**不认识的 requestId** 时现在直接返回：以前那里兜底清全局 busy，如今没有 tab 可清，子 Agent 的 turn 也走同一个事件通道。map 里存 `null` 表示「busy 但没有自己的 LLM 请求」（历史压缩），所以判定用 key 是否存在，不看值。 |
+| 按主机写互斥 | `hostLock.ts`：按**终端 tab** 串行，链式 promise 天然 FIFO；`executeToolCall` 在 `applyPinnedTabId` 之后、按 `HOST_MUTATING_TOOLS` 决定是否加锁 | 锁的粒度是**主机不是 chat**：两个 chat 钉同一个 tab 才是要排序的那种情况，而两个 tab 连同一台物理机保持独立（exec 通道本来就是隔离的）。只锁写：读占大头且不会互相弄坏。锁只在**分发器这一层**加——子 Agent 循环里原本也包了一层，那会和自己的子调用死锁，所以删掉了，改由它调用的 `executeToolCall` 统一负责。`delegate_to_host` 刻意不在 `HOST_MUTATING_TOOLS` 里：它跨很多轮，持锁等于把主机锁一整段。 |
+| `delegate_to_host` | `subAgent.ts` 跑私有 conversation（只有主机 context + 任务描述，看不到父对话）；新增非流式 `ai:agentTurn` IPC 与 `AIProvider.agentTurn`；结果经 `formatSubAgentResult` 回交父循环 | 三条硬边界，缺一个就不敢让它无人值守跑：**只读**——复用 Plan 模式的 `decideToolCall`（那张表本来就是「只看不改」且有测试），而不是另造一套审批通道，因为里面根本没有用户可问；**单主机**——每个调用的 `tab_id` 一律被改写成被委派的 tab，模型点名别的机器也没用；**步数预算**——`MAX_SUB_AGENT_STEPS` 之后强制一轮 `toolNames: []` 的收尾，用代码而不是 prompt 保证它会停。单个工具结果截到 6000 字符：它的窗口和父循环一样大，一条 `journalctl` 就能填满，而委派的初衷正是要把这个挡在外面。Execute 模式不发这个工具——那个模式的前提是「用户看着每条命令落在自己终端里」，子 Agent 恰好相反。 |
+| scrollback 检索 | `shared/scrollbackSearch.ts` 纯函数（正则逐行、上下文窗口合并、字符预算）+ `search_terminal` 工具读 `readFullTerminalOutput`；prompt 的 Environment / Constraints 措辞同步改掉 | 超预算时**丢最旧的**：缓冲区末尾才是还有效的状态；但至少保留一个区块，把唯一的答案截成空等于谎报「没找到」。丢了多少必须写进结果里——以为自己搜过整个会话的模型会直接断言那个报错从没发生。同时必须改 prompt：原来那句「You cannot see scrollback beyond that snippet」有了这个工具就是假的限制，而信了它的模型会去重跑命令。 |
+| MCP 可选（⏳ 未做） | Prometheus / Kubernetes 以 skill 或 MCP 适配接入，**不进入 core 工具面** | fast 档 schema 不涨；default 可选用 |
 
 #### P3 — 学习与评测
 
@@ -1129,10 +1132,12 @@ flowchart TD
 - 不提供 bypass-permissions。
 - 不做浏览器、Computer Use、本机工程语义索引（远程 `grep` / `glob` 已经覆盖运维检索）。
 - 不把全部工具再堆进 fast 档；新能力继续按档位与 intent 门控（与第 1 节 prompt 设计一致）。`apply_patch` 尤其如此：小模型最不擅长的就是生成行号正确的合法 unified diff。
-- 主循环保持单线程决策；并行只发生在只读工具（已有 `Promise.all`）和隔离子 Agent 内部。
+- 单条任务内保持单线程决策：并行只发生在只读工具（已有 `Promise.all`）、隔离子 Agent 内部，以及**不同 Copilot Tab 之间**（P2 的 `busyByTab`）。同一主机上的写操作永远由 `hostLock` 串起来——并行是为了让用户能同时问几台机，不是为了让两条任务同时改一台机。
 - 不把 `recovering` 做成静默重连死循环；断连仍应表面给用户（第 7 节）。
 
 ### 9.7 建议落地顺序
 
-P0 与 P1 已完成：P1 的 verify 断言把第 5 节那种「重启必须独立检查」从 prompt 软约束变成了 harness 可测的行为——这正是 P3 轨迹评测所缺的那一半。接下来 P2 应在「用户经常同时开多台机」之后再上，避免过早引入子 Agent 复杂度；P3 可以先做「拒绝 / 失败提炼成候选 `AGENTS.md` 段落」，因为读写主机记忆的通路已经通了。
+P0、P1 与 P2（MCP 除外）已完成。P1 的 verify 断言把第 5 节那种「重启必须独立检查」从 prompt 软约束变成了 harness 可测的行为，P2 又把「只读」「单主机」「会停」三条同样做成了代码里的硬边界而不是 prompt 里的叮嘱——这两处正好是 P3 轨迹评测最需要的那种可断言行为。
+
+接下来：P3 建议先做「拒绝 / 失败提炼成候选 `AGENTS.md` 段落」，读写主机记忆的通路已经通了；轨迹评测集现在也更值得做，因为 `runSubAgent` 的执行器是注入的、`searchScrollback` 是纯函数，两者都能在不调真实 LLM 的情况下跑固定轨迹。MCP 仍然放最后：它是唯一一项会让工具面无上限增长的，而门控策略（按档位 + intent）必须先在现有工具上站稳。
 

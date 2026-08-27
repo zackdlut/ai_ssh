@@ -21,7 +21,11 @@ import { formatCaptureElapsed, isSessionCaptureActive, refreshCommandTimeoutMinu
 import { runAgentCommand } from './agentExec'
 import { isInteractiveTuiCommand } from '../../shared/interactiveCommands'
 import { getTabObservation, setTabObservation } from './terminalObservation'
-import { snapshotTabMarkers, applyPinnedTabId } from './pinnedTerminal'
+import { snapshotTabMarkers, applyPinnedTabId, formatTerminalLabel } from './pinnedTerminal'
+import { readFullTerminalOutput } from './terminalRegistry'
+import { formatSubAgentResult, runSubAgent } from './subAgent'
+import { withHostLock } from './hostLock'
+import { formatScrollbackResult, searchScrollback } from '../../shared/scrollbackSearch'
 import {
   describeSource,
   readSource,
@@ -37,7 +41,7 @@ import { verifyCommand } from '../../shared/verify'
 import { normalizeAISettings, clampCommandTimeoutMinutes } from '../../shared/aiSettings'
 import { normalizeForDiff, toSideBySideRows } from '../../shared/diffRows'
 import { computeTextDiff } from '../../shared/textDiff'
-import { toolNamesFor, type ToolTier } from '../../shared/aiTools'
+import { HOST_MUTATING_TOOLS, toolNamesFor, type ToolTier } from '../../shared/aiTools'
 import type { ExecEvidence } from '../../shared/planVerify'
 import type { TerminalAppearanceSettings } from '../../shared/terminalSettings'
 import type {
@@ -473,6 +477,65 @@ async function execCommand(
   }
 }
 
+/**
+ * Search a tab's scrollback. Reads the buffer the app already holds, so the
+ * whole session is searchable without paying for it in every turn's context and
+ * without re-running anything on the host.
+ */
+function searchTerminal(args: Record<string, unknown>): ToolResult {
+  const tabId = str(args.tab_id)
+  const pattern = typeof args.pattern === 'string' ? args.pattern : ''
+  if (!tabId || !pattern.trim()) return { ok: false, error: 'tab_id and pattern are required.' }
+  const tab = useSessionsStore.getState().sessions.find((t) => t.id === tabId)
+  if (!tab) return { ok: false, error: `No open tab with id "${tabId}".` }
+
+  const buffer = readFullTerminalOutput(tabId)
+  const result = searchScrollback(buffer, {
+    pattern,
+    contextLines: num(args.context_lines),
+    maxMatches: num(args.max_matches),
+    ignoreCase: args.case_sensitive !== true
+  })
+  if (result.patternError) {
+    return { ok: false, error: formatScrollbackResult(result, { pattern }) }
+  }
+  return {
+    ok: true,
+    result: formatScrollbackResult(result, { pattern, label: formatTerminalLabel(tab) })
+  }
+}
+
+/**
+ * Hand one investigation to an isolated sub-agent on another host. The parent
+ * gets the report; the sub-agent's own conversation is discarded with it.
+ */
+async function delegateToHost(
+  args: Record<string, unknown>,
+  ctx?: ToolExecContext
+): Promise<ToolResult> {
+  const tabId = str(args.tab_id)
+  const task = str(args.task)
+  if (!tabId || !task) return { ok: false, error: 'tab_id and task are required.' }
+  const tab = useSessionsStore.getState().sessions.find((t) => t.id === tabId)
+  if (!tab) return { ok: false, error: `No open tab with id "${tabId}".` }
+  if (tab.status !== 'connected' || !tab.sessionId) {
+    return { ok: false, error: `Tab "${tabId}" is not connected (status: ${tab.status}).` }
+  }
+
+  const outcome = await runSubAgent({
+    terminalTabId: tabId,
+    task,
+    chatTabId: ctx?.chatTabId,
+    onAbortHandle: ctx?.onAbortHandle,
+    execute: (name, toolArgs, onAbortHandle) =>
+      executeToolCall(name, toolArgs, { chatTabId: ctx?.chatTabId, onAbortHandle })
+  })
+  const text = formatSubAgentResult(formatTerminalLabel(tab), outcome)
+  // A sub-agent that could not report is a failed tool call: the parent must not
+  // read "no report" as "nothing to report".
+  return outcome.ok ? { ok: true, result: text } : { ok: false, error: text }
+}
+
 function listSshConfigs(): ToolResult {
   const configs = useBookmarksStore.getState().connections.map(sanitizeConfig)
   return { ok: true, result: JSON.stringify(configs) }
@@ -809,13 +872,31 @@ export interface ToolExecContext {
   onAbortHandle?: (abort: () => void) => void
 }
 
-/** Dispatch a single tool call to its handler. */
+/**
+ * Dispatch a single tool call to its handler.
+ *
+ * Calls that CHANGE a host are serialized per terminal tab: chat tabs now run
+ * their loops in parallel, so two of them pinned to the same machine can reach
+ * it in the same instant. Reads are left to overlap — they are the common case
+ * and cannot corrupt anything. `delegate_to_host` deliberately takes no lock:
+ * it spans many turns, and its own inner calls take the lock individually.
+ */
 export async function executeToolCall(
   name: string,
   args: Record<string, unknown>,
   ctx?: ToolExecContext
 ): Promise<ToolResult> {
   args = applyPinnedTabId(name, args, ctx?.pinnedTabId)
+  if (!HOST_MUTATING_TOOLS.has(name)) return dispatchToolCall(name, args, ctx)
+  const hostKey = typeof args.tab_id === 'string' ? args.tab_id.trim() : ''
+  return withHostLock(hostKey, () => dispatchToolCall(name, args, ctx))
+}
+
+async function dispatchToolCall(
+  name: string,
+  args: Record<string, unknown>,
+  ctx?: ToolExecContext
+): Promise<ToolResult> {
   switch (name) {
     case 'open_ssh':
       return openSsh(args)
@@ -835,6 +916,10 @@ export async function executeToolCall(
       return execCommand(args, ctx)
     case 'run_in_terminal':
       return execCommand(args, ctx, { visible: true })
+    case 'search_terminal':
+      return searchTerminal(args)
+    case 'delegate_to_host':
+      return delegateToHost(args, ctx)
     case 'read_file':
       return readFile(args)
     case 'edit_file':

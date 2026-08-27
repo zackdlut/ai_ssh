@@ -28,11 +28,13 @@ import {
   resolveApiKey,
   resolveHttpProxy
 } from '../../shared/aiSettings'
-import { buildAITools, toolTierForProfile } from '../../shared/aiTools'
+import { AI_TOOLS, buildAITools, toolTierForProfile } from '../../shared/aiTools'
 import type {
   AISettings,
   AppLocale,
   ModelProfile,
+  AIAgentTurnRequest,
+  AIAgentTurnResult,
   AIChatRequest,
   AIChartSpecRequest,
   AITranslateRequest,
@@ -648,6 +650,103 @@ export class AIProvider {
   cancel(requestId: string): void {
     this.controllers.get(requestId)?.abort()
     this.controllers.delete(requestId)
+  }
+
+  /**
+   * One non-streaming function-calling turn with a caller-supplied prompt and
+   * tool list, for the delegated host sub-agent.
+   *
+   * Non-streaming on purpose: nothing renders a sub-agent's tokens, and the
+   * whole point of the delegation is that only its final report crosses back
+   * into the parent conversation. It shares `controllers`, so the parent's Stop
+   * cancels an in-flight sub-agent turn like any other request.
+   */
+  async agentTurn(req: AIAgentTurnRequest): Promise<AIAgentTurnResult> {
+    const settings = this.getSettings()
+    const profile = settings.copilotModelProfile
+    if (!resolveApiKey(settings, profile)) {
+      return { error: 'AI is not configured. Set the API key in Settings.' }
+    }
+
+    const client = await this.createClient(profile)
+    const started = Date.now()
+    const controller = new AbortController()
+    this.controllers.set(req.requestId, controller)
+
+    const wanted = new Set(req.toolNames ?? [])
+    const tools = AI_TOOLS.filter((t) => wanted.has(t.function.name))
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      { role: 'system', content: req.systemPrompt },
+      ...toSdkMessages(req.messages)
+    ]
+    const model = resolveActiveModel(settings)
+    const base = {
+      model,
+      messages,
+      stream: false as const
+    } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming
+    const withTools = {
+      ...base,
+      tools: tools as unknown as OpenAI.Chat.ChatCompletionTool[],
+      tool_choice: 'auto' as const
+    } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming
+
+    logLlmRequest(req.requestId, 'agentTurn.completions.create', {
+      method: 'chat.completions.create',
+      model,
+      baseURL: llmBaseUrl(settings, profile),
+      stream: false,
+      toolNames: [...wanted],
+      messages
+    })
+
+    try {
+      let completion: OpenAI.Chat.ChatCompletion
+      try {
+        completion = await client.chat.completions.create(tools.length > 0 ? withTools : base, {
+          signal: controller.signal
+        })
+      } catch (e) {
+        // Same reasoning as `chat`: a 4xx is how a backend that does not
+        // understand `tools` refuses, and the sub-agent can still write its
+        // report without them. Anything else is a real failure.
+        if (!isParameterRejection(e) || controller.signal.aborted) throw e
+        completion = await client.chat.completions.create(base, { signal: controller.signal })
+      }
+
+      const message = completion.choices[0]?.message
+      const toolCalls: ToolCallDTO[] = (message?.tool_calls ?? []).flatMap((tc) => {
+        const fn = (tc as { function?: { name?: string; arguments?: string } }).function
+        if (!fn?.name) return []
+        return [{ id: tc.id, name: fn.name, arguments: fn.arguments || '{}' }]
+      })
+      const content = extractMessageText(message)
+      const usage = completion.usage
+        ? {
+            prompt: completion.usage.prompt_tokens ?? 0,
+            completion: completion.usage.completion_tokens ?? 0,
+            total:
+              completion.usage.total_tokens ??
+              (completion.usage.prompt_tokens ?? 0) + (completion.usage.completion_tokens ?? 0)
+          }
+        : undefined
+      logLlmResponse(
+        req.requestId,
+        'agentTurn.done',
+        { content, toolCalls: toolCalls.length > 0 ? toolCalls : undefined, usage },
+        Date.now() - started
+      )
+      return { content, toolCalls: toolCalls.length > 0 ? toolCalls : undefined, usage }
+    } catch (e) {
+      const endpoint = llmBaseUrl(settings, profile)
+      const described = controller.signal.aborted
+        ? 'Cancelled.'
+        : describeRequestError(e, endpoint, resolveHttpProxy(settings, endpoint))
+      logLlmError(req.requestId, 'agentTurn.error', { error: described }, Date.now() - started)
+      return { error: described }
+    } finally {
+      this.controllers.delete(req.requestId)
+    }
   }
 
   /**

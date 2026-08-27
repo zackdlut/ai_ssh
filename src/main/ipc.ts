@@ -14,6 +14,8 @@ import { truncateForDebug } from '../shared/debugSanitize'
 import { remoteTempPath } from '../shared/sftpTempPath'
 import type { DebugLogPayload } from '../shared/debugLog'
 import type {
+  AIAgentTurnRequest,
+  AIAgentTurnResult,
   AIChatRequest,
   AIChartSpecRequest,
   AIChartSpecResult,
@@ -224,6 +226,21 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
     logDebug({ category: 'ipc', message: 'ai:cancel', traceId: requestId })
     ai.cancel(requestId)
   })
+
+  // One isolated sub-agent turn (delegate_to_host). Non-streaming: only the
+  // sub-agent's final report reaches the chat, never its intermediate tokens.
+  ipcMain.handle(
+    'ai:agentTurn',
+    async (_e, req: AIAgentTurnRequest): Promise<AIAgentTurnResult> => {
+      logDebug({
+        category: 'ipc',
+        message: 'ai:agentTurn',
+        traceId: req.requestId,
+        data: { messageCount: req.messages.length, toolCount: req.toolNames?.length ?? 0 }
+      })
+      return ai.agentTurn(req)
+    }
+  )
 
   ipcMain.handle(
     'ai:compressHistory',

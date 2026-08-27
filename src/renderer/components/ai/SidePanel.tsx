@@ -4,7 +4,8 @@ import {
   clampPanelWidth,
   PANEL_MIN_WIDTH,
   PANEL_MAX_WIDTH,
-  MAX_CHAT_TABS
+  MAX_CHAT_TABS,
+  isChatBusy
 } from '../../store/aiStore'
 import { useSessionsStore } from '../../store/sessionsStore'
 import {
@@ -77,8 +78,8 @@ type ContextMenu =
 export default function SidePanel(): JSX.Element {
   const activeChatTabId = useAIStore((s) => s.activeChatTabId)
   const activeChat = useAIStore((s) => s.chatTabs.find((t) => t.id === s.activeChatTabId))
-  const busy = useAIStore((s) => s.busy)
-  const busyTabId = useAIStore((s) => s.busyTabId)
+  // The panel only ever renders one chat, so "busy" here means this chat's loop.
+  const busy = useAIStore((s) => isChatBusy(s.busyByTab, s.activeChatTabId))
   const panelWidth = useAIStore((s) => s.panelWidth)
   const notice = useAIStore((s) => s.notice)
   const setPanelWidth = useAIStore((s) => s.setPanelWidth)
@@ -831,7 +832,7 @@ export default function SidePanel(): JSX.Element {
           <div className="composer-toolbar">
             <ModeSelect
               value={agentMode}
-              disabled={busy && busyTabId === activeChatTabId}
+              disabled={busy}
               onChange={(mode) => activeChatTabId && setAgentMode(activeChatTabId, mode)}
             />
             <ContextMeter key={activeChatTabId ?? 'meter'} budget={contextBudget} />
@@ -846,7 +847,7 @@ export default function SidePanel(): JSX.Element {
               onChange={onProfileChange}
             />
             <div className="composer-send-group">
-              {busy && busyTabId === activeChatTabId && (
+              {busy && (
                 <button
                   type="button"
                   className="composer-send danger"

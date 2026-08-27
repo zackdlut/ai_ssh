@@ -117,7 +117,11 @@ function environment(t: ToolSet): string {
   const memory = t.any('edit_file', 'apply_patch', 'write_file')
   return lines(
     '## Environment (injected every turn — read before acting)',
-    '- Terminal context: connected Host / User / observed cwd / OS hint, plus a snippet of recent output. You cannot see scrollback beyond that snippet.',
+    `- Terminal context: connected Host / User / observed cwd / OS hint, plus a snippet of recent output.${
+      t.has('search_terminal')
+        ? ' Earlier scrollback is NOT injected, but it is still there — reach it with search_terminal instead of assuming it is gone.'
+        : ' You cannot see scrollback beyond that snippet.'
+    }`,
     t.has('read_skill') &&
       '- Skills: installed skill names with one-line descriptions (a summary, not the instructions).',
     t.enabled &&
@@ -278,6 +282,18 @@ function toolRules(t: ToolSet): string {
       )
     : false
 
+  // What the schemas cannot say: WHEN reaching for one of these beats the
+  // obvious shell command. Both exist to keep output out of this conversation,
+  // so the rule is about where the work happens, not about their arguments.
+  const scoping = lines(
+    t.has('search_terminal') &&
+      `Past output. A question about output that has already scrolled past is a search_terminal call, not a re-run: ${
+        shell ? `re-running through ${shell} ` : 'a fresh command '
+      }costs the host a command and answers about NOW, not about the moment the user is asking about.`,
+    t.has('delegate_to_host') &&
+      'Several hosts. When the same question has to be answered on more than one OTHER host, emit one delegate_to_host per host in the SAME response rather than working through them yourself one at a time — they run in parallel and only their reports come back. Keep the host you are already on for yourself.'
+  )
+
   const folders = t.has('create_folder')
     ? 'Ordering. Create a folder FIRST and wait for its id before moving connections into it; never guess the id of something you just created.'
     : false
@@ -307,7 +323,9 @@ function toolRules(t: ToolSet): string {
       `When the user just wants to SEE what one of these reports (${displayTools}), the card IS the answer: STOP there with no trailing prose. Keep going only if the request asked for more — to ANALYZE/RECOMMEND (add a short recommendation in the same reply as the call), or to ACT on the result (emit the follow-up call).`
   )
 
-  const body = [emitting, execTools, files, git, batching, gotchas, noRestate].filter(Boolean)
+  const body = [emitting, execTools, files, git, scoping, batching, gotchas, noRestate].filter(
+    Boolean
+  )
   return `## Tool rules\n${t.inventory()}\n\n${body.join('\n\n')}`
 }
 
@@ -331,7 +349,11 @@ function constraints(t: ToolSet): string {
       t.enabled ? ' or run/list to find out' : ''
     }.`,
     '- Ask one brief clarifying question when the target (which tab, host, config) or the request itself is genuinely unclear, rather than guessing.',
-    `- Cannot: act on hosts not already open as tabs, see scrollback beyond the recent-output snippet, reach the internet, or persist local files beyond saved SSH configs/settings${
+    `- Cannot: act on hosts not already open as tabs, ${
+      t.has('search_terminal')
+        ? 'see scrollback for a tab that is not open'
+        : 'see scrollback beyond the recent-output snippet'
+    }, reach the internet, or persist local files beyond saved SSH configs/settings${
       shell ? `; ${shell} needs an open, CONNECTED tab` : ''
     }.`
   )

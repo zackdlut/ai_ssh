@@ -9,6 +9,7 @@
  *
  * Organized by concern:
  * - copilot:         the main chat copilot system prompt (core + chart/mermaid sections)
+ * - subAgent:        the read-only prompt for a delegated per-host sub-agent
  * - userRules:       user-rules system message + effective (prompt + rules) assembly
  * - terminalContext: the per-turn terminal context system message
  * - chart:           chart-spec system prompt, chart-turn nudge, chart/mermaid intent regexes
@@ -16,6 +17,7 @@
  * - history:         conversation-history compression prompts
  */
 export * from './copilot'
+export * from './subAgent'
 export * from './userRules'
 export * from './terminalContext'
 export * from './chart'

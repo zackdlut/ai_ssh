@@ -1,4 +1,9 @@
-import { useAIStore, DEFAULT_CHAT_TAB_TITLE } from '../store/aiStore'
+import {
+  useAIStore,
+  DEFAULT_CHAT_TAB_TITLE,
+  isChatBusy,
+  unreachableBusyTabs
+} from '../store/aiStore'
 import { useSessionsStore } from '../store/sessionsStore'
 import { COPILOT_CONTEXT_MAX_LINES, COPILOT_TERMINAL_MENTION_MAX_LINES, readTerminalOutput } from './terminalRegistry'
 import {
@@ -487,6 +492,45 @@ const loops = new Map<string, LoopState>()
 const queuedPrompts = new Map<string, string[]>()
 let initialized = false
 
+// This module owns app-lifetime singletons: the streaming IPC listeners, and
+// the maps of turns currently in flight. Those cannot be hot-swapped — a hot
+// update gives the module fresh empty maps while the listeners registered by
+// the PREVIOUS instance stay subscribed and keep reading the old ones, so every
+// reply after that point is delivered to a map nobody writes to and its chat is
+// left waiting forever. A full reload is the only coherent answer.
+if (import.meta.hot) {
+  import.meta.hot.accept(() => import.meta.hot?.invalidate())
+}
+
+/**
+ * Release chats that are marked busy but can no longer be reached by any event.
+ *
+ * A stream event whose requestId we do not recognize means some turn lost its
+ * link to the chat that started it. The global `busy` flag used to make that
+ * self-healing by accident: one `setBusy(false)` freed the whole app. A per-tab
+ * map has no such blunt instrument, so an orphaned entry would wedge that chat's
+ * composer for the rest of the session — the failure this exists to prevent.
+ *
+ * "Unreachable" is narrow on purpose, because a chat can legitimately be busy
+ * with nothing in `pending`: a turn parked on a summarization, or one whose tool
+ * calls are waiting for the user to approve them. Both are revivable and must
+ * survive; only a tab whose requestId is dead AND has neither is swept.
+ */
+function releaseUnreachableBusy(): void {
+  const ai = useAIStore.getState()
+  const revivable = new Set<string>(compacting.keys())
+  for (const loop of loops.values()) revivable.add(loop.tabId)
+  for (const tabId of unreachableBusyTabs(ai.busyByTab, new Set(pending.keys()), revivable)) {
+    debugLog({
+      category: 'action.triggered',
+      tabId,
+      message: 'agent.busy.released',
+      data: { requestId: ai.busyByTab[tabId] }
+    })
+    ai.clearTabBusy(tabId)
+  }
+}
+
 /**
  * Autonomy level read from settings. Cached because the approval decision runs
  * synchronously inside the streaming `onDone` handler, which cannot await.
@@ -722,7 +766,7 @@ function startTurn(loop: LoopState, epilogue = false): void {
     })
   }
   pending.set(requestId, { tabId: loop.tabId, messageId: assistantId, loop, epilogue })
-  ai.setBusy(true, requestId, loop.tabId)
+  ai.setTabBusy(loop.tabId, requestId)
   const userRules = useUserRulesStore.getState().rules
   debugLog({
     category: 'action.triggered',
@@ -962,7 +1006,7 @@ export function abortLoop(tabId: string): void {
   }
 
   debugLog({ category: 'user.action', tabId, message: 'agent.abort', data: {} })
-  ai.setBusy(false)
+  ai.clearTabBusy(tabId)
 }
 
 /** Approve a pending (action) tool call from the UI. */
@@ -1071,9 +1115,9 @@ export function cancelPendingApprovals(tabId: string): number {
     message: 'tool.approval.superseded',
     data: { count: refs.length }
   })
-  // The paused turn's request already completed; clear busy so the new prompt
-  // can start a fresh turn.
-  ai.setBusy(false)
+  // The paused turn's request already completed; clear this chat's busy flag so
+  // the new prompt can start a fresh turn.
+  ai.clearTabBusy(tabId)
   return refs.length
 }
 
@@ -1104,7 +1148,7 @@ function stopLoopWithGuardNotice(tabId: string, loop: LoopState, trip: GuardTrip
     message: 'agent.loopGuard.tripped',
     data: { reason: trip.reason, steps: loop.guard?.stepCount, tokens: loop.guard?.tokenSpent }
   })
-  ai.setBusy(false)
+  ai.clearTabBusy(tabId)
 }
 
 /**
@@ -1212,7 +1256,7 @@ function maybeContinueLoop(tabId: string, messageId: string): void {
   if (evaluateAfterObservation(loop, calls) === 'finalAnswer') {
     advance(loop, 'finalAnswer', tabId)
     debugLog({ category: 'action.triggered', tabId, message: 'agent.verify.done', data: {} })
-    useAIStore.getState().setBusy(false)
+    useAIStore.getState().clearTabBusy(tabId)
     return
   }
 
@@ -1250,13 +1294,17 @@ export function initAIService(): void {
     applyRuntimeAISettings(normalizeAISettings(s))
   })
 
-  // Replay whatever the user typed while the previous task was still running.
-  // Watching the busy flag covers every way a loop can end (final answer, guard
-  // trip, error, abort) without threading a callback through all of them.
+  // Replay whatever the user typed while THIS chat's task was still running.
+  // Watching the busy map covers every way a loop can end (final answer, guard
+  // trip, error, abort) without threading a callback through all of them, and
+  // per-tab means a chat that just went idle replays its own queue rather than
+  // waiting for every other chat to finish too.
   useAIStore.subscribe((state, prev) => {
-    if (!prev.busy || state.busy) return
-    for (const [tabId, queue] of queuedPrompts) {
-      if (queue.length === 0) {
+    if (state.busyByTab === prev.busyByTab) return
+    for (const tabId of Object.keys(prev.busyByTab)) {
+      if (tabId in state.busyByTab) continue
+      const queue = queuedPrompts.get(tabId)
+      if (!queue || queue.length === 0) {
         queuedPrompts.delete(tabId)
         continue
       }
@@ -1264,7 +1312,6 @@ export function initAIService(): void {
       if (queue.length === 0) queuedPrompts.delete(tabId)
       syncQueueCount(tabId)
       void sendPrompt(next, tabId)
-      return
     }
   })
 
@@ -1285,8 +1332,12 @@ export function initAIService(): void {
   window.api.ai.onDone(({ requestId, content, toolCalls, usage }) => {
     const entry = pending.get(requestId)
     pending.delete(requestId)
+    // No entry means this turn's answer has nowhere to go: it was superseded,
+    // or (in dev) the module holding `pending` was hot-replaced out from under
+    // the listener. The reply is lost either way, but the chat that asked for it
+    // must not be left busy forever.
     if (!entry) {
-      useAIStore.getState().setBusy(false)
+      releaseUnreachableBusy()
       return
     }
     const { tabId, messageId, loop, epilogue } = entry
@@ -1300,7 +1351,7 @@ export function initAIService(): void {
     // model still emitted, and never nudge it to "act" on an empty reply.
     if (loop.summarizeOnly) {
       if (epilogue) {
-        ai.setBusy(false)
+        ai.clearTabBusy(tabId)
         return
       }
       advance(loop, 'finalAnswer', tabId)
@@ -1308,7 +1359,7 @@ export function initAIService(): void {
         ai.appendToMessage(tabId, messageId, tNotice('copilot.interruptedSummary'))
       }
       ai.finishMessage(tabId, messageId)
-      ai.setBusy(false)
+      ai.clearTabBusy(tabId)
       return
     }
 
@@ -1316,7 +1367,7 @@ export function initAIService(): void {
       // An epilogue turn with no tool call is just a redundant restatement of
       // the card(s) already shown — drop it entirely (nothing was rendered).
       if (epilogue) {
-        ai.setBusy(false)
+        ai.clearTabBusy(tabId)
         return
       }
       // The model is trying to finish. If it claimed a plan step done without
@@ -1366,7 +1417,7 @@ export function initAIService(): void {
           ai.removeMessage(tabId, messageId)
         }
       }
-      ai.setBusy(false)
+      ai.clearTabBusy(tabId)
       return
     }
 
@@ -1434,24 +1485,26 @@ export function initAIService(): void {
   window.api.ai.onError(({ requestId, error }) => {
     const entry = pending.get(requestId)
     pending.delete(requestId)
-    if (entry) {
-      const ai = useAIStore.getState()
-      advance(entry.loop, 'recover', entry.tabId)
-      if (entry.epilogue) {
-        // No visible message exists for an epilogue turn yet — create one so the
-        // error is surfaced to the user instead of being silently swallowed.
-        ai.addMessage(entry.tabId, {
-          id: entry.messageId,
-          role: 'assistant',
-          content: `[Error] ${error}`
-        })
-      } else {
-        ai.appendToMessage(entry.tabId, entry.messageId, `\n\n[Error] ${error}`)
-        ai.finishMessage(entry.tabId, entry.messageId)
-      }
-      loops.delete(entry.messageId)
+    if (!entry) {
+      releaseUnreachableBusy()
+      return
     }
-    useAIStore.getState().setBusy(false)
+    const ai = useAIStore.getState()
+    advance(entry.loop, 'recover', entry.tabId)
+    if (entry.epilogue) {
+      // No visible message exists for an epilogue turn yet — create one so the
+      // error is surfaced to the user instead of being silently swallowed.
+      ai.addMessage(entry.tabId, {
+        id: entry.messageId,
+        role: 'assistant',
+        content: `[Error] ${error}`
+      })
+    } else {
+      ai.appendToMessage(entry.tabId, entry.messageId, `\n\n[Error] ${error}`)
+      ai.finishMessage(entry.tabId, entry.messageId)
+    }
+    loops.delete(entry.messageId)
+    ai.clearTabBusy(entry.tabId)
   })
 }
 
@@ -1555,14 +1608,16 @@ async function compactTabHistory(
   const { toCompress } = selectMessagesToCompress(existingDto, budgetParams)
   if (toCompress.length === 0) return 0
 
-  ai.setBusy(true, null, tabId)
+  // Compression has no LLM request id of its own, but the chat must still read
+  // as busy so the UI blocks a second send while history is being rewritten.
+  ai.setTabBusy(tabId, null)
   ai.setNotice(tNotice('copilot.context.compressing'))
   const result = await window.api.ai.compressHistory({
     messages: toCompress as ChatMessageDTO[],
     context
   })
   if (result.error || !result.summary) {
-    ai.setBusy(false)
+    ai.clearTabBusy(tabId)
     ai.setNotice(tNotice('copilot.context.compressFailed'))
     return null
   }
@@ -1576,7 +1631,7 @@ async function compactTabHistory(
     },
     ...kept
   ])
-  if (!opts?.leaveBusy) ai.setBusy(false)
+  if (!opts?.leaveBusy) ai.clearTabBusy(tabId)
   return toCompress.length
 }
 
@@ -1585,7 +1640,7 @@ export async function compactActiveChat(): Promise<void> {
   const ai = useAIStore.getState()
   const tabId = ai.activeChatTabId
   if (!tabId) return
-  if (ai.busy) {
+  if (isChatBusy(ai.busyByTab, tabId)) {
     ai.setNotice(tNotice('copilot.context.compressingBusy'))
     return
   }
@@ -1638,7 +1693,7 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
 
   // A prompt sent mid-task is queued and replayed when the loop finishes.
   // Dropping it (the old behaviour) looked identical to a broken Send button.
-  if (ai.busy) {
+  if (isChatBusy(ai.busyByTab, tabId)) {
     const queue = queuedPrompts.get(tabId) ?? []
     queue.push(prompt)
     queuedPrompts.set(tabId, queue)
@@ -1700,7 +1755,7 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
 
   tab = useAIStore.getState().chatTabs.find((t) => t.id === tabId)
   if (!tab) {
-    useAIStore.getState().setBusy(false)
+    useAIStore.getState().clearTabBusy(tabId)
     return
   }
 
