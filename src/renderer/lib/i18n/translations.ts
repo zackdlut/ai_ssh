@@ -382,8 +382,6 @@ const zh = {
   'copilot.context.compressFailed': '上下文压缩失败，请删减内容后重试',
   'copilot.context.overCommitted':
     '上下文窗口太小，系统提示与工具定义已几乎占满；请在设置中调大上下文长度或切换模型档位',
-  'copilot.context.calibrated':
-    '实测该模型端点的上下文窗口只有 {observed} tokens（设置里写的是 {configured}），已按实测值压缩。请在设置中改小上下文长度，或调大服务端窗口。',
   'copilot.context.retry': '本轮请求超出模型窗口，已压缩上下文后自动重试…',
   'copilot.retry': '模型请求失败（{error}），正在自动重试（第 {attempt}/{max} 次）…',
   'copilot.truncatedReply': '模型回答因输出长度上限被截断，正在压缩上下文后重试…',
@@ -1148,8 +1146,6 @@ const en: Record<keyof typeof zh, string> = {
   'copilot.context.compressFailed': 'Context compression failed. Shorten the chat and try again.',
   'copilot.context.overCommitted':
     'Context window too small — the system prompt and tool definitions nearly fill it. Raise the context length or switch model profile in Settings.',
-  'copilot.context.calibrated':
-    'This endpoint only accepts about {observed} tokens of context (Settings says {configured}); budgeting against the observed value. Lower the context length in Settings, or raise the window on the server.',
   'copilot.context.retry': 'The request exceeded the model window — compacting the context and retrying…',
   'copilot.retry': 'Model request failed ({error}); retrying automatically ({attempt}/{max})…',
   'copilot.truncatedReply':

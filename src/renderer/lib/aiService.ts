@@ -15,12 +15,7 @@ import {
   type MentionableTab
 } from './pinnedTerminal'
 import { getTabObservation } from './terminalObservation'
-import {
-  normalizeAISettings,
-  resolveActiveContextLength,
-  resolveActiveModel,
-  resolveBaseURL
-} from '../../shared/aiSettings'
+import { normalizeAISettings, resolveActiveContextLength } from '../../shared/aiSettings'
 import {
   buildEffectiveSystemPrompt,
   buildContextMessage,
@@ -35,7 +30,6 @@ import {
 import {
   buildChatPayload,
   estimateTokens,
-  formatTokenCount,
   selectMessagesToCompress,
   type BudgetMessage
 } from '../../shared/contextBudget'
@@ -82,13 +76,6 @@ import {
 import { buildTaskMemoryMessage } from './taskMemory'
 import { compactConversation, planCompaction } from './conversationCompact'
 import {
-  calibrationKey,
-  effectiveContextLimit,
-  noteContextRejection,
-  observeUsage,
-  type Calibration
-} from './contextCalibration'
-import {
   buildHistoryFromMessages,
   digestToolResult,
   messageBudgetText,
@@ -109,7 +96,6 @@ import { readFile } from './fileTools'
 import { useUserRulesStore } from '../store/userRulesStore'
 import type {
   AISettings,
-  AITokenUsage,
   AutonomyMode,
   ChatMessageDTO,
   CopilotAgentMode,
@@ -184,18 +170,12 @@ interface LoopState {
    * nudge/reflection turns, so it always reflects the real intent.
    */
   userIntent?: string
-  /**
-   * Model context window (tokens) as CONFIGURED, used to bound the conversation
-   * in-loop. The effective window is this lowered by whatever the endpoint has
-   * actually been observed to accept — see `effectiveContextLimit`.
-   */
+  /** Model context window (tokens), used to bound the conversation in-loop. */
   contextLimit?: number
-  /** Endpoint+model identity the observed-window calibration is filed under. */
-  calibrationKey?: string
   /**
    * Our estimate of the prompt the turn in flight carries, tools and system
-   * prompt included. Compared against the provider's reported `prompt_tokens`
-   * to notice a server that silently truncated it.
+   * prompt included. Reported alongside an over-window failure so the log says
+   * how large the refused payload was.
    */
   promptEstimate?: number
   /** Tool tier the active profile exposes; its schemas are part of every payload. */
@@ -353,29 +333,6 @@ function toolSurfaceFor(
   }
 }
 
-/**
- * Which endpoint+model the observed-window calibration belongs to. Keyed on the
- * base URL as well as the model, because the same model name behind a different
- * server is a different `num_ctx`.
- */
-function activeCalibrationKey(settings: AISettings): string {
-  const profile = settings.copilotModelProfile
-  lastCalibrationKey = calibrationKey(
-    profile,
-    resolveActiveModel(settings),
-    resolveBaseURL(settings, profile)
-  )
-  return lastCalibrationKey
-}
-
-/**
- * The identity most recently resolved above, kept so synchronous callers can
- * reach the calibration too. The context meter is the one that matters: reading
- * settings there means IPC on every keystroke, and a gauge showing 25% full
- * while the endpoint is already refusing requests is worse than no gauge.
- */
-let lastCalibrationKey: string | undefined
-
 function isPlanMode(tabId: string): boolean {
   return chatAgentMode(tabId) === 'plan'
 }
@@ -397,7 +354,7 @@ function syncQueueCount(tabId: string): void {
  */
 function conversationBudget(
   loop: LoopState,
-  /** Effective window for this turn (configured, lowered by what was observed). */
+  /** Configured context window for this turn. */
   limit: number,
   /** Tier whose schemas ride along, or undefined when tools are disabled. */
   tier: ToolTier | undefined,
@@ -563,50 +520,6 @@ async function maybeSummarizeLoopHistory(loop: LoopState): Promise<void> {
     message: 'agent.loopCompact',
     data: { steps: plan.dropCount, summaryChars: result.summary.length, budget }
   })
-}
-
-/**
- * Tell the user the window is not what Settings says, once per discovery.
- *
- * Silently shrinking the budget would fix the task and leave the wrong number
- * in Settings forever, so the notice names both figures: the observed window is
- * a property of the server (an Ollama `num_ctx` fitted to the GPU, a gateway's
- * own cap), and only the user can go change the setting or the server.
- */
-function announceCalibration(loop: LoopState, learned: Calibration): void {
-  useAIStore.getState().setNotice(
-    tNotice('copilot.context.calibrated', {
-      observed: formatTokenCount(learned.window),
-      configured: formatTokenCount(loop.contextLimit ?? 0)
-    })
-  )
-  debugLog({
-    category: 'action.triggered',
-    tabId: loop.tabId,
-    message: 'agent.context.calibrated',
-    data: {
-      observed: learned.window,
-      reason: learned.reason,
-      configured: loop.contextLimit,
-      promptEstimate: loop.promptEstimate
-    }
-  })
-}
-
-/**
- * Fold the provider's own token counts back into what we believe the window is.
- * Runs on every turn and almost always concludes nothing; the turns it does not
- * are the ones where the configured limit was fiction.
- */
-function applyUsageCalibration(loop: LoopState, usage: AITokenUsage): void {
-  if (!loop.calibrationKey || !loop.contextLimit) return
-  const learned = observeUsage({
-    key: loop.calibrationKey,
-    configured: loop.contextLimit,
-    estimatedPrompt: loop.promptEstimate ?? 0,
-    usage
-  })
-  if (learned) announceCalibration(loop, learned)
 }
 
 /** Continue the loop, summarizing first when the budget is about to bite. */
@@ -876,12 +789,8 @@ function startTurn(loop: LoopState, epilogue = false): void {
   ])
 
   // Bound the running conversation with what is actually left over, which is
-  // why the surrounding layers are assembled first. The window is the
-  // configured one lowered to whatever this endpoint has been observed to
-  // accept: a Settings number four times the truth is how the prompt grows past
-  // what the server takes, and the server drops from the front, where the
-  // user's instruction is.
-  const limit = effectiveContextLimit(loop.calibrationKey, loop.contextLimit ?? 0)
+  // why the surrounding layers are assembled first.
+  const limit = loop.contextLimit ?? 0
   const { budget: available, fixed } = conversationBudget(
     loop,
     limit,
@@ -1392,15 +1301,6 @@ function recoverFromTurnFailure(entry: PendingRequest, error: string): boolean {
 
   if (plan.kind === 'compact') {
     loop.contextRecoveries = plan.attempt
-    // The endpoint has just told us its window is smaller than we were told it
-    // was. Record that against the ENDPOINT, so the next task starts corrected
-    // instead of walking into the same wall.
-    if (loop.calibrationKey) {
-      announceCalibration(
-        loop,
-        noteContextRejection(loop.calibrationKey, loop.contextLimit ?? 0, loop.promptEstimate)
-      )
-    }
     ai.setNotice(tNotice('copilot.context.retry'))
     debugLog({
       category: 'action.triggered',
@@ -1408,7 +1308,6 @@ function recoverFromTurnFailure(entry: PendingRequest, error: string): boolean {
       message: 'agent.recover.context',
       data: { error: shortError(error), promptEstimate: loop.promptEstimate }
     })
-    // startTurn compacts the payload against the lowered window on its way out.
     retryTurn(entry, plan.waitMs)
     return true
   }
@@ -1662,12 +1561,8 @@ export function initAIService(): void {
     const ai = useAIStore.getState()
 
     // Swap this turn's estimate for the provider's real count before the guard
-    // checks the task budget below, and let those same counts correct what we
-    // believe the context window to be.
-    if (usage) {
-      if (loop.guard) reconcileTokens(loop.guard, usage.total)
-      applyUsageCalibration(loop, usage)
-    }
+    // checks the task budget below.
+    if (usage && loop.guard) reconcileTokens(loop.guard, usage.total)
 
     // The provider CUT this reply at the output limit rather than the model
     // finishing it: the prose stops mid-sentence and a tool call stops
@@ -1923,10 +1818,7 @@ async function compactTabHistory(
   if (!tab) return 0
 
   const settings = normalizeAISettings(await window.api.config.getAISettings())
-  const limit = effectiveContextLimit(
-    activeCalibrationKey(settings),
-    resolveActiveContextLength(settings)
-  )
+  const limit = resolveActiveContextLength(settings)
   const userRules = useUserRulesStore.getState().rules
   const tier = toolTierForProfile(settings.copilotModelProfile)
   const mentionsTerminal = hasTerminalMention(prompt, useSessionsStore.getState().sessions)
@@ -2079,7 +1971,6 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
 
   const settings = normalizeAISettings(await window.api.config.getAISettings())
   const limit = resolveActiveContextLength(settings)
-  const calKey = activeCalibrationKey(settings)
   applyRuntimeAISettings(settings)
   const tier = toolTierForProfile(settings.copilotModelProfile)
   // Force the chart path only when a terminal is bound to read from.
@@ -2138,7 +2029,6 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
     boundTabId,
     conversation: history,
     contextLimit: limit,
-    calibrationKey: calKey,
     toolTier: tier,
     guard: createGuardState(),
     // Raw instruction, kept for the Verify step's display-only stop decision.
@@ -2260,8 +2150,6 @@ export function computeActiveTabBudget(params: {
     contextMessage: fixedOverheadText(params.context, activeChatTabId, tier, surface),
     messages: params.messages,
     draft: params.draft,
-    // Against the window the endpoint actually accepts, not the one Settings
-    // claims — the gauge is only useful if it fills up when the budget does.
-    limit: effectiveContextLimit(lastCalibrationKey, params.limit)
+    limit: params.limit
   })
 }

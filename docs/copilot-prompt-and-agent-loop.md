@@ -205,7 +205,6 @@ flowchart TD
 | Verify 头              | 每条`exec_command` 结果先带 `status` / `exit_code` / `cwd` / 可选 `verify` hint，模型按退出码判断，而不是「输出里有 Success 字样」。                                                             |
 | 独立确认               | 重启、部署、改配置：**改状态的那条命令成功 ≠ 任务成功**。必须再跑 `systemctl is-active` 或 `curl` health。                                                                                      |
 | verify 断言（harness） | 计划步骤可以带 `verify: { command, expect_exit_code?, expect_output? }`。收尾那一轮如果还有「已完成但校验没跑过/没通过」的步骤，**整轮回答会被撤掉**，注入一条 checkpoint 让它先去跑校验。每个**计划**只拦一次（`claimVerifyCheckpoint`），命令证据也按 chat 存（`taskEvidence`）——两者原来都挂在 loop 上，任务被打断后续跑就会把已经证明过的步骤重新判成「没跑」。 |
-| 上下文窗口校准 | 设置里的窗口只是**上界**：每轮 `usage` 都会反推真实窗口（`contextCalibration`），发现服务端在 32k 处削顶（连续两轮 total 贴同一个值、completion 被挤到几十 token）或直接截断了 prompt，就按实测值压缩并明确告诉用户「实测 32k，配置写的 128k」。配置比实测大四倍时 compaction 永不触发，服务端就会替你从**最前面**丢——那里正是用户的指令。 |
 | 有界自动恢复 | `onError` 按 `context` / `transient` / `fatal` 分类（`turnRecovery`）：超窗压缩后重试 1 次、瞬态退避重试 2 次（2s / 6s）、其余直接 `unrecoverable`。每次重试都在侧栏说出来，重试期间 loop 挂在 `parked` 里，Stop 能取消。 |
 | 回答被截断 | 读 `finish_reason`：`length` 说明回答是**被切断的一半**（散文断在句中，tool_call 断在参数里），不能判成 finalAnswer。压缩预算后重试 1 次，额度用完则在气泡里明说这条回答不完整。输出预留从 2048 提到窗口的 1/4（上限 8192）——实测 reasoning 轮 completion 到过 7006。 |
 | 循环内摘要             | 本地压缩要开始**整轮丢弃**步骤时，先花一次 LLM 调用把这些步骤压成一条执行记录（保留命令、exit code、路径、报错原文）。每任务最多 3 次，失败就退回本地压缩。                                     |
@@ -974,7 +973,7 @@ systemctl restart nginx
 | patch 打不上             | 逐 hunk 退回精确替换；仍失败则回 `Hunk N does not match ...` 并附上它期待的上下文 | 让模型重读文件按现状重建 patch，或改用 `edit_file` |
 | 想收尾但 verify 没跑     | 撤掉这一轮回答，注入 checkpoint 列出未验证的步骤及其校验命令       | 模型先去跑校验；校验失败则报告失败而非成功 |
 | 超过 25 轮 / token 预算  | 侧栏 Loop Guard 提示，停止                                         | 用户可新开一轮                             |
-| LLM 请求超窗（`no user query found` / `context length`） | 不回传给模型：按实测值下调窗口 → 压缩 → 重跑同一轮 | 最多 1 次；再来一次就交给用户（配置或服务端窗口要改） |
+| LLM 请求超窗（`no user query found` / `context length`） | 不回传给模型：压缩 → 重跑同一轮 | 最多 1 次；再来一次就交给用户（设置里的上下文长度要改小，或服务端窗口要调大） |
 | LLM 请求 5xx / 超时      | 不回传给模型：退避 2s / 6s 重跑同一轮，侧栏显示第几次              | 最多 2 次；用完则把错误挂在气泡上           |
 | 回答被输出上限切断（`finish_reason: length`） | 不回传给模型：预算砍半后重跑一轮                | 最多 1 次；用完则在气泡里标明这条回答不完整 |
 | 401 / 404 / 配置错       | 错误挂在消息的 `error` 字段上（**不进 content**，因此不会被下一轮当成模型自己说过的话重放） | 用户改配置                                 |
@@ -997,7 +996,6 @@ systemctl restart nginx
 | 已执行步骤账本             | `src/renderer/lib/taskMemory.ts`        |
 | 循环上限                   | `src/renderer/lib/loopGuard.ts`         |
 | 上下文压缩 / 摘要触发判定  | `src/renderer/lib/conversationCompact.ts` |
-| 真实上下文窗口反推         | `src/renderer/lib/contextCalibration.ts` |
 | 请求失败分类与有界恢复     | `src/renderer/lib/turnRecovery.ts`      |
 | 命令证据 / verify checkpoint 寿命 | `src/renderer/lib/taskEvidence.ts` |
 | 循环内摘要 prompt          | `src/shared/prompts/history.ts`         |
@@ -1042,7 +1040,7 @@ P0、P1 与 P2 的非 MCP 部分已经落地，下面只留仍然存在的缺口
 | --- | --- | --- |
 | 外部可观测性 | 只能通过 SSH 上的命令看主机 | Prometheus / K8s 等以 skill 或 MCP 适配接入 |
 | 恢复 | LLM 请求失败已有有界自动恢复（超窗压缩重试 1 次 / 瞬态退避 2 次）；**SSH 会话**本身断了仍要用户手动重连 | 断连后有界重连，且失败要表面给用户 |
-| 评测 | 策略 / prompt / patch / verify / 子 Agent / scrollback 有单测，上下文压力轨迹（32k 削顶 → 超窗 500 → 恢复而非终止）有轨迹测试，其余轨迹仍缺 | SWE-bench 风格：edit → 语法检查 → 独立确认 |
+| 评测 | 策略 / prompt / patch / verify / 子 Agent / scrollback 有单测，请求失败恢复（超窗 500 → 压缩重试而非终止）有轨迹测试，其余轨迹仍缺 | SWE-bench 风格：edit → 语法检查 → 独立确认 |
 | 记忆写回 | `AGENTS.md` 能读能写，但「从被拒绝的操作里提炼约定」仍靠人开口 | Reflexion：失败轨迹沉淀为候选规则 |
 
 已经补掉的（P0 / P1 / P2）：Plan / Agent 模式切换、`.bak` 检查点与一键 Restore、`@path`、Slash 命令、队列与待批 UX（P0）；`apply_patch`、`git_read` / `git_commit`、远程 `AGENTS.md` 主机记忆、循环内 LLM 摘要、计划 verify 断言的 harness 拦截（P1）；per-chat busy 与按主机写互斥、`delegate_to_host` 隔离子 Agent、`search_terminal` scrollback 检索（P2）。
