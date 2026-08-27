@@ -16,6 +16,7 @@ import { useSessionsStore } from './sessionsStore'
 import { translate } from '../lib/i18n/translations'
 import { formatTerminalLabel } from '../lib/pinnedTerminal'
 import { appendCheckpoint } from '../lib/fileCheckpoints'
+import { clearTaskEvidence } from '../lib/taskEvidence'
 
 export interface ChatMessage extends CopilotChatMessage {
   streaming?: boolean
@@ -191,6 +192,7 @@ function toPersistedState(
         boundTabId: m.boundTabId,
         chartSnapshots: m.chartSnapshots,
         isContextSummary: m.isContextSummary,
+        error: m.error,
         toolCalls: m.toolCalls
       }))
     }))
@@ -324,6 +326,8 @@ interface AIState {
   appendToMessage: (tabId: string, id: string, delta: string) => void
   appendReasoning: (tabId: string, id: string, delta: string) => void
   finishMessage: (tabId: string, id: string) => void
+  /** Attach a provider failure to a message for display only (never replayed). */
+  setMessageError: (tabId: string, id: string, error: string) => void
   setPlan: (tabId: string, plan: PlanItem[]) => void
   setToolCalls: (tabId: string, messageId: string, toolCalls: ToolCallView[]) => void
   updateToolCall: (
@@ -436,6 +440,7 @@ export const useAIStore = create<AIState>((set, get) => ({
     return true
   },
   deleteChatTab: (id) => {
+    clearTaskEvidence(id)
     set((s) => {
       const tab = s.chatTabs.find((t) => t.id === id)
       if (!tab) return s
@@ -494,6 +499,10 @@ export const useAIStore = create<AIState>((set, get) => ({
     // Task memory and the plan are derived from / stored on the tab, so
     // clearing the messages is all that is needed to reset the agent's memory.
     // A new task also drops the terminal pin so the next send re-pins.
+    // Command evidence is the one piece kept outside the tab (it is too large to
+    // persist), so it has to be dropped by hand or the next plan inherits proof
+    // for checks that ran for the old one.
+    clearTaskEvidence(activeId)
     set((s) => ({
       chatTabs: updateTab(s.chatTabs, activeId, {
         messages: [],
@@ -616,6 +625,19 @@ export const useAIStore = create<AIState>((set, get) => ({
                 : m.thinkingMs
             return { ...m, streaming: false, thinkingMs }
           })
+        }
+      })
+    }))
+    schedulePersist(get)
+  },
+  setMessageError: (tabId, id, error) => {
+    set((s) => ({
+      chatTabs: s.chatTabs.map((tab) => {
+        if (tab.id !== tabId) return tab
+        return {
+          ...tab,
+          updatedAt: Date.now(),
+          messages: tab.messages.map((m) => (m.id === id ? { ...m, error } : m))
         }
       })
     }))

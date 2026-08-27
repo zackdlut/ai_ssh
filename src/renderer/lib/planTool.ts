@@ -11,6 +11,7 @@
 import { useAIStore } from '../store/aiStore'
 import type { PlanItem, PlanItemStatus, PlanStepVerify } from '../../shared/types'
 import { verifyPlanStep, type ExecEvidence } from '../../shared/planVerify'
+import { clearTaskEvidence } from './taskEvidence'
 import type { ToolResult } from './fileTools'
 
 const MAX_PLAN_ITEMS = 20
@@ -70,6 +71,46 @@ function parseVerify(
   }
 }
 
+/**
+ * Read the step's status, tolerating the `completed` flag models reach for.
+ *
+ * The schema asks for `status`, and a model that sends
+ * `{ title, completed: null }` instead is not wrong about the work — it is
+ * wrong about the field name. Rejecting that costs two turns (observed: one
+ * spent on the validation error, one repeating the call correctly) inside a
+ * window that may not have two turns left, so map the flag onto the enum. A
+ * genuinely wrong status string is still an error, and `in_progress` cannot be
+ * expressed this way — harmlessly, since the next update carries it.
+ */
+function readStatus(entry: {
+  status?: unknown
+  completed?: unknown
+  done?: unknown
+}): PlanItemStatus | undefined {
+  if (isStatus(entry.status)) return entry.status
+  if (entry.status !== undefined && entry.status !== null) return undefined
+  const flag = entry.completed ?? entry.done
+  if (flag === true) return 'completed'
+  if (flag === false || flag === null) return 'pending'
+  return undefined
+}
+
+/**
+ * True when this update installs a DIFFERENT plan rather than progressing the
+ * current one: not a single step title in common.
+ *
+ * The distinction decides whether the recorded command evidence still applies.
+ * Carrying it into an unrelated task would let a step pass on a check that ran
+ * for something else — the exact false success the verify contract exists to
+ * prevent — while a plan the model merely edited (a retitled step, a dropped
+ * assertion) keeps most of its titles and keeps its proof.
+ */
+function isNewPlan(previous: readonly PlanItem[] | undefined, next: readonly PlanItem[]): boolean {
+  if (!previous || previous.length === 0) return false
+  const before = new Set(previous.map((i) => i.title))
+  return !next.some((i) => before.has(i.title))
+}
+
 function statusMark(status: PlanItemStatus): string {
   switch (status) {
     case 'completed':
@@ -100,6 +141,7 @@ export function updatePlan(
   }
   if (raw.length === 0) {
     useAIStore.getState().setPlan(chatTabId, [])
+    clearTaskEvidence(chatTabId)
     return { ok: true, result: 'Plan cleared.' }
   }
   if (raw.length > MAX_PLAN_ITEMS) {
@@ -114,15 +156,12 @@ export function updatePlan(
     if (!entry || typeof entry !== 'object') {
       return { ok: false, error: `items[${i}] is not an object.` }
     }
-    const { title, status, verify } = entry as {
-      title?: unknown
-      status?: unknown
-      verify?: unknown
-    }
+    const { title, verify } = entry as { title?: unknown; verify?: unknown }
     if (typeof title !== 'string' || !title.trim()) {
       return { ok: false, error: `items[${i}].title must be a non-empty string.` }
     }
-    if (!isStatus(status)) {
+    const status = readStatus(entry as { status?: unknown; completed?: unknown; done?: unknown })
+    if (!status) {
       return {
         ok: false,
         error: `items[${i}].status must be one of ${STATUSES.join(', ')}.`
@@ -146,7 +185,11 @@ export function updatePlan(
     }
   }
 
-  useAIStore.getState().setPlan(chatTabId, items)
+  const store = useAIStore.getState()
+  if (isNewPlan(store.chatTabs.find((t) => t.id === chatTabId)?.plan, items)) {
+    clearTaskEvidence(chatTabId)
+  }
+  store.setPlan(chatTabId, items)
 
   const done = items.filter((i) => i.status === 'completed').length
   const body = `Plan updated (${done}/${items.length} completed).\n${items

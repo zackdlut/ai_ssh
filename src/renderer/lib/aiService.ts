@@ -15,7 +15,12 @@ import {
   type MentionableTab
 } from './pinnedTerminal'
 import { getTabObservation } from './terminalObservation'
-import { normalizeAISettings, resolveActiveContextLength } from '../../shared/aiSettings'
+import {
+  normalizeAISettings,
+  resolveActiveContextLength,
+  resolveActiveModel,
+  resolveBaseURL
+} from '../../shared/aiSettings'
 import {
   buildEffectiveSystemPrompt,
   buildContextMessage,
@@ -30,6 +35,7 @@ import {
 import {
   buildChatPayload,
   estimateTokens,
+  formatTokenCount,
   selectMessagesToCompress,
   type BudgetMessage
 } from '../../shared/contextBudget'
@@ -76,24 +82,34 @@ import {
 import { buildTaskMemoryMessage } from './taskMemory'
 import { compactConversation, planCompaction } from './conversationCompact'
 import {
+  calibrationKey,
+  effectiveContextLimit,
+  noteContextRejection,
+  observeUsage,
+  type Calibration
+} from './contextCalibration'
+import {
   buildHistoryFromMessages,
   digestToolResult,
   messageBudgetText,
   toolCallContent
 } from './toolTrace'
 import { buildPlanContextMessage } from './planTool'
-import { unmetPlanSteps, unmetStepsPrompt, type ExecEvidence } from '../../shared/planVerify'
+import { claimVerifyCheckpoint, recordTaskEvidence, taskEvidence } from './taskEvidence'
+import { unmetPlanSteps, unmetStepsPrompt } from '../../shared/planVerify'
 import { parseExecToolResult, parsedExitCode } from './execResult'
 import { buildHostMemoryMessage, loadHostMemory } from './hostMemory'
 import { setToolResultCharBudget } from './toolBudget'
 import { refreshCommandTimeoutMinutes } from './execCapture'
 import { transition, type AgentEvent, type AgentPhase } from './agentPhase'
+import { planRecovery, planTruncationRecovery } from './turnRecovery'
 import type { ChatMessage } from '../store/aiStore'
 import { extractFileMentionPaths, expandMentionPath } from './fileMentions'
 import { readFile } from './fileTools'
 import { useUserRulesStore } from '../store/userRulesStore'
 import type {
   AISettings,
+  AITokenUsage,
   AutonomyMode,
   ChatMessageDTO,
   CopilotAgentMode,
@@ -168,8 +184,20 @@ interface LoopState {
    * nudge/reflection turns, so it always reflects the real intent.
    */
   userIntent?: string
-  /** Model context window (tokens), used to bound the conversation in-loop. */
+  /**
+   * Model context window (tokens) as CONFIGURED, used to bound the conversation
+   * in-loop. The effective window is this lowered by whatever the endpoint has
+   * actually been observed to accept — see `effectiveContextLimit`.
+   */
   contextLimit?: number
+  /** Endpoint+model identity the observed-window calibration is filed under. */
+  calibrationKey?: string
+  /**
+   * Our estimate of the prompt the turn in flight carries, tools and system
+   * prompt included. Compared against the provider's reported `prompt_tokens`
+   * to notice a server that silently truncated it.
+   */
+  promptEstimate?: number
   /** Tool tier the active profile exposes; its schemas are part of every payload. */
   toolTier?: ToolTier
   /**
@@ -190,27 +218,62 @@ interface LoopState {
   interruptedByUser?: boolean
   /** Tools-off recap turn after a user interrupt. */
   summarizeOnly?: boolean
-  /**
-   * Every shell command this task actually ran, with its exit code and output.
-   * The plan's verify assertions are checked against this rather than against
-   * the model's account of what it did.
-   */
-  execEvidence?: ExecEvidence[]
-  /** True once the unmet-assertion checkpoint fired; it is one-shot per task. */
-  verifyChecked?: boolean
   /** LLM summaries folded into this task's history so far. */
   loopSummaries?: number
   /** Set by `abortLoop` while the loop is parked on an async summarization. */
   aborted?: boolean
+  /**
+   * Automatic retries this task has already spent, counted per failure class
+   * because the answer to each is different and so is the evidence that it did
+   * not work. A second identical over-window failure means compacting is not
+   * the fix; a second timeout might still just be a slow endpoint.
+   */
+  contextRecoveries?: number
+  transientRetries?: number
+  truncationRetries?: number
+  /**
+   * Multiplier applied to the conversation budget for the rest of this task,
+   * lowered once the provider has been seen to CUT a reply at the output limit.
+   * The window is not wrong in that case — the split between prompt and answer
+   * is, and this is the only knob that moves it.
+   */
+  budgetSqueeze?: number
 }
 
 /**
  * Tokens held back for the model's own reply. A context window covers prompt
  * plus generation, so a prompt sized to fill it leaves nothing to answer with.
+ *
+ * This was 2048, which is less than a reasoning model spends thinking its way
+ * through one file write (7k observed on a single `write_file` turn). Reserving
+ * less than the answer needs does not produce a smaller answer — the provider
+ * clamps the completion instead, the reply arrives cut off mid-sentence, and a
+ * cut-off reply carries no tool call, so the loop stalls one turn short of
+ * finishing with no error anywhere.
  */
-const OUTPUT_RESERVE_TOKENS = 2048
+const OUTPUT_RESERVE_MAX = 8192
+const OUTPUT_RESERVE_MIN = 2048
+/** A small window cannot hand a quarter of itself to the reserve and still work. */
+const OUTPUT_RESERVE_SHARE = 0.25
 /** Floor so even a badly configured window leaves room for a step or two. */
 const MIN_CONVERSATION_TOKENS = 1024
+
+function outputReserveTokens(limit = 0): number {
+  if (limit <= 0) return OUTPUT_RESERVE_MAX
+  const share = Math.floor(limit * OUTPUT_RESERVE_SHARE)
+  return Math.max(OUTPUT_RESERVE_MIN, Math.min(OUTPUT_RESERVE_MAX, share))
+}
+
+/**
+ * Hand part of the conversation's budget back to the answer. Only ever below 1,
+ * and only after the provider has been observed cutting a reply short: the
+ * reserve is a guess about how much the model wants to say, and this is the
+ * correction when that guess is measured wrong.
+ */
+function squeezeBudget(budget: number, squeeze = 1): number {
+  if (budget <= 0 || squeeze >= 1) return budget
+  return Math.max(MIN_CONVERSATION_TOKENS, Math.floor(budget * squeeze))
+}
 
 /**
  * Token cost of the tool schemas, memoized per tier. Constant per tier but far
@@ -232,6 +295,47 @@ function toolTokens(tier: ToolTier, surface: ToolSurfaceOptions): number {
   return tokens
 }
 
+/** Tokens the running conversation contributes, tool-call arguments included. */
+function conversationTokens(messages: readonly ChatMessageDTO[]): number {
+  let sum = 0
+  for (const m of messages) {
+    sum += estimateTokens(m.content)
+    for (const call of m.tool_calls ?? []) sum += estimateTokens(call.arguments)
+  }
+  return sum
+}
+
+/**
+ * Fold the per-turn state injections (app snapshot, task ledger, plan, mentioned
+ * files) into ONE trailing message, and send it as `user` rather than `system`.
+ *
+ * These used to be three or four separate trailing `system` messages, which
+ * made every request end on a system turn. Two things go wrong with that. The
+ * mundane one is recency: a chat template gives the last turn the most weight,
+ * and spending that position on a header the model has already seen twenty
+ * times wastes it. The one that broke a task is that several OpenAI-compatible
+ * backends reject the shape outright — an Ollama-served Qwen3 refuses a
+ * conversation whose surviving tail is system-only with "no user query found in
+ * messages", which is exactly what its own front-truncation produces from a
+ * request like this. Handing the state over as a user turn is both the honest
+ * framing (the app is speaking, not the model) and a shape every backend takes.
+ *
+ * The label matters: without it a model treats the snapshot as something the
+ * human typed and starts answering it.
+ */
+function buildTurnStateMessage(sections: (string | undefined)[]): ChatMessageDTO[] {
+  const body = sections.filter((s): s is string => !!s && s.trim().length > 0)
+  if (body.length === 0) return []
+  return [
+    {
+      role: 'user',
+      content: `[Injected by the app, not typed by the user: live state for THIS turn. Read it, do not reply to it.]\n\n${body.join(
+        '\n\n'
+      )}`
+    }
+  ]
+}
+
 function chatAgentMode(tabId: string): CopilotAgentMode {
   return useAIStore.getState().chatTabs.find((t) => t.id === tabId)?.agentMode ?? 'agent'
 }
@@ -248,6 +352,29 @@ function toolSurfaceFor(
     executeMode: agentMode === 'execute'
   }
 }
+
+/**
+ * Which endpoint+model the observed-window calibration belongs to. Keyed on the
+ * base URL as well as the model, because the same model name behind a different
+ * server is a different `num_ctx`.
+ */
+function activeCalibrationKey(settings: AISettings): string {
+  const profile = settings.copilotModelProfile
+  lastCalibrationKey = calibrationKey(
+    profile,
+    resolveActiveModel(settings),
+    resolveBaseURL(settings, profile)
+  )
+  return lastCalibrationKey
+}
+
+/**
+ * The identity most recently resolved above, kept so synchronous callers can
+ * reach the calibration too. The context meter is the one that matters: reading
+ * settings there means IPC on every keystroke, and a gauge showing 25% full
+ * while the endpoint is already refusing requests is worse than no gauge.
+ */
+let lastCalibrationKey: string | undefined
 
 function isPlanMode(tabId: string): boolean {
   return chatAgentMode(tabId) === 'plan'
@@ -270,21 +397,23 @@ function syncQueueCount(tabId: string): void {
  */
 function conversationBudget(
   loop: LoopState,
+  /** Effective window for this turn (configured, lowered by what was observed). */
+  limit: number,
   /** Tier whose schemas ride along, or undefined when tools are disabled. */
   tier: ToolTier | undefined,
   promptSections: PromptSections,
   surface: ToolSurfaceOptions,
   surrounding: ChatMessageDTO[]
-): number {
-  if (!loop.contextLimit) return 0
+): { budget: number; fixed: number } {
   const fixed = [
     buildCopilotSystemPrompt(promptSections),
     buildUserRulesSystemMessage(useUserRulesStore.getState().rules) ?? '',
     buildContextMessage(loop.context) ?? '',
     ...surrounding.map((m) => m.content)
   ].reduce((sum, text) => sum + estimateTokens(text), tier ? toolTokens(tier, surface) : 0)
+  if (!limit) return { budget: 0, fixed }
 
-  const available = loop.contextLimit - fixed - OUTPUT_RESERVE_TOKENS
+  const available = limit - fixed - outputReserveTokens(limit)
   if (available < MIN_CONVERSATION_TOKENS) {
     // The floor keeps a cramped window usable for a step or two, but it means
     // the payload is knowingly over budget: everything that is not the
@@ -296,10 +425,10 @@ function conversationBudget(
       category: 'action.triggered',
       tabId: loop.tabId,
       message: 'agent.budget.overCommitted',
-      data: { contextLimit: loop.contextLimit, fixed, available, floor: MIN_CONVERSATION_TOKENS }
+      data: { contextLimit: limit, fixed, available, floor: MIN_CONVERSATION_TOKENS }
     })
   }
-  return Math.max(MIN_CONVERSATION_TOKENS, available)
+  return { budget: Math.max(MIN_CONVERSATION_TOKENS, available), fixed }
 }
 
 /**
@@ -344,8 +473,7 @@ function recordExecEvidence(loop: LoopState, call: ToolCallView, result: string)
     return
   }
   const parsed = parseExecToolResult(result)
-  loop.execEvidence ??= []
-  loop.execEvidence.push({
+  recordTaskEvidence(loop.tabId, {
     command,
     exitCode: parsedExitCode(parsed.exitCode),
     output: parsed.output.slice(0, EVIDENCE_OUTPUT_CHARS)
@@ -353,11 +481,13 @@ function recordExecEvidence(loop: LoopState, call: ToolCallView, result: string)
 }
 
 /**
- * Loops parked on an async summarization. They are in neither `pending` nor
- * `loops` at that moment, so Stop would otherwise have nothing to cancel and
- * the turn would resume after the user asked it not to.
+ * Loops parked mid-task on something asynchronous: a history summarization, or
+ * the backoff before an automatic retry. They are in neither `pending` nor
+ * `loops` at that moment, so without this Stop would have nothing to cancel and
+ * the turn would resume after the user asked it not to — and the busy sweeper
+ * would count the chat as unreachable and free its composer under it.
  */
-const compacting = new Map<string, LoopState>()
+const parked = new Map<string, LoopState>()
 
 /**
  * Cap on summarizations per task. Each one costs a round trip, and a loop that
@@ -391,7 +521,7 @@ async function maybeSummarizeLoopHistory(loop: LoopState): Promise<void> {
 
   const ai = useAIStore.getState()
   ai.setNotice(tNotice('copilot.context.compressing'))
-  compacting.set(loop.tabId, loop)
+  parked.set(loop.tabId, loop)
   let result: { summary?: string; error?: string }
   try {
     result = await window.api.ai.compressHistory({
@@ -402,7 +532,7 @@ async function maybeSummarizeLoopHistory(loop: LoopState): Promise<void> {
   } catch (e) {
     result = { error: e instanceof Error ? e.message : String(e) }
   } finally {
-    compacting.delete(loop.tabId)
+    parked.delete(loop.tabId)
   }
   if (loop.aborted) return
 
@@ -435,6 +565,50 @@ async function maybeSummarizeLoopHistory(loop: LoopState): Promise<void> {
   })
 }
 
+/**
+ * Tell the user the window is not what Settings says, once per discovery.
+ *
+ * Silently shrinking the budget would fix the task and leave the wrong number
+ * in Settings forever, so the notice names both figures: the observed window is
+ * a property of the server (an Ollama `num_ctx` fitted to the GPU, a gateway's
+ * own cap), and only the user can go change the setting or the server.
+ */
+function announceCalibration(loop: LoopState, learned: Calibration): void {
+  useAIStore.getState().setNotice(
+    tNotice('copilot.context.calibrated', {
+      observed: formatTokenCount(learned.window),
+      configured: formatTokenCount(loop.contextLimit ?? 0)
+    })
+  )
+  debugLog({
+    category: 'action.triggered',
+    tabId: loop.tabId,
+    message: 'agent.context.calibrated',
+    data: {
+      observed: learned.window,
+      reason: learned.reason,
+      configured: loop.contextLimit,
+      promptEstimate: loop.promptEstimate
+    }
+  })
+}
+
+/**
+ * Fold the provider's own token counts back into what we believe the window is.
+ * Runs on every turn and almost always concludes nothing; the turns it does not
+ * are the ones where the configured limit was fiction.
+ */
+function applyUsageCalibration(loop: LoopState, usage: AITokenUsage): void {
+  if (!loop.calibrationKey || !loop.contextLimit) return
+  const learned = observeUsage({
+    key: loop.calibrationKey,
+    configured: loop.contextLimit,
+    estimatedPrompt: loop.promptEstimate ?? 0,
+    usage
+  })
+  if (learned) announceCalibration(loop, learned)
+}
+
 /** Continue the loop, summarizing first when the budget is about to bite. */
 function continueLoop(loop: LoopState, epilogue = false): void {
   void maybeSummarizeLoopHistory(loop).then(() => {
@@ -449,17 +623,18 @@ function continueLoop(loop: LoopState, epilogue = false): void {
  * changes with an independent check" is advice the model can decline to take
  * and no one is any the wiser.
  *
- * One shot per task. A model that ignores the checkpoint twice is not going to
- * be convinced by a third copy of the same message, and a loop that cannot end
- * is worse than an unverified answer the user can read the transcript for.
+ * One shot per PLAN (see `claimVerifyCheckpoint`). A model that ignores the
+ * checkpoint twice is not going to be convinced by a third copy of the same
+ * message, and a loop that cannot end is worse than an unverified answer the
+ * user can read the transcript for.
  */
 function pushBackOnUnverifiedPlan(loop: LoopState, tabId: string): boolean {
-  if (loop.verifyChecked) return false
   const plan = useAIStore.getState().chatTabs.find((t) => t.id === tabId)?.plan
-  const unmet = unmetPlanSteps(plan, loop.execEvidence ?? [])
+  if (!plan || plan.length === 0) return false
+  const unmet = unmetPlanSteps(plan, taskEvidence(tabId))
   if (unmet.length === 0) return false
+  if (!claimVerifyCheckpoint(tabId, plan)) return false
 
-  loop.verifyChecked = true
   loop.conversation.push({ role: 'user', content: unmetStepsPrompt(unmet) })
   debugLog({
     category: 'action.triggered',
@@ -518,7 +693,7 @@ if (import.meta.hot) {
  */
 function releaseUnreachableBusy(): void {
   const ai = useAIStore.getState()
-  const revivable = new Set<string>(compacting.keys())
+  const revivable = new Set<string>(parked.keys())
   for (const loop of loops.values()) revivable.add(loop.tabId)
   for (const tabId of unreachableBusyTabs(ai.busyByTab, new Set(pending.keys()), revivable)) {
     debugLog({
@@ -693,25 +868,30 @@ function startTurn(loop: LoopState, epilogue = false): void {
   // task plan, the ledger of completed actions). Keeping it AFTER the
   // conversation both preserves the cacheable prefix and gives these facts
   // recency over the long system prompt.
-  const suffix: ChatMessageDTO[] = []
-  const snapshot = buildToolContextMessage(loop.toolTier, chat?.pinnedTabId)
-  const plan = buildPlanContextMessage(loop.tabId)
-  const taskMemory = buildTaskMemoryMessage(loop.tabId)
-  if (snapshot) suffix.push({ role: 'system', content: snapshot })
-  if (taskMemory) suffix.push({ role: 'system', content: taskMemory })
-  if (plan) suffix.push({ role: 'system', content: plan })
-  if (loop.fileContext) suffix.push({ role: 'system', content: loop.fileContext })
+  const suffix = buildTurnStateMessage([
+    buildToolContextMessage(loop.toolTier, chat?.pinnedTabId),
+    buildTaskMemoryMessage(loop.tabId),
+    buildPlanContextMessage(loop.tabId),
+    loop.fileContext
+  ])
 
   // Bound the running conversation with what is actually left over, which is
-  // why the surrounding layers are assembled first.
-  if (loop.contextLimit) {
-    const budget = conversationBudget(
-      loop,
-      toolsOff ? undefined : loop.toolTier ?? 'full',
-      promptSections,
-      toolSurface,
-      [...prefix, ...suffix]
-    )
+  // why the surrounding layers are assembled first. The window is the
+  // configured one lowered to whatever this endpoint has been observed to
+  // accept: a Settings number four times the truth is how the prompt grows past
+  // what the server takes, and the server drops from the front, where the
+  // user's instruction is.
+  const limit = effectiveContextLimit(loop.calibrationKey, loop.contextLimit ?? 0)
+  const { budget: available, fixed } = conversationBudget(
+    loop,
+    limit,
+    toolsOff ? undefined : loop.toolTier ?? 'full',
+    promptSections,
+    toolSurface,
+    [...prefix, ...suffix]
+  )
+  const budget = squeezeBudget(available, loop.budgetSqueeze)
+  if (budget > 0) {
     loop.conversationBudget = budget
     setToolResultCharBudget(perResultCap(budget))
     const compacted = compactConversation(loop.conversation, budget)
@@ -725,11 +905,16 @@ function startTurn(loop: LoopState, epilogue = false): void {
           trimmed: compacted.trimmed,
           dropped: compacted.dropped,
           condensed: compacted.condensed,
-          budget
+          budget,
+          limit
         }
       })
     }
   }
+  // What we believe we are about to send. The provider's own prompt_tokens is
+  // compared against it in onDone: a count well below this means the endpoint
+  // truncated the prompt rather than refusing it.
+  loop.promptEstimate = fixed + conversationTokens(loop.conversation)
 
   const messages: ChatMessageDTO[] = [...prefix, ...loop.conversation, ...suffix]
   // Append the chart nudge as the LAST (trailing user) message: recency beats
@@ -855,7 +1040,7 @@ async function runToolCall(
       executeToolCall(call.name, parsed.args, {
         chatTabId: tabId,
         pinnedTabId: chat?.pinnedTabId,
-        execEvidence: loops.get(messageId)?.execEvidence,
+        execEvidence: taskEvidence(tabId),
         onCaptureProgress:
           call.name === 'exec_command' || call.name === 'run_in_terminal'
             ? (elapsedMs) => {
@@ -974,12 +1159,12 @@ export function abortLoop(tabId: string): void {
     loops.delete(entry.messageId)
   }
 
-  // A loop waiting on a history summarization is in neither map, so it needs
-  // telling separately or it resumes once the summary lands.
-  const parked = compacting.get(tabId)
-  if (parked) {
-    parked.aborted = true
-    compacting.delete(tabId)
+  // A loop waiting on a summarization or a retry backoff is in neither map, so
+  // it needs telling separately or it resumes once that wait ends.
+  const waiting = parked.get(tabId)
+  if (waiting) {
+    waiting.aborted = true
+    parked.delete(tabId)
   }
 
   for (const abort of runningCommandAborts.get(tabId) ?? []) {
@@ -1149,6 +1334,139 @@ function stopLoopWithGuardNotice(tabId: string, loop: LoopState, trip: GuardTrip
     data: { reason: trip.reason, steps: loop.guard?.stepCount, tokens: loop.guard?.tokenSpent }
   })
   ai.clearTabBusy(tabId)
+}
+
+/** Provider errors are paragraphs; a notice has room for the first line. */
+const NOTICE_ERROR_CHARS = 90
+
+function shortError(error: string): string {
+  const oneLine = error.replace(/\s+/g, ' ').trim()
+  return oneLine.length > NOTICE_ERROR_CHARS
+    ? `${oneLine.slice(0, NOTICE_ERROR_CHARS)}…`
+    : oneLine
+}
+
+/**
+ * Re-run the turn that just failed, optionally after a backoff.
+ *
+ * The failed turn's partial text is not an answer, so its message goes away and
+ * the retry streams a fresh one. During a backoff the loop is `parked`: that is
+ * what keeps Stop able to cancel the wait, and keeps the busy sweeper from
+ * deciding the chat is unreachable while deliberately nothing is in flight.
+ */
+function retryTurn(entry: PendingRequest, waitMs: number): void {
+  const { tabId, messageId, loop, epilogue } = entry
+  if (!epilogue) useAIStore.getState().removeMessage(tabId, messageId)
+  loops.delete(messageId)
+  advance(loop, 'recovered', tabId)
+  if (waitMs <= 0) {
+    startTurn(loop, epilogue)
+    return
+  }
+  parked.set(tabId, loop)
+  void delay(waitMs).then(() => {
+    if (parked.get(tabId) === loop) parked.delete(tabId)
+    if (loop.aborted) return
+    startTurn(loop, epilogue)
+  })
+}
+
+/**
+ * Answer a failed LLM turn instead of ending the task on it. Returns true when
+ * a retry has been scheduled.
+ *
+ * `recovering` was a phase with no exit. The state machine defined `recovered`
+ * and `unrecoverable` and the tests covered both, but nothing ever emitted
+ * either: `onError` set the phase and then cleared busy, so a single hiccup
+ * from the endpoint abandoned a task mid-plan and the user had to type
+ * "continue" to restart a loop that already knew exactly what it was doing.
+ *
+ * Every retry is bounded per failure class and every one is announced. A silent
+ * reconnect loop would be worse than the abandonment it replaces.
+ */
+function recoverFromTurnFailure(entry: PendingRequest, error: string): boolean {
+  const { loop, tabId } = entry
+  if (loop.aborted) return false
+  const ai = useAIStore.getState()
+  const plan = planRecovery(loop, error)
+
+  if (plan.kind === 'compact') {
+    loop.contextRecoveries = plan.attempt
+    // The endpoint has just told us its window is smaller than we were told it
+    // was. Record that against the ENDPOINT, so the next task starts corrected
+    // instead of walking into the same wall.
+    if (loop.calibrationKey) {
+      announceCalibration(
+        loop,
+        noteContextRejection(loop.calibrationKey, loop.contextLimit ?? 0, loop.promptEstimate)
+      )
+    }
+    ai.setNotice(tNotice('copilot.context.retry'))
+    debugLog({
+      category: 'action.triggered',
+      tabId,
+      message: 'agent.recover.context',
+      data: { error: shortError(error), promptEstimate: loop.promptEstimate }
+    })
+    // startTurn compacts the payload against the lowered window on its way out.
+    retryTurn(entry, plan.waitMs)
+    return true
+  }
+
+  if (plan.kind === 'backoff') {
+    loop.transientRetries = plan.attempt
+    ai.setNotice(
+      tNotice('copilot.retry', {
+        error: shortError(error),
+        attempt: plan.attempt,
+        max: plan.max
+      })
+    )
+    debugLog({
+      category: 'action.triggered',
+      tabId,
+      message: 'agent.recover.transient',
+      data: { error: shortError(error), attempt: plan.attempt, waitMs: plan.waitMs }
+    })
+    retryTurn(entry, plan.waitMs)
+    return true
+  }
+
+  debugLog({
+    category: 'action.triggered',
+    tabId,
+    message: 'agent.recover.declined',
+    data: { error: shortError(error), reason: plan.reason }
+  })
+  return false
+}
+
+/**
+ * Re-run a turn the provider CUT at the output limit.
+ *
+ * A `length` finish is not a short answer, it is half of one: the prose stops
+ * mid-sentence and a tool call stops mid-arguments. Acting on that half is
+ * worse than paying for the turn again, and the fix is not a smaller window (it
+ * was the right size) but a different split between prompt and answer — so the
+ * conversation budget is squeezed for the rest of the task.
+ */
+function retryTruncatedTurn(entry: PendingRequest): boolean {
+  const { loop, tabId } = entry
+  if (loop.aborted) return false
+  const plan = planTruncationRecovery(loop, loop.budgetSqueeze)
+  if (!plan.retry) return false
+  loop.truncationRetries = plan.attempt
+  loop.budgetSqueeze = plan.squeeze
+  useAIStore.getState().setNotice(tNotice('copilot.truncatedReply'))
+  debugLog({
+    category: 'action.triggered',
+    tabId,
+    message: 'agent.recover.truncated',
+    data: { squeeze: loop.budgetSqueeze, budget: loop.conversationBudget }
+  })
+  advance(loop, 'recover', tabId)
+  retryTurn(entry, 0)
+  return true
 }
 
 /**
@@ -1329,7 +1647,7 @@ export function initAIService(): void {
       useAIStore.getState().appendReasoning(entry.tabId, entry.messageId, delta)
     }
   })
-  window.api.ai.onDone(({ requestId, content, toolCalls, usage }) => {
+  window.api.ai.onDone(({ requestId, content, toolCalls, usage, finishReason }) => {
     const entry = pending.get(requestId)
     pending.delete(requestId)
     // No entry means this turn's answer has nowhere to go: it was superseded,
@@ -1344,8 +1662,24 @@ export function initAIService(): void {
     const ai = useAIStore.getState()
 
     // Swap this turn's estimate for the provider's real count before the guard
-    // checks the task budget below.
-    if (usage && loop.guard) reconcileTokens(loop.guard, usage.total)
+    // checks the task budget below, and let those same counts correct what we
+    // believe the context window to be.
+    if (usage) {
+      if (loop.guard) reconcileTokens(loop.guard, usage.total)
+      applyUsageCalibration(loop, usage)
+    }
+
+    // The provider CUT this reply at the output limit rather than the model
+    // finishing it: the prose stops mid-sentence and a tool call stops
+    // mid-arguments, so it is half a decision, not a short one. Retry with a
+    // tighter budget; once that is spent, say the reply was cut instead of
+    // presenting the fragment as a considered answer.
+    if (finishReason === 'length' && !loop.summarizeOnly) {
+      if (retryTruncatedTurn(entry)) return
+      // Alongside the message, not inside it: the fragment itself is the
+      // model's, this note is ours, and only the fragment should be replayed.
+      if (!epilogue) ai.setMessageError(tabId, messageId, tNotice('copilot.truncatedReplyFinal'))
+    }
 
     // Terminal Ctrl+C asked for a tools-off recap. Ignore any tool_calls the
     // model still emitted, and never nudge it to "act" on an empty reply.
@@ -1491,16 +1825,20 @@ export function initAIService(): void {
     }
     const ai = useAIStore.getState()
     advance(entry.loop, 'recover', entry.tabId)
+    // Bounded, visible recovery: an over-window rejection is answered by
+    // compacting, a transient failure by waiting. Only what neither can fix
+    // reaches the user as an abandoned task.
+    if (recoverFromTurnFailure(entry, error)) return
+    advance(entry.loop, 'unrecoverable', entry.tabId)
+    // The failure rides alongside the message rather than inside its text: it is
+    // the app's diagnostic, and putting it in `content` made the next turn
+    // replay it as something the assistant had said.
     if (entry.epilogue) {
       // No visible message exists for an epilogue turn yet — create one so the
       // error is surfaced to the user instead of being silently swallowed.
-      ai.addMessage(entry.tabId, {
-        id: entry.messageId,
-        role: 'assistant',
-        content: `[Error] ${error}`
-      })
+      ai.addMessage(entry.tabId, { id: entry.messageId, role: 'assistant', content: '', error })
     } else {
-      ai.appendToMessage(entry.tabId, entry.messageId, `\n\n[Error] ${error}`)
+      ai.setMessageError(entry.tabId, entry.messageId, error)
       ai.finishMessage(entry.tabId, entry.messageId)
     }
     loops.delete(entry.messageId)
@@ -1585,7 +1923,10 @@ async function compactTabHistory(
   if (!tab) return 0
 
   const settings = normalizeAISettings(await window.api.config.getAISettings())
-  const limit = resolveActiveContextLength(settings)
+  const limit = effectiveContextLimit(
+    activeCalibrationKey(settings),
+    resolveActiveContextLength(settings)
+  )
   const userRules = useUserRulesStore.getState().rules
   const tier = toolTierForProfile(settings.copilotModelProfile)
   const mentionsTerminal = hasTerminalMention(prompt, useSessionsStore.getState().sessions)
@@ -1738,6 +2079,7 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
 
   const settings = normalizeAISettings(await window.api.config.getAISettings())
   const limit = resolveActiveContextLength(settings)
+  const calKey = activeCalibrationKey(settings)
   applyRuntimeAISettings(settings)
   const tier = toolTierForProfile(settings.copilotModelProfile)
   // Force the chart path only when a terminal is bound to read from.
@@ -1796,6 +2138,7 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
     boundTabId,
     conversation: history,
     contextLimit: limit,
+    calibrationKey: calKey,
     toolTier: tier,
     guard: createGuardState(),
     // Raw instruction, kept for the Verify step's display-only stop decision.
@@ -1917,6 +2260,8 @@ export function computeActiveTabBudget(params: {
     contextMessage: fixedOverheadText(params.context, activeChatTabId, tier, surface),
     messages: params.messages,
     draft: params.draft,
-    limit: params.limit
+    // Against the window the endpoint actually accepts, not the one Settings
+    // claims — the gauge is only useful if it fills up when the budget does.
+    limit: effectiveContextLimit(lastCalibrationKey, params.limit)
   })
 }

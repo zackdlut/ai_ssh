@@ -5068,6 +5068,21 @@ select:focus {
   line-height: 1.45;
 }
 
+/* A provider failure shown with the turn it ended. Deliberately outside the
+   message body: the model never sees this text. */
+.msg-error {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border-left: 2px solid var(--danger);
+  background: var(--danger-hover-bg);
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* ---------- AI tool-call (function calling) cards ---------- */
 .tool-call-list {
   display: flex;

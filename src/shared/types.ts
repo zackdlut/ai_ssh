@@ -293,6 +293,18 @@ export interface CopilotChatMessage {
   chartSnapshots?: Record<string, ChartSnapshot>
   /** True when this message is a compressed summary of earlier turns. */
   isContextSummary?: boolean
+  /**
+   * A provider failure that ended this turn, shown with the message but NEVER
+   * replayed to the model.
+   *
+   * It used to be appended to `content`, which put the app's own diagnostics
+   * into the model's mouth: the next turn's history carried "[Error] 500 no
+   * user query found in messages" as something the assistant had said, so a
+   * request that failed for being too large came back very slightly larger,
+   * with the model now also trying to make sense of an error report about
+   * itself.
+   */
+  error?: string
   /** Function/tool calls requested by the model in this assistant turn. */
   toolCalls?: ToolCallView[]
 }
@@ -693,6 +705,12 @@ export interface AIDoneEvent {
   toolCalls?: ToolCallDTO[]
   /** Real usage from the provider, when it reports it. */
   usage?: AITokenUsage
+  /**
+   * The provider's `finish_reason` for this turn. `length` means the reply was
+   * CUT at the output limit rather than finished, which the agent loop must not
+   * mistake for a considered final answer.
+   */
+  finishReason?: string
 }
 
 export interface AIErrorEvent {

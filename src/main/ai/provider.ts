@@ -137,7 +137,17 @@ export interface StreamCallbacks {
   onChunk: (delta: string) => void
   /** Streamed reasoning/thinking tokens, kept separate from the answer body. */
   onReasoning?: (delta: string) => void
-  onDone: (content: string, toolCalls?: ToolCallDTO[], usage?: AITokenUsage) => void
+  onDone: (
+    content: string,
+    toolCalls?: ToolCallDTO[],
+    usage?: AITokenUsage,
+    /**
+     * Why the model stopped. `length` means the answer was CUT, not finished —
+     * the loop has to know that, because a cut-off turn carries no tool call and
+     * would otherwise read as a considered final answer.
+     */
+    finishReason?: string
+  ) => void
   onError: (error: string) => void
 }
 
@@ -255,6 +265,38 @@ function toSdkMessages(
       } as OpenAI.Chat.ChatCompletionToolMessageParam
     }
     return { role: m.role, content: m.content } as OpenAI.Chat.ChatCompletionMessageParam
+  })
+}
+
+/**
+ * Last-resort user turn, injected when a payload would otherwise carry none.
+ *
+ * A chat template that scans backwards for the last real user message — Qwen3's
+ * does — refuses the whole request when it finds only system and tool turns,
+ * and the refusal arrives as a 500 that names nothing the caller can act on.
+ * The renderer no longer builds such a payload, but it is not the only caller
+ * and the server also produces this shape ON ITS OWN by truncating a long
+ * prompt from the front. One cheap turn here is the difference between a
+ * degraded request and no answer at all.
+ */
+const USER_TURN_FALLBACK = 'Continue with the task described above.'
+
+function isNonEmptyUserTurn(m: OpenAI.Chat.ChatCompletionMessageParam): boolean {
+  if (m.role !== 'user') return false
+  if (typeof m.content === 'string') return m.content.trim().length > 0
+  return Array.isArray(m.content) && m.content.length > 0
+}
+
+/** Guarantee the payload carries a user turn, and say so in the log when it did not. */
+function ensureUserTurn(
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  traceId: string
+): void {
+  if (messages.some(isNonEmptyUserTurn)) return
+  messages.push({ role: 'user', content: USER_TURN_FALLBACK })
+  logLlmRequest(traceId, 'userTurn.injected', {
+    reason: 'payload carried no non-empty user message',
+    roles: messages.map((m) => m.role)
   })
 }
 
@@ -495,6 +537,7 @@ export class AIProvider {
       messages.push({ role: 'system', content: contextMessage })
     }
     messages.push(...toSdkMessages(req.messages))
+    ensureUserTurn(messages, req.requestId)
 
     const model = resolveActiveModel(settings)
     const baseBody = {
@@ -562,10 +605,12 @@ export class AIProvider {
       }
 
       let usage: AITokenUsage | undefined
+      let finishReason: string | undefined
       for await (const part of stream as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>) {
         armStall()
         chunkCount++
         usage = readUsage(part) ?? usage
+        finishReason = part.choices[0]?.finish_reason ?? finishReason
         const { content, reasoning } = splitStreamDelta(part)
         // Reasoning is streamed to a separate channel and intentionally NOT
         // added to `full`, so it never leaks into the answer or the history.
@@ -602,9 +647,10 @@ export class AIProvider {
         reasoning: reasoningFull || undefined,
         chunkCount,
         totalChars: full.length,
+        finishReason,
         usage
       }, Date.now() - started)
-      cb.onDone(full, toolCalls.length > 0 ? toolCalls : undefined, usage)
+      cb.onDone(full, toolCalls.length > 0 ? toolCalls : undefined, usage, finishReason)
     } catch (e) {
       if (timedOut) {
         // Watchdog fired: the model produced nothing for CHAT_STREAM_STALL_MS.
@@ -679,6 +725,7 @@ export class AIProvider {
       { role: 'system', content: req.systemPrompt },
       ...toSdkMessages(req.messages)
     ]
+    ensureUserTurn(messages, req.requestId)
     const model = resolveActiveModel(settings)
     const base = {
       model,

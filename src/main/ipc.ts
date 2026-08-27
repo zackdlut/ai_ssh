@@ -211,12 +211,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
           requestId: req.requestId,
           delta
         } satisfies AIReasoningEvent),
-      onDone: (content, toolCalls, usage) =>
+      onDone: (content, toolCalls, usage, finishReason) =>
         e.sender.send('ai:done', {
           requestId: req.requestId,
           content,
           toolCalls,
-          usage
+          usage,
+          finishReason
         } satisfies AIDoneEvent),
       onError: (error) =>
         e.sender.send('ai:error', { requestId: req.requestId, error } satisfies AIErrorEvent)

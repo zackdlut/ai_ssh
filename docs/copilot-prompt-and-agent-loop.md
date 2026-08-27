@@ -139,12 +139,16 @@ Never put example output or non-runnable text in a bash block. Commands are assu
 [4] system   Available skills（可选）     ← renderer prefix
 [5] system   Host memory（可选）          ← 远端 AGENTS.md，renderer prefix
 [6…] user / assistant / tool              ← 对话历史 + 本轮用户话
-[n] system   Current SSH terminal manager state  ← tab_id 快照（每轮刷新）
-[n] system   Task execution history       ← 已执行命令账本（有才带）
-[n] system   Current task plan            ← update_plan 的进度 + verify 断言（有才带）
+[n] user     本轮注入状态（一条，带「app 注入、不是用户说的」前缀）
+             ├ Current SSH terminal manager state ← tab_id 快照（每轮刷新）
+             ├ Task execution history             ← 已执行命令账本（有才带）
+             ├ Current task plan                  ← update_plan 进度 + verify 断言（有才带）
+             └ @path 提到的文件内容（有才带）
 ```
 
 前缀（1–5）尽量稳定，方便缓存；后缀快照 / 账本 / 计划每轮都会变，所以放在**对话后面**，既不破坏前缀缓存，又让「现在还剩哪一步」比长 system prompt 更新。
+
+后缀原来是 3–4 条独立 `system`，现在合并成**一条 `user`**，两个原因：一是 recency——最后一轮的位置很值钱，花在模型已经看过二十遍的抬头上是浪费；二是不少 OpenAI 兼容后端会直接拒绝「尾部只剩 system」的对话，Ollama 上的 qwen3 会回 `no user query found in messages`，而它自己的前端截断恰好就会产出这个形状（见 `buildTurnStateMessage`）。`provider.chat()` 里还有一道兜底：装配完消息若不存在非空 `user`，补一条最小 user 并 `logDebug` 记账。
 
 Host memory 放前缀是因为它是**主机的属性、不是这一轮的属性**：整个任务里它一个字都不会变。`src/renderer/lib/hostMemory.ts` 在 `sendPrompt` 里用 SFTP 预热（找 `~/AGENTS.md`、再退到 `~/.ai-terminal.md`，上限 4000 字符），按终端 tab 缓存，**连"没有这个文件"也缓存**——否则每一轮、每台主机都要白白探一次 SFTP。写到 AGENTS.md 的任何一次 `edit_file` / `apply_patch` / `write_file` / Restore 都会让缓存失效，所以模型刚记下来的约定，下一轮就开始约束它自己。
 
@@ -200,9 +204,12 @@ flowchart TD
 | 审批（`toolPolicy`） | `update_plan` / `list_*` / `read_file` 等自动跑。`systemctl restart` 在 balanced 下要点批准；`systemctl is-active` / `ps` / `journalctl` 这类只读命令自动跑。`rm -rf` 等危险命令永不自动。 |
 | Verify 头              | 每条`exec_command` 结果先带 `status` / `exit_code` / `cwd` / 可选 `verify` hint，模型按退出码判断，而不是「输出里有 Success 字样」。                                                             |
 | 独立确认               | 重启、部署、改配置：**改状态的那条命令成功 ≠ 任务成功**。必须再跑 `systemctl is-active` 或 `curl` health。                                                                                      |
-| verify 断言（harness） | 计划步骤可以带 `verify: { command, expect_exit_code?, expect_output? }`。收尾那一轮如果还有「已完成但校验没跑过/没通过」的步骤，**整轮回答会被撤掉**，注入一条 checkpoint 让它先去跑校验。每个任务只拦一次。 |
+| verify 断言（harness） | 计划步骤可以带 `verify: { command, expect_exit_code?, expect_output? }`。收尾那一轮如果还有「已完成但校验没跑过/没通过」的步骤，**整轮回答会被撤掉**，注入一条 checkpoint 让它先去跑校验。每个**计划**只拦一次（`claimVerifyCheckpoint`），命令证据也按 chat 存（`taskEvidence`）——两者原来都挂在 loop 上，任务被打断后续跑就会把已经证明过的步骤重新判成「没跑」。 |
+| 上下文窗口校准 | 设置里的窗口只是**上界**：每轮 `usage` 都会反推真实窗口（`contextCalibration`），发现服务端在 32k 处削顶（连续两轮 total 贴同一个值、completion 被挤到几十 token）或直接截断了 prompt，就按实测值压缩并明确告诉用户「实测 32k，配置写的 128k」。配置比实测大四倍时 compaction 永不触发，服务端就会替你从**最前面**丢——那里正是用户的指令。 |
+| 有界自动恢复 | `onError` 按 `context` / `transient` / `fatal` 分类（`turnRecovery`）：超窗压缩后重试 1 次、瞬态退避重试 2 次（2s / 6s）、其余直接 `unrecoverable`。每次重试都在侧栏说出来，重试期间 loop 挂在 `parked` 里，Stop 能取消。 |
+| 回答被截断 | 读 `finish_reason`：`length` 说明回答是**被切断的一半**（散文断在句中，tool_call 断在参数里），不能判成 finalAnswer。压缩预算后重试 1 次，额度用完则在气泡里明说这条回答不完整。输出预留从 2048 提到窗口的 1/4（上限 8192）——实测 reasoning 轮 completion 到过 7006。 |
 | 循环内摘要             | 本地压缩要开始**整轮丢弃**步骤时，先花一次 LLM 调用把这些步骤压成一条执行记录（保留命令、exit code、路径、报错原文）。每任务最多 3 次，失败就退回本地压缩。                                     |
-| 瞬态失败               | 超时 / 断连：应用层会自动重试**一次**（1.5s backoff），第二次才交给模型改策略。                                                                                                                      |
+| 瞬态失败               | 工具层超时 / 断连：自动重试**一次**（1.5s backoff），第二次才交给模型改策略。LLM 请求本身的失败走上面的有界自动恢复。                                                                             |
 | Loop Guard             | 单任务最多**25** 轮 LLM；同一命令+同一结果连打 3 次停；任务 token 预算约 150 万。快撞到重复上限时会注入一条 Reflection 用户消息。                                                                    |
 | 空回复 nudge           | 模型只在「内心」里计划、既不调工具也不说话时，注入一次：「现在就调用工具，不要等我说 continue」。                                                                                                          |
 
@@ -871,7 +878,7 @@ Plan updated (1/3 completed).
 
 #### 步骤 22 — LLM → Agent（Turn 4 Response）
 
-**说明：** **没有 `tool_calls`** = 想要收束。但在 `finalAnswer` 之前先过一道 harness 检查：`unmetPlanSteps` 拿计划里每个 `completed` / `in_progress` 步骤的 `verify`，去比对 `loop.execEvidence`（本任务真正跑过的命令 + 退出码 + 输出）。这条轨迹里 `systemctl is-active nginx` 跑过、exit 0、输出 `active` 匹配 `^active` → 通过，`onDone` → `finalAnswer` → phase `done`。语言与用户一致（中文）。
+**说明：** **没有 `tool_calls`** = 想要收束。但在 `finalAnswer` 之前先过一道 harness 检查：`unmetPlanSteps` 拿计划里每个 `completed` / `in_progress` 步骤的 `verify`，去比对 `taskEvidence(chatTabId)`（本 chat 真正跑过的命令 + 退出码 + 输出）。这条轨迹里 `systemctl is-active nginx` 跑过、exit 0、输出 `active` 匹配 `^active` → 通过，`onDone` → `finalAnswer` → phase `done`。语言与用户一致（中文）。
 
 **如果模型在这里跳过了 `is-active` 直接宣布成功**，这一轮的气泡会被撤掉，注入一条 checkpoint 用户消息，循环回到 `thinking`：
 
@@ -967,6 +974,10 @@ systemctl restart nginx
 | patch 打不上             | 逐 hunk 退回精确替换；仍失败则回 `Hunk N does not match ...` 并附上它期待的上下文 | 让模型重读文件按现状重建 patch，或改用 `edit_file` |
 | 想收尾但 verify 没跑     | 撤掉这一轮回答，注入 checkpoint 列出未验证的步骤及其校验命令       | 模型先去跑校验；校验失败则报告失败而非成功 |
 | 超过 25 轮 / token 预算  | 侧栏 Loop Guard 提示，停止                                         | 用户可新开一轮                             |
+| LLM 请求超窗（`no user query found` / `context length`） | 不回传给模型：按实测值下调窗口 → 压缩 → 重跑同一轮 | 最多 1 次；再来一次就交给用户（配置或服务端窗口要改） |
+| LLM 请求 5xx / 超时      | 不回传给模型：退避 2s / 6s 重跑同一轮，侧栏显示第几次              | 最多 2 次；用完则把错误挂在气泡上           |
+| 回答被输出上限切断（`finish_reason: length`） | 不回传给模型：预算砍半后重跑一轮                | 最多 1 次；用完则在气泡里标明这条回答不完整 |
+| 401 / 404 / 配置错       | 错误挂在消息的 `error` 字段上（**不进 content**，因此不会被下一轮当成模型自己说过的话重放） | 用户改配置                                 |
 
 ---
 
@@ -986,6 +997,9 @@ systemctl restart nginx
 | 已执行步骤账本             | `src/renderer/lib/taskMemory.ts`        |
 | 循环上限                   | `src/renderer/lib/loopGuard.ts`         |
 | 上下文压缩 / 摘要触发判定  | `src/renderer/lib/conversationCompact.ts` |
+| 真实上下文窗口反推         | `src/renderer/lib/contextCalibration.ts` |
+| 请求失败分类与有界恢复     | `src/renderer/lib/turnRecovery.ts`      |
+| 命令证据 / verify checkpoint 寿命 | `src/renderer/lib/taskEvidence.ts` |
 | 循环内摘要 prompt          | `src/shared/prompts/history.ts`         |
 | 文件读写 / 补丁 / 备份     | `src/renderer/lib/fileTools.ts`         |
 | 统一 diff 解析与应用       | `src/shared/unifiedPatch.ts`            |
@@ -1027,8 +1041,8 @@ P0、P1 与 P2 的非 MCP 部分已经落地，下面只留仍然存在的缺口
 | 能力 | 现状 | 对标 |
 | --- | --- | --- |
 | 外部可观测性 | 只能通过 SSH 上的命令看主机 | Prometheus / K8s 等以 skill 或 MCP 适配接入 |
-| 恢复 | `recovering` 阶段仍主要靠模型换策略，没有自动重连路径 | 断连后有界重连，且失败要表面给用户 |
-| 评测 | 策略 / prompt / patch / verify / 子 Agent / scrollback 有单测，无 Agent 轨迹评测 | SWE-bench 风格：edit → 语法检查 → 独立确认 |
+| 恢复 | LLM 请求失败已有有界自动恢复（超窗压缩重试 1 次 / 瞬态退避 2 次）；**SSH 会话**本身断了仍要用户手动重连 | 断连后有界重连，且失败要表面给用户 |
+| 评测 | 策略 / prompt / patch / verify / 子 Agent / scrollback 有单测，上下文压力轨迹（32k 削顶 → 超窗 500 → 恢复而非终止）有轨迹测试，其余轨迹仍缺 | SWE-bench 风格：edit → 语法检查 → 独立确认 |
 | 记忆写回 | `AGENTS.md` 能读能写，但「从被拒绝的操作里提炼约定」仍靠人开口 | Reflexion：失败轨迹沉淀为候选规则 |
 
 已经补掉的（P0 / P1 / P2）：Plan / Agent 模式切换、`.bak` 检查点与一键 Restore、`@path`、Slash 命令、队列与待批 UX（P0）；`apply_patch`、`git_read` / `git_commit`、远程 `AGENTS.md` 主机记忆、循环内 LLM 摘要、计划 verify 断言的 harness 拦截（P1）；per-chat busy 与按主机写互斥、`delegate_to_host` 隔离子 Agent、`search_terminal` scrollback 检索（P2）。
@@ -1133,7 +1147,7 @@ flowchart TD
 - 不做浏览器、Computer Use、本机工程语义索引（远程 `grep` / `glob` 已经覆盖运维检索）。
 - 不把全部工具再堆进 fast 档；新能力继续按档位与 intent 门控（与第 1 节 prompt 设计一致）。`apply_patch` 尤其如此：小模型最不擅长的就是生成行号正确的合法 unified diff。
 - 单条任务内保持单线程决策：并行只发生在只读工具（已有 `Promise.all`）、隔离子 Agent 内部，以及**不同 Copilot Tab 之间**（P2 的 `busyByTab`）。同一主机上的写操作永远由 `hostLock` 串起来——并行是为了让用户能同时问几台机，不是为了让两条任务同时改一台机。
-- 不把 `recovering` 做成静默重连死循环；断连仍应表面给用户（第 7 节）。
+- 不把 `recovering` 做成静默重连死循环：现在的自动重试**按错误类别各自有界**（超窗 1 次、瞬态 2 次、截断 1 次），每次都在侧栏说出来，用完额度就把错误交给用户（第 7 节）。
 
 ### 9.7 建议落地顺序
 

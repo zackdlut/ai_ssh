@@ -321,6 +321,7 @@ export default function ChatMessage({ message }: Props): JSX.Element {
             )
           )
         )}
+        {message.error && <div className="msg-error">{message.error}</div>}
         {activeChatTabId && message.toolCalls && message.toolCalls.length > 0 && (
           <div className="tool-call-list">
             {message.toolCalls.map((call) => (
