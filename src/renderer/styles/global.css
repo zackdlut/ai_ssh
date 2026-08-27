@@ -5407,50 +5407,51 @@ select:focus {
 }
 
 .tool-call-card .tool-section-label {
-  font-size: 10.5px;
+  font-size: 9.5px;
   font-weight: 650;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-faint);
-  padding: 8px 0 6px;
+  padding: 5px 0 3px;
 }
 
 .tool-call-card .tool-detail-grid {
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .tool-call-card .tool-detail-row {
   display: grid;
-  grid-template-columns: minmax(72px, 34%) 1fr;
-  gap: 10px;
+  grid-template-columns: minmax(62px, 28%) 1fr;
+  gap: 8px;
   align-items: baseline;
-  padding: 5px 8px;
-  border-radius: 8px;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.tool-call-card .tool-detail-row:nth-child(odd) {
-  background: rgba(255, 255, 255, 0.02);
+  padding: 1px 0;
+  line-height: 1.3;
 }
 
 .tool-call-card .tool-detail-row dt {
-  color: var(--text-dim);
-  font-weight: 500;
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint, var(--text-dim));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tool-call-card .tool-detail-row dd {
   margin: 0;
+  font-size: 11px;
   word-break: break-word;
   color: var(--text);
 }
 
 .tool-call-card .tool-detail-row dd.mono {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 10.5px;
 }
 
 .tool-call-card .tool-plan-list {
@@ -6173,49 +6174,48 @@ select:focus {
 .tool-call-card .tool-exec-result {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .tool-call-card .tool-exec-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  gap: 3px 10px;
 }
 
 .tool-call-card .tool-exec-stat {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 4px;
   min-width: 0;
-  flex: 1 1 auto;
-  padding: 6px 9px 7px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--line);
+  flex: 0 1 auto;
 }
 
 .tool-call-card .tool-exec-stat.is-cwd {
-  flex: 1 1 100%;
+  flex: 1 1 auto;
 }
 
 .tool-call-card .tool-exec-k {
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 650;
-  letter-spacing: 0.07em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
+  white-space: nowrap;
   color: var(--text-faint, var(--text-dim));
 }
 
 .tool-call-card .tool-exec-v {
-  font-size: 12.5px;
-  line-height: 1.35;
+  font-size: 11px;
+  line-height: 1.3;
   color: var(--text);
   word-break: break-word;
 }
 
 .tool-call-card .tool-exec-v.mono {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 10.5px;
 }
 
 .tool-call-card .tool-exec-stat.is-cwd .tool-exec-v {
