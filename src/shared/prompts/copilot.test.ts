@@ -100,6 +100,23 @@ describe('buildCopilotSystemPrompt tool gating', () => {
     expect(leaked).toEqual([])
   })
 
+  it('tells the full tier when to reach for apply_patch instead of edit_file', () => {
+    const full = buildCopilotSystemPrompt({ toolNames: FULL })
+    expect(full).toContain('ONE apply_patch')
+    // The core tier has no patch tool, so it must not be offered the choice.
+    expect(buildCopilotSystemPrompt({ toolNames: CORE })).not.toContain('apply_patch')
+  })
+
+  it('documents the git tools only when they are sent', () => {
+    const full = buildCopilotSystemPrompt({ toolNames: FULL })
+    expect(full).toContain('Version control (git_read / git_commit)')
+    expect(full).toContain('never needs approval')
+    const noGit = buildCopilotSystemPrompt({
+      toolNames: FULL.filter((n) => n !== 'git_read' && n !== 'git_commit')
+    })
+    expect(noGit).not.toContain('Version control')
+  })
+
   it('shrinks as the tool set shrinks', () => {
     const full = buildCopilotSystemPrompt({ toolNames: FULL }).length
     const core = buildCopilotSystemPrompt({ toolNames: CORE }).length

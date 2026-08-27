@@ -7,9 +7,12 @@ export const PIN_DEFAULT_TOOLS = new Set([
   'run_in_terminal',
   'read_file',
   'edit_file',
+  'apply_patch',
   'write_file',
   'grep',
-  'glob'
+  'glob',
+  'git_read',
+  'git_commit'
 ])
 
 export type PinResolution =

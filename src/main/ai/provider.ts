@@ -922,13 +922,12 @@ export class AIProvider {
     const started = Date.now()
     const traceId = `compress-${started}`
 
-    const convText = req.messages
-      .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-      .join('\n\n')
+    const mode = req.mode ?? 'chat'
+    const convText = req.messages.map(renderForSummary).join('\n\n')
 
     const locale = this.getLocale()
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: buildHistorySummarySystemPrompt(locale) }
+      { role: 'system', content: buildHistorySummarySystemPrompt(locale, mode) }
     ]
     const contextMessage = buildContextMessage(req.context)
     if (contextMessage) {
@@ -936,7 +935,7 @@ export class AIProvider {
     }
     messages.push({
       role: 'user',
-      content: buildHistoryCompressUserMessage(locale, convText)
+      content: buildHistoryCompressUserMessage(locale, convText, mode)
     })
 
     const model = resolveActiveModel(settings)
@@ -965,6 +964,25 @@ export class AIProvider {
       throw e
     }
   }
+}
+
+/**
+ * Flatten one message for the summarizer.
+ *
+ * Agent-loop history is mostly tool traffic, and labelling every non-user
+ * message "Assistant" erased exactly what a loop summary has to keep: which
+ * call produced which result. Naming the tool and echoing its arguments costs
+ * a few tokens and is what lets the summary say "ran X, got exit 1" instead of
+ * "an error occurred".
+ */
+function renderForSummary(m: ChatMessageDTO): string {
+  if (m.role === 'user') return `User: ${m.content}`
+  if (m.role === 'tool') return `Tool result: ${m.content}`
+  const calls = (m.tool_calls ?? [])
+    .map((c) => `  → called ${c.name}(${c.arguments})`)
+    .join('\n')
+  const head = m.content ? `Assistant: ${m.content}` : 'Assistant:'
+  return calls ? `${head}\n${calls}` : head
 }
 
 /**

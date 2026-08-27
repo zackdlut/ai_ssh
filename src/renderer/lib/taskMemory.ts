@@ -101,10 +101,19 @@ function stepFromCall(call: ToolCallView, index: number): TaskStep | null {
  * is exactly what a later turn needs ("you already edited /etc/nginx.conf").
  */
 function callHighlight(call: ToolCallView): string | undefined {
-  if (call.name === 'edit_file' || call.name === 'write_file') {
+  if (call.name === 'edit_file' || call.name === 'write_file' || call.name === 'apply_patch') {
     try {
       const args = JSON.parse(call.args) as { path?: unknown }
       if (typeof args.path === 'string') return args.path
+    } catch {
+      /* fall through */
+    }
+  }
+  if (call.name === 'git_commit') {
+    try {
+      const args = JSON.parse(call.args) as { repo?: unknown; message?: unknown }
+      const parts = [args.repo, args.message].filter((v): v is string => typeof v === 'string')
+      if (parts.length > 0) return parts.join(': ')
     } catch {
       /* fall through */
     }

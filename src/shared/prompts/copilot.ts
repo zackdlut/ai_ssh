@@ -114,11 +114,18 @@ function environment(t: ToolSet): string {
     'move_connection_to_folder'
   )
   const settings = t.any('get_app_settings', 'update_app_settings')
+  const memory = t.any('edit_file', 'apply_patch', 'write_file')
   return lines(
     '## Environment (injected every turn — read before acting)',
     '- Terminal context: connected Host / User / observed cwd / OS hint, plus a snippet of recent output. You cannot see scrollback beyond that snippet.',
     t.has('read_skill') &&
       '- Skills: installed skill names with one-line descriptions (a summary, not the instructions).',
+    t.enabled &&
+      `- Host memory: when the pinned host carries an AGENTS.md, it arrives as its own system message — standing conventions for THAT machine, which outrank your defaults but lose to an explicit instruction here.${
+        memory
+          ? ' When the user states a lasting convention for the host ("deploys always go through systemctl"), offer to append it to that file; writing it needs their approval like any other edit.'
+          : ''
+      }`,
     t.enabled &&
       `- Snapshot: the open tabs with their exact tab_id${
         connections ? ', saved SSH configs and bookmark folders with theirs' : ''
@@ -178,7 +185,11 @@ function shellTool(t: ToolSet): 'exec_command' | 'run_in_terminal' | null {
 function execution(t: ToolSet): string {
   const shell = shellTool(t)
   const plan = t.has('update_plan')
-    ? 'Plan (multi-step tasks only — deploy, diagnose, migrate, edit-then-verify): open with update_plan and 2-6 concrete steps, then update it as each lands. Single-step requests stay direct. The plan and the Task execution history are re-injected every turn: treat them as your memory of what remains, keep going until every step is resolved instead of asking the user to say "continue", and do not redo a step the history already records unless you need fresh state.'
+    ? lines(
+        'Plan (multi-step tasks only — deploy, diagnose, migrate, edit-then-verify): open with update_plan and 2-6 concrete steps, then update it as each lands. Single-step requests stay direct. The plan and the Task execution history are re-injected every turn: treat them as your memory of what remains, keep going until every step is resolved instead of asking the user to say "continue", and do not redo a step the history already records unless you need fresh state.',
+        !!shell &&
+          `- Give every step that CHANGES state a \`verify\` block naming the INDEPENDENT check that proves it — \`systemctl is-active nginx\`, \`nginx -t\`, \`curl -fsS localhost/health\` — never the change command itself. The app matches each one against the commands you actually ran through ${shell} and will not let you finish while one is unproven, so declare a check you intend to run and then run it.`
+      )
     : false
   const verify = shell
     ? `Verify — never trust a command's own output alone. Every ${shell} result carries a header (status, exit_code, cwd, optional verify hint); read it.
@@ -223,22 +234,47 @@ function toolRules(t: ToolSet): string {
   const execTools = howToRun(t)
   const shell = shellTool(t)
 
-  const fileToolNames = ['read_file', 'edit_file', 'write_file', 'grep', 'glob'].filter((n) =>
-    t.has(n)
-  )
+  const fileToolNames = [
+    'read_file',
+    'edit_file',
+    'apply_patch',
+    'write_file',
+    'grep',
+    'glob'
+  ].filter((n) => t.has(n))
+  const writeTool = t.has('edit_file') ? 'edit_file' : t.has('apply_patch') ? 'apply_patch' : null
   const files = fileToolNames.length
     ? lines(
-        `Files (${fileToolNames.join(' / ')}). Prefer these over shelling out: read_file beats \`cat\`, grep beats \`grep | head\`, edit_file beats \`sed -i\`, and they run over SFTP so they leave the terminal alone${
+        `Files (${fileToolNames.join(' / ')}). Prefer these over shelling out: read_file beats \`cat\`, grep beats \`grep | head\`${
+          writeTool ? `, ${writeTool} beats \`sed -i\`` : ''
+        }, and they run over SFTP so they leave the terminal alone${
           shell ? ` (a local WSL tab has no SFTP: use ${shell} there)` : ''
         }.`,
-        t.has('edit_file') &&
-          'ALWAYS read_file or grep the target region BEFORE edit_file, so the text you match is text you have seen; if an edit is rejected as ambiguous, include more surrounding lines rather than falling back to sed.',
-        t.any('edit_file', 'write_file') &&
+        t.has('apply_patch') &&
+          t.has('edit_file') &&
+          'One change to one file → edit_file. Several changes to the SAME file → ONE apply_patch, not a chain of edits: each edit invalidates the line numbers of the ones after it.',
+        !!writeTool &&
+          `ALWAYS read_file or grep the target region BEFORE ${writeTool}, so the text you match is text you have seen; if an edit is rejected as ambiguous, include more surrounding lines rather than falling back to sed.`,
+        t.any('edit_file', 'apply_patch', 'write_file') &&
           `Editing is not verification: ${
             shell
               ? "run the file's own checker (`nginx -t`, `sshd -t`, `visudo -c`) or re-read the region"
               : 're-read the region'
           } before reporting success.`
+      )
+    : false
+
+  const git = t.has('git_read')
+    ? lines(
+        `Version control (git_read${
+          t.has('git_commit') ? ' / git_commit' : ''
+        }). Use git_read for status / diff / log / show / branch on a remote repo rather than ${
+          shell ? `${shell} \`git …\`` : 'a shell command'
+        }: it runs read-only and never needs approval.${
+          t.has('git_commit')
+            ? ' git_commit is the only write, and it always asks — check git_read diff first so the message describes what is actually staged.'
+            : ''
+        }`
       )
     : false
 
@@ -271,7 +307,7 @@ function toolRules(t: ToolSet): string {
       `When the user just wants to SEE what one of these reports (${displayTools}), the card IS the answer: STOP there with no trailing prose. Keep going only if the request asked for more — to ANALYZE/RECOMMEND (add a short recommendation in the same reply as the call), or to ACT on the result (emit the follow-up call).`
   )
 
-  const body = [emitting, execTools, files, batching, gotchas, noRestate].filter(Boolean)
+  const body = [emitting, execTools, files, git, batching, gotchas, noRestate].filter(Boolean)
   return `## Tool rules\n${t.inventory()}\n\n${body.join('\n\n')}`
 }
 

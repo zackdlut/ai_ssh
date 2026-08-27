@@ -84,7 +84,16 @@ export default function PlanCard(): JSX.Element | null {
                       ? '✕'
                       : '○'}
               </span>
-              <span className="plan-item-text">{item.title}</span>
+              <span className="plan-item-text">
+                {item.title}
+                {item.verify && (
+                  // The check is the user's handle on whether "done" means
+                  // anything: showing it makes an unverified claim visible.
+                  <span className="plan-item-verify" title={t('copilot.plan.verifyHint')}>
+                    {t('copilot.plan.verify')} <code>{item.verify.command}</code>
+                  </span>
+                )}
+              </span>
             </li>
           ))}
         </ol>

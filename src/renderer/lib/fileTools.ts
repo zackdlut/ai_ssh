@@ -18,7 +18,9 @@ import { runAgentCommand } from './agentExec'
 import { toolResultCharBudget } from './toolBudget'
 import { computeTextDiff, formatDiffStat } from '../../shared/textDiff'
 import { applyUniqueEdit, type EditOutcome } from '../../shared/textEdit'
+import { applyPatchWithFallback, type PatchApplyOutcome } from '../../shared/unifiedPatch'
 import { checkpointFromBackupNote } from './fileCheckpoints'
+import { invalidateHostMemory, isHostMemoryPath } from './hostMemory'
 
 export interface ToolResult {
   ok: boolean
@@ -153,6 +155,14 @@ async function backupRemoteFile(
   return note
 }
 
+/**
+ * Drop the cached AGENTS.md after a write that lands on one, so a convention
+ * the agent just recorded binds the very next turn instead of the next session.
+ */
+function noteWrite(terminalTabId: string, path: string): void {
+  if (isHostMemoryPath(path)) invalidateHostMemory(terminalTabId)
+}
+
 /** Render file contents with 1-based line numbers, as `   12|text`. */
 function withLineNumbers(lines: string[], firstLineNo: number): string {
   return lines
@@ -252,6 +262,7 @@ export async function editFile(
   })
   const written = await window.api.sftp.writeText(resolved.sessionId, path, edit.text)
   if (written.error) return { ok: false, error: written.error }
+  noteWrite(resolved.tab.id, path)
 
   const diff = computeTextDiff(read.text, edit.text)
   const lines = [
@@ -278,6 +289,88 @@ function editFailureMessage(edit: Extract<EditOutcome, { ok: false }>, path: str
     case 'ambiguous':
       return `old_string matches ${edit.occurrences} times in "${path}". Add surrounding lines to make it unique, or set replace_all=true to change every occurrence.`
   }
+}
+
+/**
+ * Apply a unified diff to a remote file.
+ *
+ * The reason to prefer this over a series of `edit_file` calls is that a hunk
+ * carries its own context, so several changes to one file land in ONE approval
+ * and ONE write — and none of them has to be globally unique in the file, which
+ * is where exact replacement forces the model into ever-larger `old_string`s.
+ *
+ * When a hunk cannot be placed by context the call does not fail outright: each
+ * hunk is retried as the exact replacement `edit_file` would have made. That
+ * recovers the common case where a model wrote correct edits but mangled the
+ * context lines around them, without weakening the "it must match something you
+ * have actually seen" guarantee.
+ */
+export async function applyPatch(
+  args: Record<string, unknown>,
+  ctx?: { chatTabId?: string }
+): Promise<ToolResult> {
+  const resolved = resolveSftpTab(str(args.tab_id))
+  if ('error' in resolved) return { ok: false, error: resolved.error }
+  const path = str(args.path)
+  if (!path) return { ok: false, error: 'path is required.' }
+  const raw = rawStr(args.patch)
+  if (raw === undefined || !raw.trim()) return { ok: false, error: 'patch is required.' }
+
+  const read = await readWholeFile(resolved.sessionId, path, EDIT_MAX_BYTES)
+  if ('error' in read) return { ok: false, error: read.error }
+
+  const outcome = applyPatchWithFallback(read.text, raw)
+  if (!outcome.ok) return { ok: false, error: patchFailureMessage(outcome, path) }
+
+  const notes: string[] = []
+  if (outcome.fellBack) {
+    notes.push(
+      'note: the hunk context did not match, so each hunk was applied as a unique exact replacement instead — re-read the file to confirm the result is what you intended.'
+    )
+  }
+
+  const backupNote = await backupRemoteFile(resolved.sessionId, path, read.text, {
+    chatTabId: ctx?.chatTabId,
+    terminalTabId: resolved.tab.id
+  })
+  const written = await window.api.sftp.writeText(resolved.sessionId, path, outcome.text)
+  if (written.error) return { ok: false, error: written.error }
+  noteWrite(resolved.tab.id, path)
+
+  const drifted = outcome.applied.filter((h) => h.offset !== 0)
+  if (drifted.length > 0) {
+    notes.push(
+      `note: ${drifted.length} hunk(s) matched at a different line than the @@ header claimed (${drifted
+        .map((h) => `#${h.index} ${h.offset > 0 ? '+' : ''}${h.offset}`)
+        .join(', ')}).`
+    )
+  }
+  if (outcome.applied.some((h) => h.fuzzy)) {
+    notes.push('note: some hunks matched only after ignoring trailing whitespace.')
+  }
+
+  const lines = [
+    `patched: ${path}`,
+    `hunks: ${outcome.applied.length} applied`,
+    `diff: ${formatDiffStat(computeTextDiff(read.text, outcome.text))}`
+  ]
+  if (backupNote) lines.push(backupNote)
+  lines.push(...notes)
+  lines.push(
+    'note: the file was changed but NOT verified — run an independent check (config test, service reload, re-read the region) before reporting success.'
+  )
+  return { ok: true, result: lines.join('\n') }
+}
+
+function patchFailureMessage(
+  outcome: Extract<PatchApplyOutcome, { ok: false }>,
+  path: string
+): string {
+  const tail =
+    outcome.reason === 'no_change'
+      ? ''
+      : ` Read the current contents of "${path}" and rebuild the patch from what is actually there, or use edit_file for a single targeted change.`
+  return `${outcome.detail}${tail}`
 }
 
 export async function writeFile(
@@ -308,6 +401,7 @@ export async function writeFile(
 
   const written = await window.api.sftp.writeText(resolved.sessionId, path, content)
   if (written.error) return { ok: false, error: written.error }
+  noteWrite(resolved.tab.id, path)
 
   const lines = [`wrote: ${path}`, `bytes: ${content.length}`]
   if (previous === undefined) lines.push('created: new file')
@@ -424,5 +518,6 @@ export async function restoreRemoteBackup(opts: {
   }
   const written = await window.api.sftp.writeText(resolved.sessionId, opts.path, read.read.text)
   if (written.error) return { ok: false, error: written.error }
+  noteWrite(resolved.tab.id, opts.path)
   return { ok: true }
 }

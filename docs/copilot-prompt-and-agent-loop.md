@@ -14,8 +14,9 @@
 | 用户自定义规则      | `src/shared/prompts/userRules.ts`                             | 设置里的`user_rules`，单独一条 system message；与默认 prompt 冲突时以用户规则为准                                                         |
 | 终端上下文          | `src/shared/prompts/terminalContext.ts`                       | Host / User / cwd / OS hint + 最近输出片段                                                                                                  |
 | 工具快照 / 技能目录 | `src/renderer/lib/aiTools.ts`                                 | 打开的 tab_id、配置、布局；已启用技能的 name + 一句话描述                                                                                   |
-| 任务计划            | `src/renderer/lib/planTool.ts`                                | `update_plan` 维护的步骤列表，每轮原样回注                                                                                                |
+| 任务计划            | `src/renderer/lib/planTool.ts`                                | `update_plan` 维护的步骤列表（含 verify 断言），每轮原样回注                                                                              |
 | 执行账本            | `src/renderer/lib/taskMemory.ts`                              | 本会话已经真正执行过的命令/动作，避免重复做完的步骤                                                                                         |
+| 主机记忆            | `src/renderer/lib/hostMemory.ts`                              | 远端 `~/AGENTS.md`：这台机器上的长期约定，作为独立 system message 进前缀层                                                                |
 | 图表 / 图           | `src/shared/prompts/chart.ts` + copilot 里的 chart/mermaid 段 | **按需注入**：用户要可视化才带 chart 规则；要架构图才带 mermaid 规则                                                                  |
 | 真正发 HTTP         | `src/main/ai/provider.ts`                                     | OpenAI 兼容`chat.completions.create`，`stream: true`，`tools` + `tool_choice: "auto"`                                               |
 
@@ -29,7 +30,7 @@
 
 | 档位                          | 工具集                                                                                                        | 典型场景                                                           |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Default / 非 fast（`full`） | 21 个：SSH 配置、开关 tab、文件、exec、plan、设置等                                                           | 托管大模型                                                         |
+| Default / 非 fast（`full`） | 24 个：SSH 配置、开关 tab、文件（含 `apply_patch`）、git、exec、plan、设置等                                | 托管大模型                                                         |
 | Fast（`core`）              | 7 个：`list_open_tabs`, `exec_command`, `read_file`, `edit_file`, `grep`, `glob`, `update_plan` | 本地小模型；`read_skill` 仅在已安装并启用技能时才出现            |
 | 图表首轮                      | `tools` 关闭，prompt 也不写 Tool rules                                                                      | 强制模型先吐带`chart` 标记的代码围栏，再由第二阶段转成 JSON spec |
 
@@ -37,7 +38,7 @@
 
 ## 2. 默认初始化 System Prompt（full 档、无技能、无 chart/mermaid）
 
-下面是 `buildCopilotSystemPrompt({ toolNames: toolNamesFor('full') })` 的实际文本（约 8500 字符）。这就是 Copilot **每一轮** 放在 messages 最前面的那条 `role: "system"`。
+下面是 `buildCopilotSystemPrompt({ toolNames: toolNamesFor('full') })` 的实际文本（约 9800 字符）。这就是 Copilot **每一轮** 放在 messages 最前面的那条 `role: "system"`。用 `npx tsx scripts/dumpPrompt.ts full` 可以随时重新导出这段，改完 prompt 记得回填，别手改。
 
 ````Markdown
 ## Role
@@ -47,6 +48,7 @@ Senior Linux/DevOps operations copilot inside an SSH terminal app: pragmatic, pr
 
 ## Environment (injected every turn — read before acting)
 - Terminal context: connected Host / User / observed cwd / OS hint, plus a snippet of recent output. You cannot see scrollback beyond that snippet.
+- Host memory: when the pinned host carries an AGENTS.md, it arrives as its own system message — standing conventions for THAT machine, which outrank your defaults but lose to an explicit instruction here. When the user states a lasting convention for the host ("deploys always go through systemctl"), offer to append it to that file; writing it needs their approval like any other edit.
 - Snapshot: the open tabs with their exact tab_id, saved SSH configs and bookmark folders with theirs, and an App settings line.
 - Resolve ids from the snapshot; NEVER invent one. Default to the tab marked pinned; only pass a different tab_id when the user names another host. When unsure, pass a name field (connection_name / folder_name) and let the app resolve it, or call the matching list_* tool first.
 
@@ -66,6 +68,7 @@ Example: "restart nginx on prod and tell me if it worked" → exec_command (you 
 
 ## Plan, Verify & Recovery
 Plan (multi-step tasks only — deploy, diagnose, migrate, edit-then-verify): open with update_plan and 2-6 concrete steps, then update it as each lands. Single-step requests stay direct. The plan and the Task execution history are re-injected every turn: treat them as your memory of what remains, keep going until every step is resolved instead of asking the user to say "continue", and do not redo a step the history already records unless you need fresh state.
+- Give every step that CHANGES state a `verify` block naming the INDEPENDENT check that proves it — `systemctl is-active nginx`, `nginx -t`, `curl -fsS localhost/health` — never the change command itself. The app matches each one against the commands you actually ran through exec_command and will not let you finish while one is unproven, so declare a check you intend to run and then run it.
 
 Verify — never trust a command's own output alone. Every exec_command result carries a header (status, exit_code, cwd, optional verify hint); read it.
 - Judge success from exit_code/status, not from prose in the output — but in context: grep with no match and a false `test` exit non-zero legitimately.
@@ -77,15 +80,18 @@ Completion. Change tasks end when the independent check confirms the goal. Diagn
 Recovery — classify a failure before retrying. Transient (network error, timeout, session disconnected): a bounded retry or reconnect is fine. Deterministic (permission denied, command not found, wrong path): do NOT repeat the same command — change strategy (sudo, install the tool, fix the path) or ask the user. An identical repeated command is stopped automatically as a loop.
 
 ## Tool rules
-Available tools: open_ssh, close_tab, close_tabs, create_ssh_config, update_ssh_config, create_folder, move_connection_to_folder, exec_command, run_in_terminal, edit_file, write_file, update_plan, update_app_settings; plus read-only list_ssh_configs, list_open_tabs, diff_panes, list_folders, read_file, grep, glob, get_app_settings.
+Available tools: open_ssh, close_tab, close_tabs, create_ssh_config, update_ssh_config, create_folder, move_connection_to_folder, exec_command, run_in_terminal, edit_file, apply_patch, write_file, git_commit, update_plan, update_app_settings; plus read-only list_ssh_configs, list_open_tabs, diff_panes, list_folders, read_file, git_read, grep, glob, get_app_settings.
 
 Emitting calls. Deciding to act in your reasoning does NOTHING — the call must appear in the response itself. Never reply with only a promise ("I will now do it" / "我现在来处理") and stop, and never wait for the user to say "continue": call the tool now, or ask a clarifying question if something is genuinely missing. Do not ask for permission in prose either — approval is the app's job (it runs some calls immediately and shows an approval card for the rest; a rejection comes back to you as the tool result). Destructive commands (rm -rf, shutdown) and closing tabs always require approval.
 
 Choosing how to run. exec_command whenever you need the result to decide what comes next. run_in_terminal only when being watched is the point (a demo, a long build the user asked to see) or the command must leave the user's own shell in a new state — its output is scraped from the terminal, so it is noisier. A bash code block to merely SUGGEST a command, with no tool call at all.
 
-Files (read_file / edit_file / write_file / grep / glob). Prefer these over shelling out: read_file beats `cat`, grep beats `grep | head`, edit_file beats `sed -i`, and they run over SFTP so they leave the terminal alone (a local WSL tab has no SFTP: use exec_command there).
+Files (read_file / edit_file / apply_patch / write_file / grep / glob). Prefer these over shelling out: read_file beats `cat`, grep beats `grep | head`, edit_file beats `sed -i`, and they run over SFTP so they leave the terminal alone (a local WSL tab has no SFTP: use exec_command there).
+One change to one file → edit_file. Several changes to the SAME file → ONE apply_patch, not a chain of edits: each edit invalidates the line numbers of the ones after it.
 ALWAYS read_file or grep the target region BEFORE edit_file, so the text you match is text you have seen; if an edit is rejected as ambiguous, include more surrounding lines rather than falling back to sed.
 Editing is not verification: run the file's own checker (`nginx -t`, `sshd -t`, `visudo -c`) or re-read the region before reporting success.
+
+Version control (git_read / git_commit). Use git_read for status / diff / log / show / branch on a remote repo rather than exec_command `git …`: it runs read-only and never needs approval. git_commit is the only write, and it always asks — check git_read diff first so the message describes what is actually staged.
 
 Batching. Acting on MULTIPLE or ALL tabs ("close all tabs" / "关闭所有标签") is ONE close_tabs call, never a series of close_tab calls.
 With no dedicated batch tool, emit one call per target in the SAME response and continue across turns until the snapshot shows nothing matching left.
@@ -115,7 +121,7 @@ Never put example output or non-runnable text in a bash block. Commands are assu
 - Cannot: act on hosts not already open as tabs, see scrollback beyond the recent-output snippet, reach the internet, or persist local files beyond saved SSH configs/settings; exec_command needs an open, CONNECTED tab.
 ````
 
-`fast` 档会变短（约 7400 字符）：去掉 app 管理类工具的段落和清单，Environment 里也不再承诺 `config_id` / 设置行。完全关掉 function calling（图表首轮）时只剩 Role / Workflow / Output / Constraints，约 2200 字符。
+`fast` 档会变短（约 8200 字符）：去掉 app 管理类工具的段落和清单（`apply_patch` / `git_read` / `git_commit` 也都只在 full 档），Environment 里也不再承诺 `config_id` / 设置行。完全关掉 function calling（图表首轮）时只剩 Role / Workflow / Output / Constraints，约 2200 字符。
 
 ---
 
@@ -128,13 +134,16 @@ Never put example output or non-runnable text in a bash block. Commands are assu
 [2] system   User rules（可选）
 [3] system   Current terminal context     ← Host / User / cwd / 最近输出
 [4] system   Available skills（可选）     ← renderer prefix
-[5…] user / assistant / tool              ← 对话历史 + 本轮用户话
+[5] system   Host memory（可选）          ← 远端 AGENTS.md，renderer prefix
+[6…] user / assistant / tool              ← 对话历史 + 本轮用户话
 [n] system   Current SSH terminal manager state  ← tab_id 快照（每轮刷新）
 [n] system   Task execution history       ← 已执行命令账本（有才带）
-[n] system   Current task plan            ← update_plan 的进度（有才带）
+[n] system   Current task plan            ← update_plan 的进度 + verify 断言（有才带）
 ```
 
-前缀（1–4）尽量稳定，方便缓存；后缀快照 / 账本 / 计划每轮都会变，所以放在**对话后面**，既不破坏前缀缓存，又让「现在还剩哪一步」比长 system prompt 更新。
+前缀（1–5）尽量稳定，方便缓存；后缀快照 / 账本 / 计划每轮都会变，所以放在**对话后面**，既不破坏前缀缓存，又让「现在还剩哪一步」比长 system prompt 更新。
+
+Host memory 放前缀是因为它是**主机的属性、不是这一轮的属性**：整个任务里它一个字都不会变。`src/renderer/lib/hostMemory.ts` 在 `sendPrompt` 里用 SFTP 预热（找 `~/AGENTS.md`、再退到 `~/.ai-terminal.md`，上限 4000 字符），按终端 tab 缓存，**连"没有这个文件"也缓存**——否则每一轮、每台主机都要白白探一次 SFTP。写到 AGENTS.md 的任何一次 `edit_file` / `apply_patch` / `write_file` / Restore 都会让缓存失效，所以模型刚记下来的约定，下一轮就开始约束它自己。
 
 `tools` 数组是 OpenAI function schema，full 档大约 **4.5k tokens**，每轮都带上。`exec_command` 的 schema 摘要：
 
@@ -188,6 +197,8 @@ flowchart TD
 | 审批（`toolPolicy`） | `update_plan` / `list_*` / `read_file` 等自动跑。`systemctl restart` 在 balanced 下要点批准；`systemctl is-active` / `ps` / `journalctl` 这类只读命令自动跑。`rm -rf` 等危险命令永不自动。 |
 | Verify 头              | 每条`exec_command` 结果先带 `status` / `exit_code` / `cwd` / 可选 `verify` hint，模型按退出码判断，而不是「输出里有 Success 字样」。                                                             |
 | 独立确认               | 重启、部署、改配置：**改状态的那条命令成功 ≠ 任务成功**。必须再跑 `systemctl is-active` 或 `curl` health。                                                                                      |
+| verify 断言（harness） | 计划步骤可以带 `verify: { command, expect_exit_code?, expect_output? }`。收尾那一轮如果还有「已完成但校验没跑过/没通过」的步骤，**整轮回答会被撤掉**，注入一条 checkpoint 让它先去跑校验。每个任务只拦一次。 |
+| 循环内摘要             | 本地压缩要开始**整轮丢弃**步骤时，先花一次 LLM 调用把这些步骤压成一条执行记录（保留命令、exit code、路径、报错原文）。每任务最多 3 次，失败就退回本地压缩。                                     |
 | 瞬态失败               | 超时 / 断连：应用层会自动重试**一次**（1.5s backoff），第二次才交给模型改策略。                                                                                                                      |
 | Loop Guard             | 单任务最多**25** 轮 LLM；同一命令+同一结果连打 3 次停；任务 token 预算约 150 万。快撞到重复上限时会注入一条 Reflection 用户消息。                                                                    |
 | 空回复 nudge           | 模型只在「内心」里计划、既不调工具也不说话时，注入一次：「现在就调用工具，不要等我说 continue」。                                                                                                          |
@@ -376,7 +387,7 @@ POST {baseURL}/chat/completions
       "type": "function",
       "function": {
         "name": "update_plan",
-        "arguments": "{\"items\":[{\"title\":\"重启 nginx 服务\",\"status\":\"in_progress\"},{\"title\":\"用独立检查确认 nginx 在跑\",\"status\":\"pending\"},{\"title\":\"向用户报告结果\",\"status\":\"pending\"}]}"
+        "arguments": "{\"items\":[{\"title\":\"重启 nginx 服务\",\"status\":\"in_progress\",\"verify\":{\"command\":\"systemctl is-active nginx\",\"expect_output\":\"^active\"}},{\"title\":\"用独立检查确认 nginx 在跑\",\"status\":\"pending\"},{\"title\":\"向用户报告结果\",\"status\":\"pending\"}]}"
       }
     }
   ]
@@ -389,6 +400,8 @@ POST {baseURL}/chat/completions
 
 **说明：** `update_plan` 是本地记账工具（`LOCAL_BOOKKEEPING_TOOLS`），`decideToolCall` → **auto**，不弹审批。
 
+第一步带了 `verify`：这不是给用户看的注释，而是模型对 harness 立下的**可检验承诺**。收尾那一轮如果 `systemctl is-active nginx` 从没在这个任务里跑过、或者跑了但退出码 / 输出不对，整轮回答会被撤掉重来（见步骤 22 后的说明）。
+
 **Request：**
 
 ```json
@@ -396,7 +409,11 @@ POST {baseURL}/chat/completions
   "name": "update_plan",
   "arguments": {
     "items": [
-      { "title": "重启 nginx 服务", "status": "in_progress" },
+      {
+        "title": "重启 nginx 服务",
+        "status": "in_progress",
+        "verify": { "command": "systemctl is-active nginx", "expect_output": "^active" }
+      },
       { "title": "用独立检查确认 nginx 在跑", "status": "pending" },
       { "title": "向用户报告结果", "status": "pending" }
     ]
@@ -466,7 +483,7 @@ Plan updated (0/3 completed).
           "type": "function",
           "function": {
             "name": "update_plan",
-            "arguments": "{\"items\":[{\"title\":\"重启 nginx 服务\",\"status\":\"in_progress\"},{\"title\":\"用独立检查确认 nginx 在跑\",\"status\":\"pending\"},{\"title\":\"向用户报告结果\",\"status\":\"pending\"}]}"
+            "arguments": "{\"items\":[{\"title\":\"重启 nginx 服务\",\"status\":\"in_progress\",\"verify\":{\"command\":\"systemctl is-active nginx\",\"expect_output\":\"^active\"}}, ...]}"
           }
         }
       ]
@@ -482,7 +499,7 @@ Plan updated (0/3 completed).
     },
     {
       "role": "system",
-      "content": "Current task plan (maintained by you via update_plan):\n1. [>] 重启 nginx 服务\n2. [ ] 用独立检查确认 nginx 在跑\n3. [ ] 向用户报告结果\n\nKeep working through the remaining steps. Call update_plan again as each one completes; do NOT wait for the user to tell you to continue."
+      "content": "Current task plan (maintained by you via update_plan):\n1. [>] 重启 nginx 服务\n   verify: `systemctl is-active nginx` → expect output matching /^active/\n2. [ ] 用独立检查确认 nginx 在跑\n3. [ ] 向用户报告结果\n\nKeep working through the remaining steps. Call update_plan again as each one completes; do NOT wait for the user to tell you to continue.\nThe app checks each verify line against the commands you actually ran, and will not let the turn end while one is unproven."
     }
   ]
 }
@@ -694,6 +711,8 @@ output:
 
 两则调用并行发出；`is-active` 只读 → auto，`update_plan` 记账 → auto。
 
+注意这里第一步被标成 `completed`，而证明它的 `is-active` 是**同一轮的兄弟调用**——`update_plan` 执行时那条命令的结果还不存在。所以 `updatePlan` 只对「校验跑过且结果不对」发警告，从不对「校验还没跑」发；后者留给收尾那一轮判定，那时全部结果都已回收。反过来做的话，这条完全正确的轨迹每次都会挨一顿假警告，模型很快就学会无视它。
+
 ---
 
 #### 步骤 17 — Agent → SSH 主机（独立检查）
@@ -752,7 +771,11 @@ inactive
   "name": "update_plan",
   "arguments": {
     "items": [
-      { "title": "重启 nginx 服务", "status": "completed" },
+      {
+        "title": "重启 nginx 服务",
+        "status": "completed",
+        "verify": { "command": "systemctl is-active nginx", "expect_output": "^active" }
+      },
       { "title": "用独立检查确认 nginx 在跑", "status": "in_progress" },
       { "title": "向用户报告结果", "status": "pending" }
     ]
@@ -845,7 +868,20 @@ Plan updated (1/3 completed).
 
 #### 步骤 22 — LLM → Agent（Turn 4 Response）
 
-**说明：** **没有 `tool_calls`** = 循环结束。`onDone` → `finalAnswer` → phase `done`。语言与用户一致（中文）。模型也可以再调一次 `update_plan` 把剩余步骤标 completed；若直接收束，计划卡片可能停在「还剩步骤」——结论仍以独立检查为准。
+**说明：** **没有 `tool_calls`** = 想要收束。但在 `finalAnswer` 之前先过一道 harness 检查：`unmetPlanSteps` 拿计划里每个 `completed` / `in_progress` 步骤的 `verify`，去比对 `loop.execEvidence`（本任务真正跑过的命令 + 退出码 + 输出）。这条轨迹里 `systemctl is-active nginx` 跑过、exit 0、输出 `active` 匹配 `^active` → 通过，`onDone` → `finalAnswer` → phase `done`。语言与用户一致（中文）。
+
+**如果模型在这里跳过了 `is-active` 直接宣布成功**，这一轮的气泡会被撤掉，注入一条 checkpoint 用户消息，循环回到 `thinking`：
+
+```text
+Verification checkpoint: you cannot report this task as done yet. These plan steps
+declared an independent check that has not passed:
+- "重启 nginx 服务": the check `systemctl is-active nginx` has not been run.
+
+Run the missing check(s) now with a tool call. If a check FAILED, the task did not
+succeed — diagnose it, or report the failure with the evidence. ...
+```
+
+每个任务只拦一次：拦不住的模型不会被第三份同样的消息说服，而一个结束不了的循环比一个未验证的回答更糟。
 
 **Request：** （步骤 21）
 
@@ -925,6 +961,8 @@ systemctl restart nginx
 | SSH 中途断开             | tool**error**（不是假成功的空 output）；`retryable`        | 应用自动重试一次；仍失败则让模型请用户重连 |
 | 用户点拒绝               | `User rejected this action.`                                     | 模型改方案或询问，不重发同一调用           |
 | 连续两次相同命令相同输出 | 第二次之后注入 Reflection 用户消息                                 | 模型必须换诊断路径                         |
+| patch 打不上             | 逐 hunk 退回精确替换；仍失败则回 `Hunk N does not match ...` 并附上它期待的上下文 | 让模型重读文件按现状重建 patch，或改用 `edit_file` |
+| 想收尾但 verify 没跑     | 撤掉这一轮回答，注入 checkpoint 列出未验证的步骤及其校验命令       | 模型先去跑校验；校验失败则报告失败而非成功 |
 | 超过 25 轮 / token 预算  | 侧栏 Loop Guard 提示，停止                                         | 用户可新开一轮                             |
 
 ---
@@ -933,7 +971,7 @@ systemctl restart nginx
 
 | 环节                       | 文件                                      |
 | -------------------------- | ----------------------------------------- |
-| 初始化 prompt 拼装         | `src/shared/prompts/copilot.ts`         |
+| 初始化 prompt 拼装         | `src/shared/prompts/copilot.ts`（导出脚本 `scripts/dumpPrompt.ts`） |
 | 发往 LLM 的 HTTP           | `src/main/ai/provider.ts` → `chat()` |
 | Agent 循环 / 审批续跑      | `src/renderer/lib/aiService.ts`         |
 | 工具执行（含 exec 结果头） | `src/renderer/lib/aiTools.ts`           |
@@ -941,8 +979,15 @@ systemctl restart nginx
 | 退出码 → status/verify    | `src/shared/verify.ts`                  |
 | 是否自动跑还是弹审批       | `src/shared/toolPolicy.ts`              |
 | 计划回注                   | `src/renderer/lib/planTool.ts`          |
+| 计划 verify 断言与拦截判定 | `src/shared/planVerify.ts`              |
 | 已执行步骤账本             | `src/renderer/lib/taskMemory.ts`        |
 | 循环上限                   | `src/renderer/lib/loopGuard.ts`         |
+| 上下文压缩 / 摘要触发判定  | `src/renderer/lib/conversationCompact.ts` |
+| 循环内摘要 prompt          | `src/shared/prompts/history.ts`         |
+| 文件读写 / 补丁 / 备份     | `src/renderer/lib/fileTools.ts`         |
+| 统一 diff 解析与应用       | `src/shared/unifiedPatch.ts`            |
+| 远端 git 只读 / 提交       | `src/renderer/lib/gitTools.ts`          |
+| 主机记忆（AGENTS.md）      | `src/renderer/lib/hostMemory.ts`        |
 
 ---
 
@@ -974,20 +1019,21 @@ systemctl restart nginx
 
 | 能力 | 现状 | 对标 |
 | --- | --- | --- |
-| Plan vs Agent | 只有工具 `update_plan`，循环默认一直动手 | Cursor：先 Plan，用户点 Implement 再执行 |
-| 检查点 / Undo | 静默 `.bak`，UI 无一键回滚 | Cursor checkpoints；Claude Code 可还原编辑 |
-| 远程代码工作流 | `edit_file` 精确替换，无 git 工具、无 unified patch | Codex `apply_patch`；Claude Code git |
-| 上下文召回 | 终端最近 100–200 行整段塞入（README 仍写约 40 行，已过时） | 按需检索 scrollback / 日志片段，而不是加行数 |
+P0 与 P1 已经落地，下面只留仍然存在的缺口：
+
+| 能力 | 现状 | 对标 |
+| --- | --- | --- |
+| 上下文召回 | 终端最近 100–200 行整段塞入 | 按需检索 scrollback / 日志片段，而不是加行数 |
 | 多机 | 一个 `tab_id` 上跑主循环，无隔离子 Agent | Claude Code `Task`：子 Agent 隔离上下文，只交回摘要 |
-| 主机记忆 | 仅全局 `user_rules` | Claude Code `CLAUDE.md`；Cursor 分层 rules |
-| 评测 | 策略 / prompt 有单测，无 Agent 轨迹评测 | SWE-bench 风格：edit → 语法检查 → 独立确认 |
+| 并发 | 全局 `busy`，同一时刻只能跑一个 chat 的 loop；`recovering` 阶段几乎没有自动恢复路径 | per-chat 并行 |
+| 评测 | 策略 / prompt / patch / verify 有单测，无 Agent 轨迹评测 | SWE-bench 风格：edit → 语法检查 → 独立确认 |
+| 记忆写回 | `AGENTS.md` 能读能写，但「从被拒绝的操作里提炼约定」仍靠人开口 | Reflexion：失败轨迹沉淀为候选规则 |
 
-代码里已经露出、P0 必须处理的半成品：
+已经补掉的（P0 / P1）：Plan / Agent 模式切换、`.bak` 检查点与一键 Restore、`@path`、Slash 命令、队列与待批 UX（P0）；`apply_patch`、`git_read` / `git_commit`、远程 `AGENTS.md` 主机记忆、循环内 LLM 摘要、计划 verify 断言的 harness 拦截（P1）。
 
-- **队列半接通**：`queuedPrompts` 存在，但侧栏在 `busy` 时直接 return，主按钮变成 Stop，正常路径很难排队。
-- **全局 `busy`**：同一时刻只能跑一个 chat 的 loop；`recovering` 阶段几乎没有自动恢复路径。
-- **Verify 过薄**：除 display-only 工具短路外一律 `continue`；「独立检查」主要靠第 2 节 prompt，harness 不判定。
-- **批准摩擦**：新用户消息会取消待批；reload 后 pending 不可恢复；busy + 待批时没有 Send。
+仍然要小心的两处摩擦，没有代码缺陷但会咬用户：
+
+- **新用户消息会 supersede 待批的工具调用**，这是刻意的（最新意图优先），但连点两次很容易把自己刚要批的操作冲掉。
 - **Pin 与正在看的 Tab 可分叉**（`viewingOther`），上下文容易指错主机。
 
 ### 9.3 目标架构
@@ -1014,8 +1060,8 @@ flowchart TD
 分层记忆（对标 Claude Code / MemGPT，但绑定的是 **SSH 主机**，不是本地 git 仓库）：
 
 1. **全局** `user_rules`（已有）：注入每轮 system；冲突时覆盖默认 prompt。
-2. **每主机** 远程 `AGENTS.md`（或 `.ai-terminal.md`）：连接后按需 SFTP 读取并回注；写入走审批。
-3. **每任务** `update_plan` + Task execution history（已有）。
+2. **每主机** 远程 `AGENTS.md`（或 `.ai-terminal.md`，已有）：发起任务时 SFTP 读取并缓存，作为前缀层注入；写入走审批，写完即失效缓存。
+3. **每任务** `update_plan`（含 verify 断言）+ Task execution history（已有）。
 4. **会话 Allowlist**（已有）：Plan 通过或用户点「本会话总允许」后更好暴露，不跨 app 重启。
 
 工具面继续按档位与 intent 门控（第 1 节）：fast 不堆 MCP / git 写 / 子 Agent schema。
@@ -1032,7 +1078,7 @@ flowchart TD
 
 ### 9.5 分阶段路线图
 
-#### P0 — 模式、回滚与侧栏诚实度
+#### P0 — 模式、回滚与侧栏诚实度（✅ 已完成）
 
 目标：先补齐 Cursor 侧栏体验，改动面小，不新增 MCP / 子 Agent。
 
@@ -1045,17 +1091,17 @@ flowchart TD
 | 队列 | 要么 busy 时仍可排队并可视化，要么删掉 `queuedPrompts` 和「已排队」文案 | `SidePanel`、`aiService.ts` | 文案与行为一致 |
 | 待批 UX | 待批时保留批准入口（不要只剩 Stop）；新消息 supersede 待批要有明确提示 | `SidePanel`、`toolApproval.ts` | busy+pending 仍能点批准 |
 
-#### P1 — 远程代码 / 配置工作流
+#### P1 — 远程代码 / 配置工作流（✅ 已完成）
 
 目标：在远端仓库和配置上接近 Claude Code 的「改完能看 diff、能提交、失败能验」。
 
-| 项 | 做法 | 验收 |
+| 项 | 落地方式 | 关键取舍 |
 | --- | --- | --- |
-| `apply_patch` | unified diff 作为 `edit_file` 之上的首选；失败回退精确替换 | 一次 patch 改 nginx 多处，审批卡仍能预览 |
-| git 只读工具 | `status` / `diff` / `log` 自动跑；`commit` 走审批 | 不问「帮我看 git 状态」时不弹批准 |
-| 主机记忆 | 连接后尝试读 `AGENTS.md`；写入审批并回注下一轮 | 主机约定「发版走 systemctl」后，后续任务默认遵守 |
-| 循环内 LLM compact | 本地 trim 不够时再摘要，locale 与 `prompts/history.ts` 一致 | 长诊断不因 drop 整轮而失忆关键 exit code |
-| 计划 verify 断言 | 步骤可带退出码 / 输出正则；harness 失败则 `continue` 且不准宣布成功 | 第 5 节轨迹：缺 `is-active` 不得 finalAnswer |
+| `apply_patch` | `src/shared/unifiedPatch.ts` 解析 / 应用统一 diff，`fileTools.applyPatch` 走和 `edit_file` 一样的备份与检查点；只发给 full 档，单次一个文件 | `@@` 行号只当**提示**：先按上下文在原始行数组里就近搜索（先精确、后忽略行尾空白），全部 hunk 匹配完再从后往前 splice，所以一个 hunk 的改动不会挪动另一个 hunk 的坐标。上下文彻底对不上时，逐 hunk 退回 `applyUniqueEdit` 精确替换——救得回「改对了但上下文抄歪了」，救不回「不知道改哪」。审批卡调用**同一个** `applyPatchWithFallback`，所以预览不可能承诺一个工具会拒绝的结果。 |
+| git 只读工具 | `gitTools.gitRead` 按固定子命令枚举 + shell 转义**自己拼命令**，因此进 `READONLY_TOOLS`（Plan 模式也放行、永不弹审批）；`gitCommit` 是唯一的写 | 不复用 `exec_command`：那条路的只读性是对模型写的字符串做正则推断，而这里是代码结构上就表达不出写操作。ref 单独校验，且以 `-` 开头一律拒绝，避免退化成命令行选项。 |
+| 主机记忆 | `hostMemory.ts` 按终端 tab 缓存 SFTP 读到的 `~/AGENTS.md`，`sendPrompt` 预热、`startTurn` 注入**前缀**层 | 缓存「不存在」这件事，否则每轮每台主机白探一次 SFTP。命中 4000 字符上限就截断——它整任务都在窗口里，不能挤掉真正的命令输出。 |
+| 循环内 LLM compact | `planCompaction` 提前一轮看出本地压缩「将要整轮丢弃步骤」，命中才花一次 `compressHistory({ mode: 'loop' })`；`prompts/history.ts` 新增 loop 档提示词 | 只在**会丢步骤**时才付这次网络往返：裁结果正文是有损但可恢复的（还看得见跑了什么），丢整轮不是。每任务上限 3 次，失败静默退回本地压缩——摘要服务挂掉不该让任务失败。 |
+| 计划 verify 断言 | `PlanItem.verify` + `src/shared/planVerify.ts`；收尾那一轮若还有「已完成但校验未过」的步骤，撤掉整轮回答并注入 checkpoint | 命令匹配**对形式宽松、对结果严格**：忽略引号 / `sudo` / `.service` / 短选项，多余 token 也放行（加了 `--no-pager` 仍算跑过），但退出码和输出正则不对就是没过。只拦一次——拦不住的模型不会被第三份同样的消息说服，而一个结束不了的循环比一个未验证的回答更糟。`update_plan` 本身只对「校验跑过且失败」发警告，不对「还没跑」发：模型经常在同一轮里同时发校验命令和这次 update，那时兄弟调用的证据合法地还不存在。 |
 
 #### P2 — 多机子 Agent 与检索
 
@@ -1082,11 +1128,11 @@ flowchart TD
 
 - 不提供 bypass-permissions。
 - 不做浏览器、Computer Use、本机工程语义索引（远程 `grep` / `glob` 已经覆盖运维检索）。
-- 不把 21 个工具再堆进 fast 档；新能力继续按档位与 intent 门控（与第 1 节 prompt 设计一致）。
+- 不把全部工具再堆进 fast 档；新能力继续按档位与 intent 门控（与第 1 节 prompt 设计一致）。`apply_patch` 尤其如此：小模型最不擅长的就是生成行号正确的合法 unified diff。
 - 主循环保持单线程决策；并行只发生在只读工具（已有 `Promise.all`）和隔离子 Agent 内部。
 - 不把 `recovering` 做成静默重连死循环；断连仍应表面给用户（第 7 节）。
 
 ### 9.7 建议落地顺序
 
-P0 不依赖新模型能力，只改 harness 与 UI，应先做。P1 的 `apply_patch` 与 verify 断言会让第 5 节那种「重启必须独立检查」从 prompt 软约束变成可测行为。P2 在「用户经常同时开多台机」之后再上，避免过早引入子 Agent 复杂度。P3 没有 P1 的轨迹格式就没有稳定评测，故放最后。
+P0 与 P1 已完成：P1 的 verify 断言把第 5 节那种「重启必须独立检查」从 prompt 软约束变成了 harness 可测的行为——这正是 P3 轨迹评测所缺的那一半。接下来 P2 应在「用户经常同时开多台机」之后再上，避免过早引入子 Agent 复杂度；P3 可以先做「拒绝 / 失败提炼成候选 `AGENTS.md` 段落」，因为读写主机记忆的通路已经通了。
 

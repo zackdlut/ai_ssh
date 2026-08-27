@@ -300,6 +300,28 @@ export interface CopilotChatMessage {
 export type PlanItemStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
 
 /**
+ * The independent check that proves a plan step actually landed.
+ *
+ * The system prompt has always told the model that a change is confirmed only
+ * by a separate check — but that was advice, and a model that skipped the check
+ * and declared victory was never contradicted by anything. Attaching the check
+ * to the step makes it a claim the harness can test against what really ran, so
+ * "restart nginx" cannot be reported as done without an `is-active` in the
+ * transcript.
+ */
+export interface PlanStepVerify {
+  /**
+   * Command whose execution proves the step. Matched loosely against what the
+   * agent actually ran, so an equivalent invocation still counts.
+   */
+  command: string
+  /** Exit code the check must return. Defaults to 0. */
+  expectExitCode?: number
+  /** Regular expression the check's output must match, when given. */
+  expectOutput?: string
+}
+
+/**
  * One step of the agent's task plan. The plan is structured rather than prose
  * so it survives history compression, can be re-injected verbatim each turn,
  * and can be rendered as live progress instead of scrolling away.
@@ -308,6 +330,8 @@ export interface PlanItem {
   id: string
   title: string
   status: PlanItemStatus
+  /** Independent check this step must pass before it may be reported done. */
+  verify?: PlanStepVerify
 }
 
 /** Copilot loop autonomy for this chat: plan is read-only; agent/execute can mutate. */
@@ -410,6 +434,12 @@ export interface AIChatRequest {
 export interface AICompressHistoryRequest {
   messages: ChatMessageDTO[]
   context?: TerminalContext
+  /**
+   * 'chat' summarizes user/assistant turns at a task boundary; 'loop'
+   * summarizes an agent's own tool-calling steps mid-task, where the exit codes
+   * and file paths matter more than the prose.
+   */
+  mode?: 'chat' | 'loop'
 }
 
 export interface AICompressHistoryResult {

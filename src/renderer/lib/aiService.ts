@@ -69,7 +69,7 @@ import {
   type GuardTrip
 } from './loopGuard'
 import { buildTaskMemoryMessage } from './taskMemory'
-import { compactConversation } from './conversationCompact'
+import { compactConversation, planCompaction } from './conversationCompact'
 import {
   buildHistoryFromMessages,
   digestToolResult,
@@ -77,6 +77,9 @@ import {
   toolCallContent
 } from './toolTrace'
 import { buildPlanContextMessage } from './planTool'
+import { unmetPlanSteps, unmetStepsPrompt, type ExecEvidence } from '../../shared/planVerify'
+import { parseExecToolResult, parsedExitCode } from './execResult'
+import { buildHostMemoryMessage, loadHostMemory } from './hostMemory'
 import { setToolResultCharBudget } from './toolBudget'
 import { refreshCommandTimeoutMinutes } from './execCapture'
 import { transition, type AgentEvent, type AgentPhase } from './agentPhase'
@@ -182,6 +185,18 @@ interface LoopState {
   interruptedByUser?: boolean
   /** Tools-off recap turn after a user interrupt. */
   summarizeOnly?: boolean
+  /**
+   * Every shell command this task actually ran, with its exit code and output.
+   * The plan's verify assertions are checked against this rather than against
+   * the model's account of what it did.
+   */
+  execEvidence?: ExecEvidence[]
+  /** True once the unmet-assertion checkpoint fired; it is one-shot per task. */
+  verifyChecked?: boolean
+  /** LLM summaries folded into this task's history so far. */
+  loopSummaries?: number
+  /** Set by `abortLoop` while the loop is parked on an async summarization. */
+  aborted?: boolean
 }
 
 /**
@@ -301,6 +316,153 @@ function perResultCap(budgetTokens: number): number {
 
 function capToolResult(text: string, cap: number): string {
   return `${digestToolResult(text, cap)}\n[result truncated to fit the context window — narrow it with grep, a smaller read_file limit, or head/tail]`
+}
+
+/** Output retained per command for assertion matching. Never sent to a model. */
+const EVIDENCE_OUTPUT_CHARS = 4000
+
+/**
+ * Record what a shell command actually did, so a plan step's verify assertion
+ * is checked against the transcript rather than against the model's account of
+ * it. Only the exec tools qualify: an assertion is a command that ran, and the
+ * whole point is that the evidence is independent of what the model claims.
+ */
+function recordExecEvidence(loop: LoopState, call: ToolCallView, result: string): void {
+  if (call.name !== 'exec_command' && call.name !== 'run_in_terminal') return
+  if (call.status !== 'done') return
+  let command: string
+  try {
+    const args = JSON.parse(call.args) as { command?: unknown }
+    if (typeof args.command !== 'string' || !args.command.trim()) return
+    command = args.command
+  } catch {
+    return
+  }
+  const parsed = parseExecToolResult(result)
+  loop.execEvidence ??= []
+  loop.execEvidence.push({
+    command,
+    exitCode: parsedExitCode(parsed.exitCode),
+    output: parsed.output.slice(0, EVIDENCE_OUTPUT_CHARS)
+  })
+}
+
+/**
+ * Loops parked on an async summarization. They are in neither `pending` nor
+ * `loops` at that moment, so Stop would otherwise have nothing to cancel and
+ * the turn would resume after the user asked it not to.
+ */
+const compacting = new Map<string, LoopState>()
+
+/**
+ * Cap on summarizations per task. Each one costs a round trip, and a loop that
+ * needs a fourth has a problem no amount of summarizing will fix — from there
+ * the local compactor takes over and the loop guard ends the task.
+ */
+const MAX_LOOP_SUMMARIES = 3
+
+/**
+ * Summarize the steps local compaction is about to delete, one turn before it
+ * deletes them.
+ *
+ * The local compactor's second pass drops whole turns, and a dropped turn takes
+ * its exit codes and file paths with it — so the agent re-runs the command it
+ * already ran, or edits the file it already edited. Trading one LLM call for a
+ * record of those steps is worth it precisely when it is needed: only on the
+ * turn the budget would otherwise force a deletion.
+ *
+ * Budget comes from the previous turn's `conversationBudget`, which is what it
+ * is cached for. It is an estimate for one turn ahead, and it does not need to
+ * be better than that: being wrong means the local compactor runs anyway.
+ */
+async function maybeSummarizeLoopHistory(loop: LoopState): Promise<void> {
+  const budget = loop.conversationBudget
+  if (!budget || (loop.loopSummaries ?? 0) >= MAX_LOOP_SUMMARIES) return
+  const plan = planCompaction(loop.conversation, budget)
+  if (plan.dropCount === 0) return
+
+  const doomed = loop.conversation.slice(plan.headLength, plan.dropThrough)
+  if (doomed.length === 0) return
+
+  const ai = useAIStore.getState()
+  ai.setNotice(tNotice('copilot.context.compressing'))
+  compacting.set(loop.tabId, loop)
+  let result: { summary?: string; error?: string }
+  try {
+    result = await window.api.ai.compressHistory({
+      messages: doomed,
+      context: loop.context,
+      mode: 'loop'
+    })
+  } catch (e) {
+    result = { error: e instanceof Error ? e.message : String(e) }
+  } finally {
+    compacting.delete(loop.tabId)
+  }
+  if (loop.aborted) return
+
+  if (result.error || !result.summary) {
+    // Falling through to the local compactor is the right failure: a degraded
+    // conversation still runs, and a summarizer outage must not end the task.
+    debugLog({
+      category: 'action.triggered',
+      tabId: loop.tabId,
+      message: 'agent.loopCompact.failed',
+      data: { error: result.error, steps: plan.dropCount }
+    })
+    return
+  }
+
+  loop.loopSummaries = (loop.loopSummaries ?? 0) + 1
+  loop.conversation = [
+    ...loop.conversation.slice(0, plan.headLength),
+    {
+      role: 'system',
+      content: `[Record of ${plan.dropCount} earlier step(s) in this task, summarized to stay within the context window. Treat it as fact: these steps DID run — do not repeat them unless you need fresh state.]\n\n${result.summary}`
+    },
+    ...loop.conversation.slice(plan.dropThrough)
+  ]
+  debugLog({
+    category: 'action.triggered',
+    tabId: loop.tabId,
+    message: 'agent.loopCompact',
+    data: { steps: plan.dropCount, summaryChars: result.summary.length, budget }
+  })
+}
+
+/** Continue the loop, summarizing first when the budget is about to bite. */
+function continueLoop(loop: LoopState, epilogue = false): void {
+  void maybeSummarizeLoopHistory(loop).then(() => {
+    if (loop.aborted) return
+    startTurn(loop, epilogue)
+  })
+}
+
+/**
+ * Block a final answer while a plan step the model called done has an unproven
+ * check. This is the harness half of the verify contract: without it, "confirm
+ * changes with an independent check" is advice the model can decline to take
+ * and no one is any the wiser.
+ *
+ * One shot per task. A model that ignores the checkpoint twice is not going to
+ * be convinced by a third copy of the same message, and a loop that cannot end
+ * is worse than an unverified answer the user can read the transcript for.
+ */
+function pushBackOnUnverifiedPlan(loop: LoopState, tabId: string): boolean {
+  if (loop.verifyChecked) return false
+  const plan = useAIStore.getState().chatTabs.find((t) => t.id === tabId)?.plan
+  const unmet = unmetPlanSteps(plan, loop.execEvidence ?? [])
+  if (unmet.length === 0) return false
+
+  loop.verifyChecked = true
+  loop.conversation.push({ role: 'user', content: unmetStepsPrompt(unmet) })
+  debugLog({
+    category: 'action.triggered',
+    tabId,
+    message: 'agent.verify.pushback',
+    data: { steps: unmet.map((u) => ({ id: u.item.id, state: u.state.kind })) }
+  })
+  return true
 }
 
 interface PendingRequest {
@@ -475,9 +637,13 @@ function startTurn(loop: LoopState, epilogue = false): void {
   }
   const skillsCatalog = buildSkillsContextMessage()
   // Prefix layer: near-constant across the task, so it stays at the front where
-  // provider prefix caches can reuse it.
+  // provider prefix caches can reuse it. The host's AGENTS.md belongs here for
+  // the same reason — it is a property of the machine, not of the turn, and it
+  // is warmed before the loop starts so this stays synchronous.
+  const hostMemory = buildHostMemoryMessage(loop.contextTabId)
   const prefix: ChatMessageDTO[] = []
   if (skillsCatalog) prefix.push({ role: 'system', content: skillsCatalog })
+  if (hostMemory) prefix.push({ role: 'system', content: hostMemory })
 
   // Suffix layer: everything that changes every turn (live app snapshot, the
   // task plan, the ledger of completed actions). Keeping it AFTER the
@@ -645,6 +811,7 @@ async function runToolCall(
       executeToolCall(call.name, parsed.args, {
         chatTabId: tabId,
         pinnedTabId: chat?.pinnedTabId,
+        execEvidence: loops.get(messageId)?.execEvidence,
         onCaptureProgress:
           call.name === 'exec_command' || call.name === 'run_in_terminal'
             ? (elapsedMs) => {
@@ -758,8 +925,17 @@ export function abortLoop(tabId: string): void {
   for (const [requestId, entry] of pending) {
     if (entry.tabId !== tabId) continue
     window.api.ai.cancel(requestId)
+    entry.loop.aborted = true
     pending.delete(requestId)
     loops.delete(entry.messageId)
+  }
+
+  // A loop waiting on a history summarization is in neither map, so it needs
+  // telling separately or it resumes once the summary lands.
+  const parked = compacting.get(tabId)
+  if (parked) {
+    parked.aborted = true
+    compacting.delete(tabId)
   }
 
   for (const abort of runningCommandAborts.get(tabId) ?? []) {
@@ -1002,6 +1178,7 @@ function maybeContinueLoop(tabId: string, messageId: string): void {
     const content = raw.length > resultCap ? capToolResult(raw, resultCap) : raw
     loop.conversation.push({ role: 'tool', tool_call_id: c.id, content })
     signatureCalls.push({ name: c.name, args: c.args, result: content })
+    recordExecEvidence(loop, c, raw)
   }
 
   // Tool results are now captured: observe -> verify.
@@ -1058,7 +1235,7 @@ function maybeContinueLoop(tabId: string, messageId: string): void {
   // text-only restatement of the cards is dropped, but a real follow-up action
   // is materialized and executed.
   const displayOnly = calls.every((c) => isDisplayTool(c.name) && c.status === 'done')
-  startTurn(loop, displayOnly)
+  continueLoop(loop, displayOnly)
 }
 
 /**
@@ -1140,6 +1317,14 @@ export function initAIService(): void {
       // the card(s) already shown — drop it entirely (nothing was rendered).
       if (epilogue) {
         ai.setBusy(false)
+        return
+      }
+      // The model is trying to finish. If it claimed a plan step done without
+      // running the check it committed to, send it back once before letting
+      // that claim reach the user.
+      if (content.trim() !== '' && pushBackOnUnverifiedPlan(loop, tabId)) {
+        ai.removeMessage(tabId, messageId)
+        startTurn(loop)
         return
       }
       advance(loop, 'finalAnswer', tabId)
@@ -1492,6 +1677,10 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
       ? await loadFileMentionContext(contextTabId, paths, contextTab?.username)
       : undefined
 
+  // Warm the host's AGENTS.md before the budget is computed, so the memory is
+  // both paid for and available on the very first turn rather than the second.
+  await loadHostMemory(contextTabId)
+
   const settings = normalizeAISettings(await window.api.config.getAISettings())
   const limit = resolveActiveContextLength(settings)
   applyRuntimeAISettings(settings)
@@ -1623,10 +1812,14 @@ function fixedOverheadText(
   tier: ToolTier | undefined,
   surface: ToolSurfaceOptions
 ): string {
+  const pinnedTabId = chatTabId
+    ? useAIStore.getState().chatTabs.find((t) => t.id === chatTabId)?.pinnedTabId
+    : undefined
   return [
     buildContextMessage(context),
-    buildToolContextMessage(tier, chatTabId ? useAIStore.getState().chatTabs.find((t) => t.id === chatTabId)?.pinnedTabId : undefined),
+    buildToolContextMessage(tier, pinnedTabId),
     buildSkillsContextMessage(),
+    buildHostMemoryMessage(pinnedTabId),
     chatTabId ? buildTaskMemoryMessage(chatTabId) : undefined,
     buildPlanContextMessage(chatTabId),
     tier ? toolsDefinitionText(tier, surface) : undefined

@@ -92,6 +92,23 @@ describe('buildAITools', () => {
     }
   })
 
+  it('keeps apply_patch and the git tools off the core tier', () => {
+    // A local model on an 8k window pays for every schema on every turn, and
+    // emitting a well-formed unified diff is exactly what the small models are
+    // worst at — so the patch tool rides with the hosted tier only.
+    for (const tool of ['apply_patch', 'git_read', 'git_commit']) {
+      expect(toolNamesFor('core'), tool).not.toContain(tool)
+      expect(toolNamesFor('full'), tool).toContain(tool)
+    }
+  })
+
+  it('in plan mode advertises git_read but not git_commit or apply_patch', () => {
+    const names = toolNamesFor('full', { planMode: true })
+    expect(names).toContain('git_read')
+    expect(names).not.toContain('git_commit')
+    expect(names).not.toContain('apply_patch')
+  })
+
   it('documents that tab_id defaults to the pinned tab', () => {
     const exec = buildAITools('core').find((t) => t.function.name === 'exec_command')
     expect(JSON.stringify(exec)).toContain('pinned tab')

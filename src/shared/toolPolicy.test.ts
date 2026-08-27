@@ -63,6 +63,28 @@ describe('decideToolCall', () => {
     }
   })
 
+  it('runs git_read unattended and always asks before git_commit', () => {
+    // The whole point of the dedicated read tool: "show me git status" must not
+    // produce an approval card, while the one git tool that writes always does.
+    for (const mode of ['conservative', 'balanced', 'autonomous'] as const) {
+      expect(decideToolCall({ tool: 'git_read', mode }), mode).toBe('auto')
+    }
+    expect(decideToolCall({ tool: 'git_commit', mode: 'balanced' })).toBe('ask')
+    expect(decideToolCall({ tool: 'git_commit', mode: 'conservative' })).toBe('ask')
+  })
+
+  it('lets git_read through Plan mode but not git_commit or apply_patch', () => {
+    expect(decideToolCall({ tool: 'git_read', mode: 'balanced', agentMode: 'plan' })).toBe('auto')
+    expect(decideToolCall({ tool: 'git_commit', mode: 'autonomous', agentMode: 'plan' })).toBe('deny')
+    expect(decideToolCall({ tool: 'apply_patch', mode: 'autonomous', agentMode: 'plan' })).toBe('deny')
+  })
+
+  it('treats apply_patch exactly like the other host writes', () => {
+    expect(decideToolCall({ tool: 'apply_patch', mode: 'balanced' })).toBe('ask')
+    expect(decideToolCall({ tool: 'apply_patch', mode: 'conservative' })).toBe('ask')
+    expect(decideToolCall({ tool: 'apply_patch', mode: 'autonomous' })).toBe('auto')
+  })
+
   it('fixes the inversion this policy was written for', () => {
     // Previously: a theme change needed a click, `systemctl stop` did not.
     expect(decideToolCall({ tool: 'update_app_settings', mode: 'balanced' })).toBe('auto')

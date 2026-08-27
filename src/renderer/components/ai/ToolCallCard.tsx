@@ -42,14 +42,20 @@ const TOOL_CATEGORY: Record<string, ToolCategory> = {
   read_skill: 'read',
   read_file: 'file',
   edit_file: 'file',
+  apply_patch: 'file',
   write_file: 'file',
+  git_read: 'read',
+  git_commit: 'command',
   grep: 'read',
   glob: 'read',
   update_plan: 'plan'
 }
 
 /** Tools whose pending card shows a live diff of the proposed change. */
-const FILE_WRITE_TOOLS = new Set(['edit_file', 'write_file'])
+const FILE_WRITE_TOOLS = new Set(['edit_file', 'apply_patch', 'write_file'])
+
+/** Argument blobs the diff renders far better than a key-value row would. */
+const DIFF_RENDERED_PARAMS = ['old_string', 'new_string', 'content', 'patch']
 
 function parseArgs(raw: string): Record<string, unknown> {
   if (!raw || !raw.trim()) return {}
@@ -406,7 +412,7 @@ function formatParamValue(key: string, value: unknown): string {
   return String(value)
 }
 
-type PlanArgItem = { title: string; status: PlanItemStatus }
+type PlanArgItem = { title: string; status: PlanItemStatus; verify?: string }
 
 const PLAN_STATUSES: PlanItemStatus[] = ['pending', 'in_progress', 'completed', 'cancelled']
 
@@ -418,7 +424,7 @@ const PLAN_MARK: Record<PlanItemStatus, string> = {
 }
 
 /**
- * The plan arrives as `items: [{ title, status }]`; rendered as a plain
+ * The plan arrives as `items: [{ title, status, verify }]`; rendered as a plain
  * key/value row it collapses into "[object Object]", so the steps get their
  * own checklist instead.
  */
@@ -427,19 +433,29 @@ function parsePlanItems(value: unknown): PlanArgItem[] | null {
   const items: PlanArgItem[] = []
   for (const entry of value) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
-    const { title, status } = entry as { title?: unknown; status?: unknown }
+    const { title, status, verify } = entry as {
+      title?: unknown
+      status?: unknown
+      verify?: unknown
+    }
     if (typeof title !== 'string' || !title.trim()) return null
+    const command =
+      verify && typeof verify === 'object' && typeof (verify as { command?: unknown }).command === 'string'
+        ? ((verify as { command: string }).command.trim() || undefined)
+        : undefined
     items.push({
       title: title.trim(),
       status: PLAN_STATUSES.includes(status as PlanItemStatus)
         ? (status as PlanItemStatus)
-        : 'pending'
+        : 'pending',
+      verify: command
     })
   }
   return items
 }
 
 function PlanItemsPreview({ items }: { items: PlanArgItem[] }): JSX.Element {
+  const t = useT()
   return (
     <ol className="tool-plan-list">
       {items.map((item, i) => (
@@ -447,7 +463,14 @@ function PlanItemsPreview({ items }: { items: PlanArgItem[] }): JSX.Element {
           <span className="plan-item-mark" aria-hidden>
             {PLAN_MARK[item.status]}
           </span>
-          <span className="plan-item-text">{item.title}</span>
+          <span className="plan-item-text">
+            {item.title}
+            {item.verify && (
+              <span className="plan-item-verify">
+                {t('copilot.plan.verify')} <code>{item.verify}</code>
+              </span>
+            )}
+          </span>
         </li>
       ))}
     </ol>
@@ -835,13 +858,12 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
                     onDraftChange={setDraftSettingsUpdates}
                   />
                 ) : FILE_WRITE_TOOLS.has(call.name) ? (
-                  // The raw old_string/new_string/content blobs are unreadable
-                  // as key-value rows; the diff below is the real preview.
+                  // The raw old_string/new_string/content/patch blobs are
+                  // unreadable as key-value rows; the diff below is the real
+                  // preview.
                   <ParamRows
                     args={Object.fromEntries(
-                      Object.entries(args).filter(
-                        ([k]) => !['old_string', 'new_string', 'content'].includes(k)
-                      )
+                      Object.entries(args).filter(([k]) => !DIFF_RENDERED_PARAMS.includes(k))
                     )}
                   />
                 ) : (
@@ -872,6 +894,7 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
             newString={typeof args.new_string === 'string' ? args.new_string : undefined}
             replaceAll={args.replace_all === true}
             content={typeof args.content === 'string' ? args.content : undefined}
+            patch={typeof args.patch === 'string' ? args.patch : undefined}
           />
         </div>
       )}

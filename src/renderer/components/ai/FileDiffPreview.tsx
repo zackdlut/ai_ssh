@@ -3,6 +3,7 @@ import { useSessionsStore } from '../../store/sessionsStore'
 import { useT } from '../../lib/i18n'
 import { computeTextDiff, type TextDiff } from '../../../shared/textDiff'
 import { applyUniqueEdit } from '../../../shared/textEdit'
+import { applyPatchWithFallback } from '../../../shared/unifiedPatch'
 
 interface Props {
   /** Terminal tab the edit targets (the tool's tab_id argument). */
@@ -15,6 +16,8 @@ interface Props {
   replaceAll?: boolean
   /** write_file: the full proposed contents. */
   content?: string
+  /** apply_patch: the unified diff being applied. */
+  patch?: string
 }
 
 /** Cap matching the read limit the tools themselves enforce. */
@@ -24,7 +27,7 @@ type State =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
   | { kind: 'created' }
-  | { kind: 'diff'; diff: TextDiff }
+  | { kind: 'diff'; diff: TextDiff; note?: string }
 
 /**
  * Show what a pending `edit_file` / `write_file` will actually do, by reading
@@ -41,7 +44,8 @@ export default function FileDiffPreview({
   oldString,
   newString,
   replaceAll,
-  content
+  content,
+  patch
 }: Props): JSX.Element {
   const [state, setState] = useState<State>({ kind: 'loading' })
   const t = useT()
@@ -76,6 +80,27 @@ export default function FileDiffPreview({
         setState({ kind: 'diff', diff: computeTextDiff(current, content) })
         return
       }
+      if (patch !== undefined) {
+        // Same resolver the tool runs, fallback included, so the card shows the
+        // outcome approving it produces rather than a best guess.
+        const applied = applyPatchWithFallback(current, patch)
+        if (!applied.ok) {
+          setState({
+            kind: 'error',
+            message:
+              applied.reason === 'no_change'
+                ? t('tool.diff.noChange')
+                : t('tool.diff.patchFailed', { detail: applied.detail })
+          })
+          return
+        }
+        setState({
+          kind: 'diff',
+          diff: computeTextDiff(current, applied.text),
+          note: applied.fellBack ? t('tool.diff.patchFuzzy') : undefined
+        })
+        return
+      }
       if (oldString === undefined || newString === undefined) {
         setState({ kind: 'error', message: t('tool.diff.unavailable') })
         return
@@ -101,7 +126,7 @@ export default function FileDiffPreview({
     return () => {
       cancelled = true
     }
-  }, [tabId, path, oldString, newString, replaceAll, content, t])
+  }, [tabId, path, oldString, newString, replaceAll, content, patch, t])
 
   if (state.kind === 'loading') {
     return <div className="tool-diff tool-diff--note">{t('tool.diff.loading')}</div>
@@ -129,7 +154,7 @@ export default function FileDiffPreview({
     )
   }
 
-  const { diff } = state
+  const { diff, note } = state
   if (diff.skipped) {
     return (
       <div className="tool-diff tool-diff--note">
@@ -147,6 +172,7 @@ export default function FileDiffPreview({
         <span className="tool-diff-add">+{diff.added}</span>
         <span className="tool-diff-remove">-{diff.removed}</span>
       </div>
+      {note && <div className="tool-diff--note">{note}</div>}
       <pre className="tool-diff-body">
         {diff.hunks.map((hunk, hi) => (
           <div className="tool-diff-hunk" key={hi}>

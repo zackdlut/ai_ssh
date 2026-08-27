@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compactConversation } from './conversationCompact'
+import { compactConversation, planCompaction } from './conversationCompact'
 import { estimateTokens } from '../../shared/contextBudget'
 import type { ChatMessageDTO } from '../../shared/types'
 
@@ -132,5 +132,41 @@ describe('compactConversation', () => {
     const res = compactConversation(conversation(1, 118_593), 1)
     expect(totalTokens(res.messages)).toBeGreaterThan(0)
     assertPaired(res.messages)
+  })
+})
+
+describe('planCompaction', () => {
+  it('stays quiet while trimming result bodies is enough', () => {
+    // Summarizing costs an LLM round trip on the loop's hot path, so it must
+    // fire only when steps would otherwise be deleted outright.
+    expect(planCompaction(conversation(2), 1_000_000).dropCount).toBe(0)
+    expect(planCompaction(conversation(12), 6000).dropCount).toBe(0)
+  })
+
+  it('predicts the same drop the local compactor would make', () => {
+    const messages = conversation(20)
+    const plan = planCompaction(messages, 400)
+    expect(plan.dropCount).toBe(compactConversation(messages, 400).dropped)
+  })
+
+  it('spans exactly the doomed turns, keeping the original instruction out of it', () => {
+    const messages = conversation(20)
+    const plan = planCompaction(messages, 400)
+    expect(plan.headLength).toBe(1)
+    expect(messages[0].content).toContain('restart nginx')
+    expect(plan.dropThrough).toBeGreaterThan(plan.headLength)
+    // Two steps per turn, so the doomed span must cover whole pairs.
+    expect((plan.dropThrough - plan.headLength) % 2).toBe(0)
+  })
+
+  it('marks a boundary that leaves the surviving conversation protocol-valid', () => {
+    const messages = conversation(20)
+    const plan = planCompaction(messages, 400)
+    const survivors = [
+      ...messages.slice(0, plan.headLength),
+      { role: 'system' as const, content: '[summary]' },
+      ...messages.slice(plan.dropThrough)
+    ]
+    assertPaired(survivors)
   })
 })

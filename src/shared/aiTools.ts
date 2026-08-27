@@ -26,7 +26,11 @@ export const READONLY_TOOLS = new Set([
   'read_skill',
   'read_file',
   'grep',
-  'glob'
+  'glob',
+  // Safe to list here because the tool composes the command itself from a fixed
+  // subcommand enum and shell-quoted arguments — unlike `exec_command`, whose
+  // read-only-ness has to be inferred from a string the model wrote.
+  'git_read'
 ])
 
 /**
@@ -520,6 +524,28 @@ const BASE_TOOLS: AIToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'apply_patch',
+      description:
+        'Change SEVERAL places in one file on the host with a single unified diff. Prefer this over repeated edit_file calls whenever a file needs more than one change: it is one approval and one write, and each hunk is located by its context rather than having to be unique in the whole file. The @@ line numbers are treated as a hint, so a small drift is tolerated, but the context lines must be real — read the file first. The previous contents are backed up automatically.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tab_id: TAB_ID_PARAM,
+          path: { type: 'string', description: 'Absolute path of the file to patch.' },
+          patch: {
+            type: 'string',
+            description:
+              'Unified diff for THIS ONE file: hunks starting with `@@ -old,count +new,count @@`, unchanged context lines prefixed with a space, removals with `-`, additions with `+`. Include 3 lines of context around each change. The `---`/`+++` headers are optional and one call may not span two files.'
+          }
+        },
+        required: ['tab_id', 'path', 'patch'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'write_file',
       description:
         'Create a file on the host, or overwrite one completely with new contents. Use edit_file for targeted changes to an existing file; use this only for new files or full rewrites. Existing contents are backed up automatically.',
@@ -531,6 +557,72 @@ const BASE_TOOLS: AIToolDefinition[] = [
           content: { type: 'string', description: 'Full contents of the file.' }
         },
         required: ['tab_id', 'path', 'content'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'git_read',
+      description:
+        'Inspect a git repository on the host without changing anything: working-tree status, a diff, the commit log, one commit, or the branches. Prefer this over running git through the shell — it is composed safely, bounded, and never needs approval.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tab_id: TAB_ID_PARAM,
+          repo: {
+            type: 'string',
+            description: 'Absolute path of the repository working directory (default: cwd).'
+          },
+          subcommand: {
+            type: 'string',
+            enum: ['status', 'diff', 'log', 'show', 'branch'],
+            description:
+              "What to read: 'status' for the working tree, 'diff' for uncommitted changes, 'log' for recent commits, 'show' for one commit, 'branch' for the branch list."
+          },
+          ref: {
+            type: 'string',
+            description:
+              'Branch, tag or commit id for diff / log / show. Letters, digits and . _ / @ ^ ~ - only.'
+          },
+          path: {
+            type: 'string',
+            description: 'Limit diff / log to this file or directory.'
+          },
+          staged: {
+            type: 'boolean',
+            description: 'For diff: show what is staged instead of the unstaged changes.'
+          },
+          limit: { type: 'number', description: 'For log: how many commits (default 20, max 200).' }
+        },
+        required: ['tab_id', 'subcommand'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'git_commit',
+      description:
+        'Commit the staged changes in a repository on the host. Read git_read diff first so the message describes what is actually being committed. This does NOT push.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tab_id: TAB_ID_PARAM,
+          repo: {
+            type: 'string',
+            description: 'Absolute path of the repository working directory (default: cwd).'
+          },
+          message: { type: 'string', description: 'Commit message.' },
+          stage_all: {
+            type: 'boolean',
+            description:
+              'Run `git add -A` first, committing every tracked and untracked change (default false).'
+          }
+        },
+        required: ['tab_id', 'message'],
         additionalProperties: false
       }
     }
@@ -581,7 +673,7 @@ const BASE_TOOLS: AIToolDefinition[] = [
     function: {
       name: 'update_plan',
       description:
-        'Create or update the task plan shown to the user, then call it again to mark each step done. Send the COMPLETE list every time — it replaces the previous plan. Exactly one step is in_progress at a time.',
+        'Create or update the task plan shown to the user, then call it again to mark each step done. Send the COMPLETE list every time — it replaces the previous plan. Exactly one step is in_progress at a time. Give every step that CHANGES state a verify block: the app checks it against what you actually ran and will not let you finish while one is unproven.',
       parameters: {
         type: 'object',
         properties: {
@@ -595,6 +687,29 @@ const BASE_TOOLS: AIToolDefinition[] = [
                 status: {
                   type: 'string',
                   enum: ['pending', 'in_progress', 'completed', 'cancelled']
+                },
+                verify: {
+                  type: 'object',
+                  description:
+                    'The INDEPENDENT check that proves this step landed — never the change command itself. Omit it for steps that only read or report.',
+                  properties: {
+                    command: {
+                      type: 'string',
+                      description:
+                        'The check to run, e.g. "systemctl is-active nginx" after a restart or "nginx -t" after a config edit.'
+                    },
+                    expect_exit_code: {
+                      type: 'number',
+                      description: 'Exit code the check must return (default 0).'
+                    },
+                    expect_output: {
+                      type: 'string',
+                      description:
+                        'Regular expression the check output must match, e.g. "^active". Omit when the exit code is proof enough.'
+                    }
+                  },
+                  required: ['command'],
+                  additionalProperties: false
                 }
               },
               required: ['title', 'status'],

@@ -14,9 +14,13 @@
  * shrinks result CONTENT in place, and pass two removes an assistant turn
  * together with all of its replies as one unit.
  *
- * This is deliberately synchronous and local. Calling the LLM summarizer here
- * would add a network round trip, a new failure mode, and unbounded latency to
- * every step of a loop that is already waiting on tool execution.
+ * This is deliberately synchronous and local, and it is the only thing that
+ * runs on the hot path. Pass two, though, DELETES steps: the agent loses the
+ * exit code it was about to act on and re-runs the command. `planCompaction`
+ * exists so the caller can see that coming one turn early and pay for an LLM
+ * summary instead — see `maybeSummarizeLoopHistory` in `aiService`. When that
+ * summary fails or is not available, this module is still the fallback, because
+ * a degraded conversation beats a failed request.
  */
 import { estimateTokens } from '../../shared/contextBudget'
 import type { ChatMessageDTO } from '../../shared/types'
@@ -91,6 +95,69 @@ function largestToolResult(messages: ChatMessageDTO[], floor: number): number {
   return index
 }
 
+/** Pass 1 applied to a copy, so the drop decision sees the same state it will. */
+function trimOldResults(messages: ChatMessageDTO[], budgetTokens: number): ChatMessageDTO[] {
+  const working = messages.map((m) => ({ ...m }))
+  const protectedFrom = Math.max(0, working.length - KEEP_RECENT)
+  for (let i = 0; i < protectedFrom; i++) {
+    if (totalTokens(working) <= budgetTokens) break
+    const message = working[i]
+    if (message.role !== 'tool') continue
+    if (message.content.startsWith('[trimmed to save context]')) continue
+    if (estimateTokens(message.content) < 60) continue
+    message.content = trimToolContent(message.content)
+  }
+  return working
+}
+
+export interface CompactionPlan {
+  /** Whole turns local compaction would delete to make the budget. */
+  dropCount: number
+  /**
+   * Messages at the very front that survive regardless — the user's original
+   * instruction. A loop that forgets what it was asked is worse than one that
+   * forgets how it got here.
+   */
+  headLength: number
+  /**
+   * Index the doomed turns end at. `slice(headLength, dropThrough)` is exactly
+   * what would be lost, and both ends fall on a turn boundary so replacing that
+   * span cannot orphan a tool reply from the call that announced it.
+   */
+  dropThrough: number
+}
+
+/**
+ * Look ahead at what `compactConversation` would have to throw away.
+ *
+ * Trimming result bodies is lossy but recoverable — the model still sees which
+ * command ran. Dropping a turn is not: the step vanishes, and the agent's only
+ * remaining trace of it is the one-line ledger entry. So the loop asks this
+ * first, and when the answer is "turns will be dropped" it spends a summarizer
+ * call to convert those turns into a record instead of a hole.
+ */
+export function planCompaction(
+  messages: ChatMessageDTO[],
+  budgetTokens: number
+): CompactionPlan {
+  const none: CompactionPlan = { dropCount: 0, headLength: 0, dropThrough: 0 }
+  if (budgetTokens <= 0 || totalTokens(messages) <= budgetTokens) return none
+  const working = trimOldResults(messages, budgetTokens)
+  if (totalTokens(working) <= budgetTokens) return none
+
+  const groups = groupMessages(working)
+  const first = groups.length > 0 ? groups[0] : []
+  const rest = groups.slice(1)
+  let dropCount = 0
+  let dropThrough = first.length
+  while (rest.length > 1 && totalTokens([...first, ...rest.flat()]) > budgetTokens) {
+    const gone = rest.shift()
+    dropThrough += gone?.length ?? 0
+    dropCount++
+  }
+  return dropCount > 0 ? { dropCount, headLength: first.length, dropThrough } : none
+}
+
 /**
  * Shrink the conversation to fit `budgetTokens`, preserving tool-call pairing.
  * Returns the original array untouched when it already fits.
@@ -106,18 +173,10 @@ export function compactConversation(
   // Pass 1: shrink old tool results in place. Their arguments and ids survive,
   // so the model still sees what it ran and in what order — just not the full
   // several-kilobyte output of a command it already acted on.
-  const working = messages.map((m) => ({ ...m }))
-  const protectedFrom = Math.max(0, working.length - KEEP_RECENT)
-  let trimmed = 0
-  for (let i = 0; i < protectedFrom; i++) {
-    if (totalTokens(working) <= budgetTokens) break
-    const message = working[i]
-    if (message.role !== 'tool') continue
-    if (message.content.startsWith('[trimmed to save context]')) continue
-    if (estimateTokens(message.content) < 60) continue
-    message.content = trimToolContent(message.content)
-    trimmed++
-  }
+  const working = trimOldResults(messages, budgetTokens)
+  const trimmed = working.filter(
+    (m, i) => m.content !== messages[i].content && m.content.startsWith('[trimmed to save context]')
+  ).length
 
   if (totalTokens(working) <= budgetTokens) {
     return { messages: working, trimmed, dropped: 0, condensed: 0 }

@@ -14,7 +14,8 @@ import { useStartupStore } from '../store/startupStore'
 import { useSkillsStore } from '../store/skillsStore'
 import { useUserRulesStore } from '../store/userRulesStore'
 import { connect, connectFromConfig } from './connect'
-import { editFile, globFiles, grepFiles, readFile, writeFile } from './fileTools'
+import { applyPatch, editFile, globFiles, grepFiles, readFile, writeFile } from './fileTools'
+import { gitCommit, gitRead } from './gitTools'
 import { updatePlan } from './planTool'
 import { formatCaptureElapsed, isSessionCaptureActive, refreshCommandTimeoutMinutes } from './execCapture'
 import { runAgentCommand } from './agentExec'
@@ -37,6 +38,7 @@ import { normalizeAISettings, clampCommandTimeoutMinutes } from '../../shared/ai
 import { normalizeForDiff, toSideBySideRows } from '../../shared/diffRows'
 import { computeTextDiff } from '../../shared/textDiff'
 import { toolNamesFor, type ToolTier } from '../../shared/aiTools'
+import type { ExecEvidence } from '../../shared/planVerify'
 import type { TerminalAppearanceSettings } from '../../shared/terminalSettings'
 import type {
   AISettings,
@@ -800,6 +802,8 @@ export interface ToolExecContext {
   chatTabId?: string
   /** Terminal tab this chat is pinned to; host tools omit tab_id against it. */
   pinnedTabId?: string
+  /** Commands this task has run, for checking plan verify assertions against. */
+  execEvidence?: readonly ExecEvidence[]
   onCaptureProgress?: (elapsedMs: number) => void
   /** Receives a canceller once a long-running command starts, for Stop. */
   onAbortHandle?: (abort: () => void) => void
@@ -835,14 +839,20 @@ export async function executeToolCall(
       return readFile(args)
     case 'edit_file':
       return editFile(args, ctx)
+    case 'apply_patch':
+      return applyPatch(args, ctx)
     case 'write_file':
       return writeFile(args, ctx)
     case 'grep':
       return grepFiles(args)
     case 'glob':
       return globFiles(args)
+    case 'git_read':
+      return gitRead(args)
+    case 'git_commit':
+      return gitCommit(args)
     case 'update_plan':
-      return updatePlan(ctx?.chatTabId, args)
+      return updatePlan(ctx?.chatTabId, args, ctx?.execEvidence)
     case 'list_ssh_configs':
       return listSshConfigs()
     case 'list_folders':
