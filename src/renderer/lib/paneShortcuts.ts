@@ -1,4 +1,5 @@
 import { matchesKeyEvent } from './keybindingMatch'
+import { closePaneWithSession } from './connect'
 import { usePaneLayoutStore } from '../store/paneLayoutStore'
 import { usePaneSyncStore } from '../store/paneSyncStore'
 import { usePaneSearchStore } from '../store/paneSearchStore'
@@ -40,7 +41,7 @@ export function handlePaneKey(
   }
   if (paneId && matchesKeyEvent(bindings.closePane, e)) {
     e.preventDefault()
-    layout.closePane(paneId)
+    closePaneWithSession(paneId)
     return true
   }
   if (paneId && matchesKeyEvent(bindings.zoomPane, e)) {

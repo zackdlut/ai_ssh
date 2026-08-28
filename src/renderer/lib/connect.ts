@@ -1,6 +1,7 @@
 import { useSessionsStore, type TerminalSession } from '../store/sessionsStore'
 import { usePaneLayoutStore } from '../store/paneLayoutStore'
 import { useBookmarksStore } from '../store/bookmarksStore'
+import { findLeaf } from './paneLayout'
 import { t } from './i18n'
 import { useLocaleStore } from '../store/localeStore'
 import { debugLog } from './debugLog'
@@ -87,6 +88,38 @@ export function addEmptyTab(): string {
     username: ''
   })
   return id
+}
+
+/**
+ * Hang up the ptys, then drop the sessions in one go so the pane bridge fires
+ * once. Clearing them out of the layout rides on that subscription, which is
+ * why nothing here touches the pane tree.
+ */
+export function closeSessions(ids: string[]): void {
+  if (ids.length === 0) return
+  const store = useSessionsStore.getState()
+  for (const id of ids) {
+    const sessionId = store.sessions.find((s) => s.id === id)?.sessionId
+    if (sessionId) window.api.ssh.close(sessionId)
+  }
+  store.removeSessions(ids)
+}
+
+/**
+ * Close a pane and end the session it was showing, the way closing a pane closes
+ * its shell in Windows Terminal.
+ *
+ * Dropping the pane first matters twice. The session would otherwise outlive its
+ * only pane, leaving a terminal that no tab shows but that still holds a pty and
+ * still answers to `@`. And `detachTerminals`, which runs when the session goes,
+ * sees a tree the terminal has already left, so it cannot mistake this pane for
+ * the tab's last one and close the whole tab.
+ */
+export function closePaneWithSession(paneId: string): void {
+  const layout = usePaneLayoutStore.getState()
+  const terminalId = findLeaf(layout.activeTab().root, paneId)?.terminalId ?? null
+  layout.closePane(paneId)
+  if (terminalId) closeSessions([terminalId])
 }
 
 function resolveConnectOpts(session: TerminalSession): ConnectOptions | undefined {

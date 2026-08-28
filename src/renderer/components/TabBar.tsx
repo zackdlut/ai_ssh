@@ -4,7 +4,7 @@ import { useAIStore } from '../store/aiStore'
 import { useSftpStore } from '../store/sftpStore'
 import { useBookmarksStore } from '../store/bookmarksStore'
 import { usePaneLayoutStore } from '../store/paneLayoutStore'
-import { connectFromConfig, connectWsl } from '../lib/connect'
+import { closeSessions, connectFromConfig, connectWsl } from '../lib/connect'
 import { readFullTerminalOutput } from '../lib/terminalRegistry'
 import { useT, type TranslationKey } from '../lib/i18n'
 import UiIcon from './UiIcon'
@@ -78,7 +78,7 @@ export default function TabBar({
   onNewTab,
   onSettingsSelect
 }: Props): JSX.Element {
-  const { sessions, activeSessionId, removeSessions } = useSessionsStore()
+  const { sessions, activeSessionId } = useSessionsStore()
   const paneTabs = usePaneLayoutStore((s) => s.tabs)
   const activeTabId = usePaneLayoutStore((s) => s.activeTabId)
   const activateTab = usePaneLayoutStore((s) => s.activateTab)
@@ -197,16 +197,6 @@ export default function TabBar({
     }
     const res = await window.api.terminal.saveLog(content, defaultLogName(session))
     if (res.error) window.alert(t('tabbar.saveOutputFailed', { error: res.error }))
-  }
-
-  /** Hang up the ptys, then drop the sessions in one go so the bridge fires once. */
-  const closeSessions = (ids: string[]): void => {
-    if (ids.length === 0) return
-    for (const id of ids) {
-      const sessionId = sessions.find((s) => s.id === id)?.sessionId
-      if (sessionId) window.api.ssh.close(sessionId)
-    }
-    removeSessions(ids)
   }
 
   /*

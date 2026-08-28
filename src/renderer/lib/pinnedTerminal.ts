@@ -24,6 +24,7 @@ export interface MentionableTab {
   id?: string
   host?: string
   username?: string
+  port?: number
   customTitle?: string
   title?: string
   wslDistro?: string
@@ -59,6 +60,77 @@ function sanitizeMentionToken(raw: string): string {
   return token || 'host'
 }
 
+/**
+ * Ways to name one terminal, shortest first.
+ *
+ * The host on its own is what a user reaches for, so it leads. The rest are only
+ * needed when something else already answers to that name, and they are ordered
+ * by how much they tell you: the name the user or the saved connection gave it,
+ * then the account, then the port.
+ */
+function mentionTokenCandidates(tab: MentionableTab): string[] {
+  const candidates = [mentionTokenFor(tab)]
+  const named = tab.customTitle?.trim() || tab.title?.trim()
+  if (named) candidates.push(named)
+  if (tab.username && tab.host) {
+    candidates.push(`${tab.username}@${tab.host}`)
+    if (tab.port) candidates.push(`${tab.username}@${tab.host}:${tab.port}`)
+  }
+  return [...new Set(candidates.map(sanitizeMentionToken))]
+}
+
+/**
+ * A distinct token for every terminal in the list.
+ *
+ * Two sessions on one host would otherwise answer to the same `@host`, which
+ * leaves the composer no way to say which of them it means — and dialling the
+ * same host twice is routine. The first session keeps the bare host, so the
+ * common case of one session per host is untouched and the short name stays
+ * worth typing; later ones take the first candidate nobody has claimed, falling
+ * back to a numeric suffix when even the port cannot tell them apart.
+ *
+ * Tokens therefore depend on the order of the list, which is the session order:
+ * they only move when the tabs themselves do.
+ */
+export function uniqueMentionTokens(tabs: readonly MentionableTab[]): string[] {
+  const candidates = tabs.map(mentionTokenCandidates)
+  const taken = new Set<string>()
+  return candidates.map((mine, index) => {
+    const [base] = mine
+    if (!taken.has(base)) {
+      taken.add(base)
+      return base
+    }
+    /*
+     * The sessions sharing this name. A candidate that one of them could answer
+     * to just as well does not say which session is meant, so it is no use as a
+     * token however free it happens to be — two duplicates of one connection
+     * have to end up numbered rather than one of them claiming `user@host`.
+     */
+    const rivals = candidates.filter((other, i) => i !== index && other[0] === base)
+    const token =
+      mine.find(
+        (candidate) => !taken.has(candidate) && !rivals.some((other) => other.includes(candidate))
+      ) ?? nextNumberedToken(base, taken)
+    taken.add(token)
+    return token
+  })
+}
+
+function nextNumberedToken(base: string, taken: ReadonlySet<string>): string {
+  let suffix = 2
+  while (taken.has(`${base}-${suffix}`)) suffix += 1
+  return `${base}-${suffix}`
+}
+
+/** The same tokens keyed by terminal id, for the picker and for insertion. */
+export function mentionTokenMap(
+  tabs: readonly (MentionableTab & { id: string })[]
+): Map<string, string> {
+  const tokens = uniqueMentionTokens(tabs)
+  return new Map(tabs.map((tab, index) => [tab.id, tokens[index]]))
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -72,8 +144,10 @@ export function parseAtQuery(beforeCaret: string): string | null {
 export function filterTabsForMention<T extends MentionableTab>(tabs: T[], query: string): T[] {
   const q = query.trim().toLowerCase()
   if (!q || 'terminal'.startsWith(q)) return tabs
-  return tabs.filter((tab) => {
+  const tokens = uniqueMentionTokens(tabs)
+  return tabs.filter((tab, index) => {
     const hay = [
+      tokens[index],
       mentionTokenFor(tab),
       formatTerminalLabel({
         customTitle: tab.customTitle,
@@ -103,16 +177,23 @@ function mentionPattern(token: string): RegExp {
 
 export function hasTerminalMention(prompt: string, tabs: readonly MentionableTab[] = []): boolean {
   if (TERMINAL_MENTION.test(prompt)) return true
-  return tabs.some((tab) => mentionPattern(mentionTokenFor(tab)).test(prompt))
+  return uniqueMentionTokens(tabs).some((token) => mentionPattern(token).test(prompt))
 }
 
+/**
+ * The terminal a prompt names. The longest matching token wins, so `@prod` never
+ * answers for a mention of `@prod:2222` that it happens to be a prefix of.
+ */
 export function matchTabByMention<T extends MentionableTab>(
   prompt: string,
   tabs: readonly T[]
 ): T | undefined {
-  const hits = tabs.filter((tab) => mentionPattern(mentionTokenFor(tab)).test(prompt))
+  const tokens = uniqueMentionTokens(tabs)
+  const hits = tabs
+    .map((tab, index) => ({ tab, token: tokens[index] }))
+    .filter((hit) => mentionPattern(hit.token).test(prompt))
   if (hits.length === 0) return undefined
-  return [...hits].sort((a, b) => mentionTokenFor(b).length - mentionTokenFor(a).length)[0]
+  return [...hits].sort((a, b) => b.token.length - a.token.length)[0].tab
 }
 
 export function rewriteTerminalMentions(text: string, token: string): string {
@@ -213,7 +294,7 @@ export function liveMentionRange(text: string, caret: number): { start: number; 
  * may still be typing.
  */
 export function findMentionSpans(text: string, tabs: readonly MentionableTab[]): MentionSpan[] {
-  const tokens = [...new Set(['terminal', ...tabs.map((tab) => mentionTokenFor(tab))])]
+  const tokens = [...new Set(['terminal', ...uniqueMentionTokens(tabs)])]
     .filter(Boolean)
     .sort((a, b) => b.length - a.length)
   const spans: MentionSpan[] = []

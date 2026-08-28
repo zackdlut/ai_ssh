@@ -8,6 +8,8 @@ import {
   isChatBusy
 } from '../../store/aiStore'
 import { useSessionsStore } from '../../store/sessionsStore'
+import { usePaneLayoutStore } from '../../store/paneLayoutStore'
+import { selectMentionableTerminals } from '../../lib/mentionableTerminals'
 import {
   sendPrompt,
   computeActiveTabBudget,
@@ -43,6 +45,7 @@ import {
   hasTerminalMention,
   matchTabByMention,
   mentionTokenFor,
+  mentionTokenMap,
   needsTerminalPicker,
   parseAtQuery,
   replaceAtMention,
@@ -99,6 +102,7 @@ export default function SidePanel(): JSX.Element {
   const terminalTabs = useSessionsStore((s) => s.sessions)
   const activeSessionId = useSessionsStore((s) => s.activeSessionId)
   const activeSession = terminalTabs.find((t) => t.id === activeSessionId)
+  const paneTabs = usePaneLayoutStore((s) => s.tabs)
 
   const [resizing, setResizing] = useState(false)
   const [picker, setPicker] = useState<PickerReason | null>(null)
@@ -159,9 +163,21 @@ export default function SidePanel(): JSX.Element {
   const contextTabId = terminalContextTabId(pin, activeSessionId)
   const contextTab = contextTabId ? terminalTabs.find((t) => t.id === contextTabId) : undefined
 
+  const mentionableTabs = useMemo(
+    () => selectMentionableTerminals(terminalTabs, paneTabs),
+    [terminalTabs, paneTabs]
+  )
+  /*
+   * Tokens come from the whole mentionable list, never from the filtered view:
+   * a token only means one terminal relative to the list it was derived from, so
+   * narrowing the picker as the user types must not rename its rows.
+   */
+  const mentionTokens = useMemo(() => mentionTokenMap(mentionableTabs), [mentionableTabs])
+
   const pickerTabs = useMemo(
-    () => (picker === 'mention' ? filterTabsForMention(terminalTabs, mentionQuery) : terminalTabs),
-    [picker, terminalTabs, mentionQuery]
+    () =>
+      picker === 'mention' ? filterTabsForMention(mentionableTabs, mentionQuery) : mentionableTabs,
+    [picker, mentionableTabs, mentionQuery]
   )
   pickerTabsRef.current = pickerTabs
 
@@ -177,7 +193,7 @@ export default function SidePanel(): JSX.Element {
 
   const contextBudget = useMemo(() => {
     const limit = contextLengths[copilotProfile] ?? DEFAULT_CONTEXT_LENGTHS[copilotProfile]
-    const mentionsTerminal = hasTerminalMention(input, terminalTabs)
+    const mentionsTerminal = hasTerminalMention(input, mentionableTabs)
     const context = contextTab
       ? {
           recentOutput: readTerminalOutput(
@@ -196,7 +212,7 @@ export default function SidePanel(): JSX.Element {
       userRules,
       profile: copilotProfile
     })
-  }, [messages, input, contextTab, copilotProfile, contextLengths, activeChatTabId, userRules, terminalTabs])
+  }, [messages, input, contextTab, copilotProfile, contextLengths, activeChatTabId, userRules, mentionableTabs])
 
   const pendingApprovals = useMemo(
     () => (activeChatTabId ? getPendingToolCalls(activeChatTabId) : []),
@@ -398,7 +414,8 @@ export default function SidePanel(): JSX.Element {
   }
 
   const openPicker = (reason: PickerReason): void => {
-    const tabs = reason === 'mention' ? filterTabsForMention(terminalTabs, mentionQuery) : terminalTabs
+    const tabs =
+      reason === 'mention' ? filterTabsForMention(mentionableTabs, mentionQuery) : mentionableTabs
     setPickerIndex(defaultPickerIndex(tabs))
     setPicker(reason)
   }
@@ -441,13 +458,13 @@ export default function SidePanel(): JSX.Element {
     }
 
     if (pin.status !== 'live' && activeChatTabId) {
-      const matched = matchTabByMention(text, terminalTabs)
+      const matched = matchTabByMention(text, mentionableTabs)
       if (matched) setPinnedTerminal(activeChatTabId, matched.id)
     }
 
     if (
       (needsTerminalPicker(text, pin) || needsFileMentionPicker(text, pin)) &&
-      !matchTabByMention(text, terminalTabs)
+      !matchTabByMention(text, mentionableTabs)
     ) {
       pendingSendRef.current = text
       openPicker('send')
@@ -467,7 +484,7 @@ export default function SidePanel(): JSX.Element {
 
   const refreshMention = (value: string, caret: number): void => {
     const query = parseAtQuery(value.slice(0, caret))
-    const onChip = caretOnMentionChip(value, caret, terminalTabs)
+    const onChip = caretOnMentionChip(value, caret, mentionableTabs)
     if (query !== null && !onChip) {
       if (isFilePathMentionQuery(query)) {
         if (picker === 'mention') {
@@ -477,7 +494,7 @@ export default function SidePanel(): JSX.Element {
         return
       }
       setMentionQuery(query)
-      const filtered = filterTabsForMention(terminalTabs, query)
+      const filtered = filterTabsForMention(mentionableTabs, query)
       setPickerIndex(defaultPickerIndex(filtered))
       if (picker !== 'mention') setPicker('mention')
     } else if (picker === 'mention') {
@@ -511,7 +528,7 @@ export default function SidePanel(): JSX.Element {
     if (!activeChatTabId) return
     const reason = picker
     const tab = terminalTabs.find((t) => t.id === tabId)
-    const token = tab ? mentionTokenFor(tab) : 'host'
+    const token = mentionTokens.get(tabId) ?? (tab ? mentionTokenFor(tab) : 'host')
     const label = formatTerminalLabel(tab ?? { username: '', host: tabId })
     setPinnedTerminal(activeChatTabId, tabId)
     if (reason === 'mention') insertHostMention(token)
@@ -801,6 +818,7 @@ export default function SidePanel(): JSX.Element {
           {picker && (
             <TerminalTabPicker
               tabs={pickerTabs}
+              tokens={mentionTokens}
               activeSessionId={activeSessionId}
               pinnedTabId={activeChat?.pinnedTabId}
               highlightIndex={pickerIndex}
@@ -822,7 +840,7 @@ export default function SidePanel(): JSX.Element {
             key={activeChatTabId ?? 'composer'}
             ref={inputRef}
             value={input}
-            tabs={terminalTabs}
+            tabs={mentionableTabs}
             onChange={onInputChange}
             onKeyDown={onKeyDown}
             onContextMenu={onComposerContextMenu}

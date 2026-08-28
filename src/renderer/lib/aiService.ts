@@ -6,6 +6,7 @@ import {
 } from '../store/aiStore'
 import { useSessionsStore } from '../store/sessionsStore'
 import { COPILOT_CONTEXT_MAX_LINES, COPILOT_TERMINAL_MENTION_MAX_LINES, readTerminalOutput } from './terminalRegistry'
+import { mentionableTerminals } from './mentionableTerminals'
 import {
   hasTerminalMention,
   matchTabByMention,
@@ -1846,7 +1847,7 @@ async function compactTabHistory(
   const limit = resolveActiveContextLength(settings)
   const userRules = useUserRulesStore.getState().rules
   const tier = toolTierForProfile(settings.copilotModelProfile)
-  const mentionsTerminal = hasTerminalMention(prompt, useSessionsStore.getState().sessions)
+  const mentionsTerminal = hasTerminalMention(prompt, mentionableTerminals())
   const chartIntent = mentionsTerminal && !!context && CHART_INTENT.test(prompt)
   const surface = toolSurfaceFor(prompt, chatAgentMode(tabId))
   const budgetParams = {
@@ -1965,7 +1966,10 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
 
   const terminals = useSessionsStore.getState()
   const activeTerminalId = terminals.activeSessionId
-  const mentionedTab = !tab.pinnedTabId ? matchTabByMention(prompt, terminals.sessions) : undefined
+  // The same list the composer resolves against: `@` tokens are only unique
+  // within the list they came from, so matching a wider one would rename them.
+  const mentionable = mentionableTerminals()
+  const mentionedTab = !tab.pinnedTabId ? matchTabByMention(prompt, mentionable) : undefined
   const nextPinId = mentionedTab?.id ?? shouldPinOnSend(tab.pinnedTabId, activeTerminalId)
   if (nextPinId && nextPinId !== tab.pinnedTabId) {
     ai.setPinnedTerminal(tabId, nextPinId)
@@ -1981,8 +1985,8 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
   const contextTab = contextTabId
     ? terminals.sessions.find((t) => t.id === contextTabId)
     : undefined
-  const mentionsTerminal = hasTerminalMention(prompt, terminals.sessions)
-  const context = contextTabId ? readTabContext(contextTabId, contextMaxLines(prompt, terminals.sessions)) : undefined
+  const mentionsTerminal = hasTerminalMention(prompt, mentionable)
+  const context = contextTabId ? readTabContext(contextTabId, contextMaxLines(prompt, mentionable)) : undefined
 
   const paths = extractFileMentionPaths(prompt)
   const fileContext =
@@ -2049,7 +2053,7 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
     tabId,
     context,
     contextTabId,
-    contextMaxLines: contextMaxLines(prompt, terminals.sessions),
+    contextMaxLines: contextMaxLines(prompt, mentionable),
     boundSessionId,
     boundTabId,
     conversation: history,

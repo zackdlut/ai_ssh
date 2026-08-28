@@ -1,10 +1,12 @@
 import { useEffect, useRef } from 'react'
 import type { TerminalSession } from '../../store/sessionsStore'
-import { formatTerminalLabel, mentionTokenFor } from '../../lib/pinnedTerminal'
+import { mentionTokenFor } from '../../lib/pinnedTerminal'
 import { useT } from '../../lib/i18n'
 
 interface Props {
   tabs: TerminalSession[]
+  /** Unique `@` tokens by terminal id, derived from the whole mentionable list. */
+  tokens: ReadonlyMap<string, string>
   activeSessionId: string | null
   pinnedTabId?: string
   highlightIndex: number
@@ -14,8 +16,31 @@ interface Props {
   footer?: JSX.Element | null
 }
 
+const DEFAULT_SSH_PORT = 22
+
+/**
+ * Who the session is connected as, spelled out.
+ *
+ * Two rows on one host are only telling apart by what differs between them, so
+ * this stays literal — no custom title standing in for the account — and keeps
+ * the port whenever it is not the one everybody assumes.
+ */
+function connectionIdentity(tab: TerminalSession): string {
+  if (tab.kind === 'wsl') return tab.wslDistro || tab.title || 'WSL'
+  if (!tab.host) return tab.title || ''
+  const user = tab.username ? `${tab.username}@` : ''
+  const port = tab.port && tab.port !== DEFAULT_SSH_PORT ? `:${tab.port}` : ''
+  return `${user}${tab.host}${port}`
+}
+
+/** The name the user or the saved connection gave this session, if it has one. */
+function connectionName(tab: TerminalSession): string {
+  return (tab.customTitle?.trim() || tab.title?.trim()) ?? ''
+}
+
 export default function TerminalTabPicker({
   tabs,
+  tokens,
   activeSessionId,
   pinnedTabId,
   highlightIndex,
@@ -43,13 +68,15 @@ export default function TerminalTabPicker({
           </button>
         ) : (
           tabs.map((tab, index) => {
-            const token = mentionTokenFor(tab)
-            const label = formatTerminalLabel(tab)
+            const token = tokens.get(tab.id) ?? mentionTokenFor(tab)
+            const identity = connectionIdentity(tab)
+            const name = connectionName(tab)
             const isActive = tab.id === activeSessionId
             const isPinned = tab.id === pinnedTabId
             const selected = index === highlightIndex
             const tags = [
-              label !== token ? label : null,
+              identity && identity !== token ? identity : null,
+              name && name !== identity && name !== token ? name : null,
               isActive ? t('copilot.mentionActive') : null,
               isPinned ? t('copilot.mentionPinned') : null,
               tab.status

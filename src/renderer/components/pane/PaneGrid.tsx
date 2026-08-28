@@ -12,7 +12,7 @@ import { MIN_SYNC_GROUP, usePaneSyncStore } from '../../store/paneSyncStore'
 import { usePaneSearchStore } from '../../store/paneSearchStore'
 import { useSessionsStore, type TerminalSession } from '../../store/sessionsStore'
 import { useBookmarksStore } from '../../store/bookmarksStore'
-import { connectFromConfig } from '../../lib/connect'
+import { closePaneWithSession, connectFromConfig } from '../../lib/connect'
 import { useT } from '../../lib/i18n'
 import UiIcon from '../UiIcon'
 import TerminalEmptyState from '../TerminalEmptyState'
@@ -82,7 +82,6 @@ function PaneFrame({
   const focused = usePaneLayoutStore((s) => selectActiveTab(s).focusedPaneId === paneId)
   const zoomed = usePaneLayoutStore((s) => selectActiveTab(s).zoomedPaneId === paneId)
   const focusPane = usePaneLayoutStore((s) => s.focusPane)
-  const closePane = usePaneLayoutStore((s) => s.closePane)
   const splitPane = usePaneLayoutStore((s) => s.splitPane)
   const toggleZoom = usePaneLayoutStore((s) => s.toggleZoom)
   const locked = usePaneSyncStore((s) => Boolean(terminalId) && s.lockedTerminalIds.includes(terminalId!))
@@ -193,7 +192,7 @@ function PaneFrame({
             className="pane-header-btn pane-header-close"
             draggable={false}
             title={t('pane.close')}
-            onClick={() => closePane(paneId)}
+            onClick={() => closePaneWithSession(paneId)}
           >
             ×
           </button>

@@ -261,7 +261,7 @@ const zh = {
   'settings.shortcuts.splitHorizontal': '向下分屏',
   'settings.shortcuts.splitHorizontalHint': '把当前面板上下一分为二，新面板获得焦点。',
   'settings.shortcuts.closePane': '关闭当前面板',
-  'settings.shortcuts.closePaneHint': '只关闭分屏面板，其中的会话仍保留在标签栏。',
+  'settings.shortcuts.closePaneHint': '关闭当前面板，并结束其中运行的会话。',
   'settings.shortcuts.zoomPane': '面板最大化切换',
   'settings.shortcuts.zoomPaneHint': '临时把当前面板放大到整个终端区，再按一次还原。',
   'settings.shortcuts.focusPaneLeft': '焦点移到左侧面板',
@@ -1023,7 +1023,7 @@ const en: Record<keyof typeof zh, string> = {
     'Divide the current pane top/bottom; the new pane takes focus.',
   'settings.shortcuts.closePane': 'Close current pane',
   'settings.shortcuts.closePaneHint':
-    'Closes the split pane only — the session stays open in the tab bar.',
+    'Closes the pane and ends the session running in it.',
   'settings.shortcuts.zoomPane': 'Toggle pane zoom',
   'settings.shortcuts.zoomPaneHint':
     'Temporarily expand the current pane to the full terminal area; press again to restore.',
