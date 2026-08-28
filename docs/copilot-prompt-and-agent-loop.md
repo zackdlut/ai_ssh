@@ -1,8 +1,8 @@
 # Copilot 初始化 Prompt 与多步 Agent 循环
 
-本文说明 AI Copilot 发给 LLM 的**初始化 system prompt**（每轮都会带上、内容尽量保持字节级不变以便前缀缓存），以及当前程序如何用 **function calling 循环** 把一条自然语言任务拆成多步：规划 → 调工具 → 在远端执行命令 → 把结果喂回模型 → 独立校验 → 给出结论。
+本文说明 AI Copilot 发给 LLM 的**初始化 system prompt**（每轮都会带上、内容尽量保持字节级不变以便前缀缓存），以及当前程序如何用 **function calling 循环** 把一条自然语言任务拆成多步：规划 → 调工具 → 在远端执行命令 → 把结果喂回模型 → 独立校验 → 给出结论。Composer 上的 **Plan / Agent / Execute** 三模式只换本轮工具面和审批策略，不另写一套 runtime。
 
-第 5 节用同一条任务（「重启 nginx 并告诉我是否成功」）画了**时序图**，图中每条消息都有编号，并在图下给出该步的说明与 Request / Response 示例。第 9 节是对照 Cursor / Claude Code / Codex 与现有实现后的**长期演进设计**（分阶段 P0–P3），不改变第 4–5 节描述的当前循环。
+第 5 节用同一条任务（「重启 nginx 并告诉我是否成功」）在 **Agent** 模式下画了**时序图**，图中每条消息都有编号，并在图下给出该步的说明与 Request / Response 示例。第 9 节是对照 Cursor / Claude Code / Codex 与现有实现后的**长期演进设计**（分阶段 P0–P3）；P0–P2（MCP 除外）已落地，不改变第 4–5 节描述的当前循环。
 
 ---
 
@@ -18,7 +18,8 @@
 | 执行账本            | `src/renderer/lib/taskMemory.ts`                              | 本会话已经真正执行过的命令/动作，避免重复做完的步骤                                                                                         |
 | 主机记忆            | `src/renderer/lib/hostMemory.ts`                              | 远端 `~/AGENTS.md`：这台机器上的长期约定，作为独立 system message 进前缀层                                                                |
 | 图表 / 图           | `src/shared/prompts/chart.ts` + copilot 里的 chart/mermaid 段 | **按需注入**：用户要可视化才带 chart 规则；要架构图才带 mermaid 规则                                                                  |
-| 真正发 HTTP         | `src/main/ai/provider.ts`                                     | OpenAI 兼容`chat.completions.create`，`stream: true`，`tools` + `tool_choice: "auto"`                                               |
+| 模式门控            | `src/shared/aiTools.ts` `buildAITools` + `src/shared/toolPolicy.ts` `decideToolCall` | `CopilotAgentMode`：`plan` / `agent` / `execute` 决定本轮 schema 与 deny / auto / ask |
+| 真正发 HTTP         | `src/main/ai/provider.ts`                                     | OpenAI 兼容`chat.completions.create`，`stream: true`，`tools` + `tool_choice: "auto"`；按请求上的 `planMode` / `executeMode` 自己重建 tools |
 
 **设计要点（和「初始化 prompt 为什么长这样」直接相关）：**
 
@@ -26,19 +27,31 @@
 - Prompt **故意不随「第几轮」变化**。同一任务里每一轮的核心 system prompt 字节级相同，方便供应商的 prefix cache。
 - Chart / mermaid 的长规则 **不是默认初始化的一部分**。只有本轮判定用户在要图，才会追加。
 
-档位与工具面：
+工具面有两轴：档位（模型大小）和模式（用户怎么盯着跑）。`read_skill` 另受 `hasSkills` 门控，不计入下表默认个数。基表 27 个名字（含未启用时裁掉的 `read_skill`）。
+
+档位：
 
 | 档位                          | 工具集                                                                                                        | 典型场景                                                           |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | Default / 非 fast（`full`） | 26 个：SSH 配置、开关 tab、文件（含 `apply_patch`）、git、exec、`search_terminal`、`delegate_to_host`、plan、设置等 | 托管大模型                                                         |
-| Fast（`core`）              | 7 个：`list_open_tabs`, `exec_command`, `read_file`, `edit_file`, `grep`, `glob`, `update_plan` | 本地小模型；`read_skill` 仅在已安装并启用技能时才出现            |
+| Fast（`core`）              | 7 个：`list_open_tabs`, `exec_command`, `read_file`, `edit_file`, `grep`, `glob`, `update_plan` | 本地小模型；已启用技能时再加 `read_skill`                          |
 | 图表首轮                      | `tools` 关闭，prompt 也不写 Tool rules                                                                      | 强制模型先吐带`chart` 标记的代码围栏，再由第二阶段转成 JSON spec |
+
+模式（`CopilotAgentMode`，Composer `ModeSelect`；斜杠 `/plan` `/agent` `/execute`）：
+
+| 模式 | UI 文案 | 工具面 | 策略 |
+| --- | --- | --- | --- |
+| Agent（默认） | 全部工具，命令走后台通道 | `full` / `core` 原样 | `exec_command` 需要结果时用；`run_in_terminal` 仅当用户要看着跑 |
+| Plan | 只读探查并写计划 | `PLAN_MODE_TOOLS`：全部只读 + `update_plan` + `exec_command` + `delegate_to_host`（无技能 13，有技能 14） | 变更类 `exec_command` **deny**，不弹审批 |
+| Execute | 命令在看着的终端里跑 | 去掉 `exec_command` 与 `delegate_to_host`；`run_in_terminal` 即使 core 也插入（full 无技能 24） | 残留 `exec_command` **deny**；prompt 写 `ALWAYS run_in_terminal`，聊天侧不复述终端输出 |
+
+Plan 卡「按此执行」：`setAgentMode(tab.id, 'execute')` 再发 `copilot.plan.executePrompt`（**不是**切到 Agent）。`planMode` 与 `executeMode` 同时为真时以 Plan 为准。
 
 ---
 
 ## 2. 默认初始化 System Prompt（full 档、无技能、无 chart/mermaid）
 
-下面是 `buildCopilotSystemPrompt({ toolNames: toolNamesFor('full') })` 的实际文本（约 10500 字符）。这就是 Copilot **每一轮** 放在 messages 最前面的那条 `role: "system"`。用 `npx tsx scripts/dumpPrompt.ts full` 可以随时重新导出这段，改完 prompt 记得回填，别手改。
+下面是 `buildCopilotSystemPrompt({ toolNames: toolNamesFor('full') })` 的实际文本（**11042** 字符）。这就是 Copilot **每一轮** 放在 messages 最前面的那条 `role: "system"`。用 `npx tsx scripts/dumpPrompt.ts full` 可以随时重新导出这段，改完 prompt 记得回填，别手改。贴文与 dump **字节一致**，仅内层 `bash` 围栏为嵌套进 `Markdown` 围栏而缩进。
 
 ````Markdown
 ## Role
@@ -118,13 +131,14 @@ Never put example output or non-runnable text in a bash block. Commands are assu
 ## Constraints & safety
 - Prefer non-destructive commands. Propose a destructive or irreversible one (rm -rf, mkfs, dd, shutdown) only when the intent clearly calls for it, spell out the risk, and never add destructive flags the intent did not ask for.
 - One command or short pipeline per exec_command, and observe its result before the next — never batch mutating commands into one call. Where steps must combine, chain them with && so a failure stops the rest; never use ; to force the rest to run.
+- Starting a long-lived service (a dev server, `python3 -m http.server`, a daemon) needs `&` to apply to the `nohup` command ALONE, with all three streams redirected: `cd /srv || exit 1; nohup cmd > log 2>&1 < /dev/null & echo "started pid $!"`. `&` binding to an `&&` list (`cd /srv && nohup cmd > log 2>&1 &`) leaves an intermediate subshell holding the channel, which hangs the call until it times out — this is the one place `;` beats `&&`, and `nohup`/`setsid`/`disown` do not fix it. Then confirm the service separately (`curl -fsS localhost:PORT`, `ss -ltnp | grep PORT`).
 - Never echo, log or print passwords, private keys or API keys, and never exfiltrate secrets.
 - Never fabricate command output, host state or ids — if you have not run the command or lack the data, say so or run/list to find out.
 - Ask one brief clarifying question when the target (which tab, host, config) or the request itself is genuinely unclear, rather than guessing.
 - Cannot: act on hosts not already open as tabs, see scrollback for a tab that is not open, reach the internet, or persist local files beyond saved SSH configs/settings; exec_command needs an open, CONNECTED tab.
 ````
 
-`fast` 档会变短（约 8200 字符）：去掉 app 管理类工具的段落和清单（`apply_patch` / `git_read` / `git_commit` 也都只在 full 档），Environment 里也不再承诺 `config_id` / 设置行。完全关掉 function calling（图表首轮）时只剩 Role / Workflow / Output / Constraints，约 2200 字符。
+`fast` 档会变短（**8776** 字符）：去掉 app 管理类工具的段落和清单（`apply_patch` / `git_read` / `git_commit` 也都只在 full 档），Environment 里也不再承诺 `config_id` / 设置行。完全关掉 function calling（图表首轮）时只剩 Role / Workflow / Output / Constraints，**2166** 字符。Execute 模式下 prompt 不出现 `exec_command`，改写 `ALWAYS run_in_terminal`。
 
 ---
 
@@ -148,7 +162,15 @@ Never put example output or non-runnable text in a bash block. Commands are assu
 
 前缀（1–5）尽量稳定，方便缓存；后缀快照 / 账本 / 计划每轮都会变，所以放在**对话后面**，既不破坏前缀缓存，又让「现在还剩哪一步」比长 system prompt 更新。
 
-后缀原来是 3–4 条独立 `system`，现在合并成**一条 `user`**，两个原因：一是 recency——最后一轮的位置很值钱，花在模型已经看过二十遍的抬头上是浪费；二是不少 OpenAI 兼容后端会直接拒绝「尾部只剩 system」的对话，Ollama 上的 qwen3 会回 `no user query found in messages`，而它自己的前端截断恰好就会产出这个形状（见 `buildTurnStateMessage`）。`provider.chat()` 里还有一道兜底：装配完消息若不存在非空 `user`，补一条最小 user 并 `logDebug` 记账。
+后缀原来是 3–4 条独立 `system`，现在合并成**一条 `user`**，两个原因：一是 recency——最后一轮的位置很值钱，花在模型已经看过二十遍的抬头上是浪费；二是不少 OpenAI 兼容后端会直接拒绝「尾部只剩 system」的对话，Ollama 上的 qwen3 会回 `no user query found in messages`，而它自己的前端截断恰好就会产出这个形状（见 `buildTurnStateMessage`）。这条 user 的固定前缀是：
+
+```text
+[Injected by the app, not typed by the user: live state for THIS turn. Read it, do not reply to it.]
+```
+
+`provider.chat()` 用请求上的 `planMode` / `executeMode` **自己重建** `tools`，再按本轮 `toolNames` 拼第 2 节那条 system prompt（与 renderer 对齐，避免 Plan 轮仍拿到写工具）。装配完消息若不存在非空 `user`，补一条最小 user 并 `logDebug` 记账。
+
+子 Agent 不走这条主 prompt：`delegate_to_host` 调 `buildSubAgentSystemPrompt`（`src/shared/prompts/subAgent.ts`），IPC `ai:agentTurn` / `AIProvider.agentTurn`，最多 **6** 步（`MAX_SUB_AGENT_STEPS`），单条工具结果 cap **6000** 字符。只读策略复用 Plan 的 `decideToolCall`。
 
 Host memory 放前缀是因为它是**主机的属性、不是这一轮的属性**：整个任务里它一个字都不会变。`src/renderer/lib/hostMemory.ts` 在 `sendPrompt` 里用 SFTP 预热（找 `~/AGENTS.md`、再退到 `~/.ai-terminal.md`，上限 4000 字符），按终端 tab 缓存，**连"没有这个文件"也缓存**——否则每一轮、每台主机都要白白探一次 SFTP。写到 AGENTS.md 的任何一次 `edit_file` / `apply_patch` / `write_file` / Restore 都会让缓存失效，所以模型刚记下来的约定，下一轮就开始约束它自己。
 
@@ -185,11 +207,15 @@ flowchart TD
   U["用户发送自然语言"] --> T["thinking: 调 LLM"]
   T -->|"tool_calls"| A["acting: 按策略执行工具"]
   T -->|"纯文本且无工具"| D["done: 最终回答"]
+  A -->|"Plan 写操作 / Execute 的 exec_command"| Deny["deny: 拒绝结果回给模型"]
   A -->|"只读 / 记账类"| X["立刻执行"]
   A -->|"会改主机状态"| Q["awaitingUser: 审批卡片"]
   Q -->|"用户批准"| X
   Q -->|"用户拒绝"| T
+  Deny --> O
+  X -->|"Execute 下 Ctrl+C"| I["tools-off 中断摘要"]
   X --> O["observing: 把 result 写成 role=tool"]
+  I --> D
   O --> V["verifying: 是否已经达成目标"]
   V -->|"还没完"| T
   V -->|"展示类卡片已是答案"| D
@@ -202,6 +228,8 @@ flowchart TD
 | 机制                   | 行为                                                                                                                                                                                                       |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 审批（`toolPolicy`） | `update_plan` / `list_*` / `read_file` 等自动跑。`systemctl restart` 在 balanced 下要点批准；`systemctl is-active` / `ps` / `journalctl` 这类只读命令自动跑。`rm -rf` 等危险命令永不自动。 |
+| Plan 模式 deny | 写工具不进 schema；模型若硬调变更类 `exec_command` / `run_in_terminal` / 写文件，`decideToolCall` → **deny**（不弹审批），结果文案 `copilot.plan.denied`。 |
+| Execute 模式 deny | schema 无 `exec_command`；残留调用仍 **deny**，文案 `copilot.execute.denied`（请用 `run_in_terminal`）。可见终端 Ctrl+C 设 `interruptedByUser`：取消同轮其余调用，再强制一轮 **tools-off** 摘要（`INTERRUPT_SUMMARY_PROMPT`：不要贴终端输出）。 |
 | Verify 头              | 每条`exec_command` 结果先带 `status` / `exit_code` / `cwd` / 可选 `verify` hint，模型按退出码判断，而不是「输出里有 Success 字样」。                                                             |
 | 独立确认               | 重启、部署、改配置：**改状态的那条命令成功 ≠ 任务成功**。必须再跑 `systemctl is-active` 或 `curl` health。                                                                                      |
 | verify 断言（harness） | 计划步骤可以带 `verify: { command, expect_exit_code?, expect_output? }`。收尾那一轮如果还有「已完成但校验没跑过/没通过」的步骤，**整轮回答会被撤掉**，注入一条 checkpoint 让它先去跑校验。每个**计划**只拦一次（`claimVerifyCheckpoint`），命令证据也按 chat 存（`taskEvidence`）——两者原来都挂在 loop 上，任务被打断后续跑就会把已经证明过的步骤重新判成「没跑」。 |
@@ -220,9 +248,11 @@ flowchart TD
 
 - 用户在 Copilot 输入：**「重启 nginx 并告诉我是否成功」**
 - 对话钉在终端 tab `tab_7f3a`（`root@prod.example.com:22`，已连接，cwd=`/root`）
-- Copilot 档位 Default（full 工具），自主度 **balanced**
+- Copilot 档位 Default（full 工具），模式 **Agent**（后台 `exec_command`），自主度 **balanced**
 - 未安装技能、未写 user_rules
 - 最近终端输出里只有一次 `uptime`
+
+同一句话在 Execute 下会变成 `run_in_terminal`，且聊天侧不复述终端输出。Plan 下这条任务只会出计划卡片，变更命令被 deny。
 
 参与者：
 
@@ -339,7 +369,7 @@ sequenceDiagram
 
 #### 步骤 3 — Agent → LLM（Turn 1 Request）
 
-**说明：** 主进程把核心 system prompt、终端上下文、用户话、tab 快照包成 OpenAI 兼容请求。本轮还没有 plan / task memory。模型必须用快照里的 `tab_7f3a`，不能编 id。
+**说明：** 主进程把核心 system prompt、终端上下文、用户话、tab 快照包成 OpenAI 兼容请求。本轮还没有 plan / task memory。模型必须用快照里的 `tab_7f3a`，不能编 id。快照走 `buildTurnStateMessage`，是对话末尾**一条** `user`，不是尾部 `system`。
 
 **Request：**
 
@@ -368,8 +398,8 @@ POST {baseURL}/chat/completions
       "content": "重启 nginx 并告诉我是否成功"
     },
     {
-      "role": "system",
-      "content": "Current SSH terminal manager state (use these exact ids with the tools; do NOT invent ids):\n\nOpen terminal tabs:\n- tab_id=tab_7f3a | root@prod.example.com:22 | connected | pinned | cwd=/root\n\nSaved connection configs:\n- config_id=cfg_prod | prod | root@prod.example.com:22 | has-key | folder=(top level)\n\nBookmark folders:\n(none)\n\nApp settings: theme=dark | locale=zh | terminal fontSize=14 | terminal colorScheme=default | startup connSidebarOpen=true | startup copilotOpen=true"
+      "role": "user",
+      "content": "[Injected by the app, not typed by the user: live state for THIS turn. Read it, do not reply to it.]\n\nCurrent SSH terminal manager state (use these exact ids with the tools; do NOT invent ids):\n\nOpen terminal tabs:\n- tab_id=tab_7f3a | root@prod.example.com:22 | connected | pinned | cwd=/root\n\nSaved connection configs:\n- config_id=cfg_prod | prod | root@prod.example.com:22 | has-key | folder=(top level)\n\nBookmark folders:\n(none)\n\nApp settings: theme=dark | locale=zh | terminal fontSize=14 | terminal colorScheme=default | startup connSidebarOpen=true | startup copilotOpen=true"
     }
   ]
 }
@@ -469,7 +499,7 @@ Plan updated (0/3 completed).
 
 #### 步骤 8 — Agent → LLM（Turn 2 Request）
 
-**说明：** 核心 prompt 与终端上下文与 Turn 1 **字节级相同**（前缀缓存）。对话里追加了 assistant 的 tool_calls 和对应 `role: tool`。后缀多了 **Current task plan**，督促模型不要等用户说 continue。
+**说明：** 核心 prompt 与终端上下文与 Turn 1 **字节级相同**（前缀缓存）。对话里追加了 assistant 的 tool_calls 和对应 `role: tool`。末尾那条注入 `user` 多了 **Current task plan**，督促模型不要等用户说 continue。
 
 **Request（messages 相对 Turn 1 的增量；前面的 system prompt / 终端上下文省略）：**
 
@@ -503,12 +533,8 @@ Plan updated (0/3 completed).
       "content": "Plan updated (0/3 completed).\n1. [>] 重启 nginx 服务\n2. [ ] 用独立检查确认 nginx 在跑\n3. [ ] 向用户报告结果"
     },
     {
-      "role": "system",
-      "content": "Current SSH terminal manager state ... tab_id=tab_7f3a | connected | pinned | cwd=/root"
-    },
-    {
-      "role": "system",
-      "content": "Current task plan (maintained by you via update_plan):\n1. [>] 重启 nginx 服务\n   verify: `systemctl is-active nginx` → expect output matching /^active/\n2. [ ] 用独立检查确认 nginx 在跑\n3. [ ] 向用户报告结果\n\nKeep working through the remaining steps. Call update_plan again as each one completes; do NOT wait for the user to tell you to continue.\nThe app checks each verify line against the commands you actually ran, and will not let the turn end while one is unproven."
+      "role": "user",
+      "content": "[Injected by the app, not typed by the user: live state for THIS turn. Read it, do not reply to it.]\n\nCurrent SSH terminal manager state ... tab_id=tab_7f3a | connected | pinned | cwd=/root\n\nCurrent task plan (maintained by you via update_plan):\n1. [>] 重启 nginx 服务\n   verify: `systemctl is-active nginx` → expect output matching /^active/\n2. [ ] 用独立检查确认 nginx 在跑\n3. [ ] 向用户报告结果\n\nKeep working through the remaining steps. Call update_plan again as each one completes; do NOT wait for the user to tell you to continue.\nThe app checks each verify line against the commands you actually ran, and will not let the turn end while one is unproven."
     }
   ]
 }
@@ -635,7 +661,7 @@ output:
 
 #### 步骤 15 — Agent → LLM（Turn 3 Request）
 
-**说明：** 在 Turn 2 历史上追加 restart 的 assistant + tool 结果。后缀出现 **Task execution history**，避免模型再重启一遍。计划仍显示步骤 1 为 in_progress。
+**说明：** 在 Turn 2 历史上追加 restart 的 assistant + tool 结果。末尾注入 `user` 出现 **Task execution history**，避免模型再重启一遍。计划仍显示步骤 1 为 in_progress。
 
 **Request（相对 Turn 2 的增量）：**
 
@@ -667,16 +693,8 @@ output:
       "content": "status: success\nexit_code: 0\ncwd: /root\nwait: 1.2s\noutput:\n(no output captured)"
     },
     {
-      "role": "system",
-      "content": "Open terminal tabs:\n- tab_id=tab_7f3a | root@prod.example.com:22 | connected | pinned | cwd=/root | last=systemctl restart nginx (exit 0)"
-    },
-    {
-      "role": "system",
-      "content": "Task execution history (actions ALREADY performed earlier in this session):\n1. exec [/root] systemctl restart nginx -> exit 0 | (no output captured)"
-    },
-    {
-      "role": "system",
-      "content": "Current task plan ...\n1. [>] 重启 nginx 服务\n2. [ ] 用独立检查确认 nginx 在跑\n3. [ ] 向用户报告结果"
+      "role": "user",
+      "content": "[Injected by the app, not typed by the user: live state for THIS turn. Read it, do not reply to it.]\n\nOpen terminal tabs:\n- tab_id=tab_7f3a | root@prod.example.com:22 | connected | pinned | cwd=/root | last=systemctl restart nginx (exit 0)\n\nTask execution history (actions ALREADY performed earlier in this session):\n1. exec [/root] systemctl restart nginx -> exit 0 | (no output captured)\n\nCurrent task plan ...\n1. [>] 重启 nginx 服务\n2. [ ] 用独立检查确认 nginx 在跑\n3. [ ] 向用户报告结果"
     }
   ]
 }
@@ -864,8 +882,8 @@ Plan updated (1/3 completed).
       "content": "Plan updated (1/3 completed).\n1. [x] 重启 nginx 服务\n2. [>] 用独立检查确认 nginx 在跑\n3. [ ] 向用户报告结果"
     },
     {
-      "role": "system",
-      "content": "Task execution history:\n1. exec [/root] systemctl restart nginx -> exit 0\n2. exec [/root] systemctl is-active nginx -> exit 0 | active"
+      "role": "user",
+      "content": "[Injected by the app, not typed by the user: live state for THIS turn. Read it, do not reply to it.]\n\nTask execution history:\n1. exec [/root] systemctl restart nginx -> exit 0\n2. exec [/root] systemctl is-active nginx -> exit 0 | active"
     }
   ]
 }
@@ -959,6 +977,8 @@ systemctl restart nginx
 > `"restart nginx on prod and tell me if it worked"` → exec_command（你需要结果）
 > `"how do I restart nginx?"` → a bash card
 
+Agent 模式下建议用 bash 卡片、不调用工具。Execute 模式下若用户要自己看着跑，才走 `run_in_terminal`，聊天侧仍然不要复述终端输出。
+
 ---
 
 ## 7. 失败时会多出来的东西（简表）
@@ -969,6 +989,8 @@ systemctl restart nginx
 | 命令不存在 exit 127      | `verify: Command not found (exit 127)`                           | 换工具或提示安装                           |
 | SSH 中途断开             | tool**error**（不是假成功的空 output）；`retryable`        | 应用自动重试一次；仍失败则让模型请用户重连 |
 | 用户点拒绝               | `User rejected this action.`                                     | 模型改方案或询问，不重发同一调用           |
+| Plan 拒绝变更            | `copilot.plan.denied`（请先完成计划，再点「按此执行」）            | 不弹审批；模型应只写计划或只读探查         |
+| Execute 拒绝后台通道     | `copilot.execute.denied`（请用 `run_in_terminal`）               | 不弹审批；命令须落在用户看着的终端里       |
 | 连续两次相同命令相同输出 | 第二次之后注入 Reflection 用户消息                                 | 模型必须换诊断路径                         |
 | patch 打不上             | 逐 hunk 退回精确替换；仍失败则回 `Hunk N does not match ...` 并附上它期待的上下文 | 让模型重读文件按现状重建 patch，或改用 `edit_file` |
 | 想收尾但 verify 没跑     | 撤掉这一轮回答，注入 checkpoint 列出未验证的步骤及其校验命令       | 模型先去跑校验；校验失败则报告失败而非成功 |
@@ -985,8 +1007,10 @@ systemctl restart nginx
 | 环节                       | 文件                                      |
 | -------------------------- | ----------------------------------------- |
 | 初始化 prompt 拼装         | `src/shared/prompts/copilot.ts`（导出脚本 `scripts/dumpPrompt.ts`） |
-| 发往 LLM 的 HTTP           | `src/main/ai/provider.ts` → `chat()` |
+| 子 Agent 短 prompt         | `src/shared/prompts/subAgent.ts` |
+| 发往 LLM 的 HTTP           | `src/main/ai/provider.ts` → `chat()` / `agentTurn()` |
 | Agent 循环 / 审批续跑      | `src/renderer/lib/aiService.ts`         |
+| 相位机                     | `src/renderer/lib/agentPhase.ts`        |
 | 工具执行（含 exec 结果头） | `src/renderer/lib/aiTools.ts`           |
 | 独立 SSH 通道跑命令        | `src/renderer/lib/agentExec.ts`         |
 | 退出码 → status/verify    | `src/shared/verify.ts`                  |
@@ -1000,9 +1024,15 @@ systemctl restart nginx
 | 命令证据 / verify checkpoint 寿命 | `src/renderer/lib/taskEvidence.ts` |
 | 循环内摘要 prompt          | `src/shared/prompts/history.ts`         |
 | 文件读写 / 补丁 / 备份     | `src/renderer/lib/fileTools.ts`         |
+| 文件检查点 / Restore       | `src/renderer/lib/fileCheckpoints.ts`   |
 | 统一 diff 解析与应用       | `src/shared/unifiedPatch.ts`            |
 | 远端 git 只读 / 提交       | `src/renderer/lib/gitTools.ts`          |
 | 主机记忆（AGENTS.md）      | `src/renderer/lib/hostMemory.ts`        |
+| 隔离子 Agent               | `src/renderer/lib/subAgent.ts`          |
+| 按主机写互斥               | `src/renderer/lib/hostLock.ts`          |
+| 工具结果字符预算           | `src/renderer/lib/toolBudget.ts`        |
+| 斜杠命令                   | `src/renderer/lib/slashCommands.ts`     |
+| 模式选择 UI                | `src/renderer/components/ai/ModeSelect.tsx` |
 
 ---
 
@@ -1013,15 +1043,15 @@ systemctl restart nginx
 两条已经拍板的北极星：
 
 - **产品定位**：运维 Agent 为主，但要能在远程主机上改配置 / 代码仓库（可读 diff、可回滚、可复用 skill）。不做通用 IDE、浏览器 Agent 或 Computer Use。
-- **自主度上限**：Cursor 式 —— 显式 Plan 模式 + 可信任命令自动跑 + 本会话 Allowlist；破坏性命令与跨机变更默认仍要批。不引入「跳过全部权限」档。
+- **自主度上限**：Cursor 式 —— 显式 Plan / Agent / Execute 三模式 + 可信任命令自动跑 + 本会话 Allowlist；破坏性命令与跨机变更默认仍要批。不引入「跳过全部权限」档。
 
-与第 4 节循环的关系：演进是在现有 ReAct + 审批 + 计划回注 + 执行账本上**加模式开关、检查点、主机记忆和可选子 Agent**，而不是另写一套 agent runtime。
+与第 4 节循环的关系：演进是在现有 ReAct + 审批 + 计划回注 + 执行账本上**加模式开关、检查点、主机记忆和可选子 Agent**，而不是另写一套 agent runtime。Plan / Agent / Execute 已落地（见第 1 节）。
 
 ### 9.1 已经很强、不要推倒重来
 
 | 层 | 现状（保留） | 关键代码 |
 | --- | --- | --- |
-| 循环 | 事件驱动 ReAct；显式 phase；Loop Guard（25 步 / 重复无进展 / token 预算）；空回复 nudge；一次性 Reflection | `agentPhase.ts`、`aiService.ts`、`loopGuard.ts` |
+| 循环 | 事件驱动 ReAct；显式 phase；Loop Guard（25 步 / 重复无进展 / token 预算）；空回复 nudge；一次性 Reflection；Plan / Agent / Execute 只换工具面与 deny 策略 | `agentPhase.ts`、`aiService.ts`、`loopGuard.ts`、`ModeSelect.tsx` |
 | 上下文 | prompt 按本轮 tools 裁剪且整任务字节不变（prefix cache）；只读并行、写操作串行；loop 内结构保持的 compact；计划与账本每轮回注；scrollback 按需检索而不整段注入 | `copilot.ts`、`conversationCompact.ts`、`planTool.ts`、`taskMemory.ts`、`scrollbackSearch.ts` |
 | 安全 | 三档自主度 + 只读命令白名单 + 会话 Allowlist；`edit_file` 精确匹配；审批卡 Diff 预览 | `toolPolicy.ts`、`FileDiffPreview.tsx` |
 | 文件 | 写前 `.bak.<timestamp>` 备份 | `fileTools.ts` |
@@ -1030,11 +1060,7 @@ systemctl restart nginx
 
 ### 9.2 缺口（相对对标，以及代码里的半成品）
 
-对标 Cursor Composer、Claude Code、Codex CLI：
-
-| 能力 | 现状 | 对标 |
-| --- | --- | --- |
-P0、P1 与 P2 的非 MCP 部分已经落地，下面只留仍然存在的缺口：
+对标 Cursor Composer、Claude Code、Codex CLI。P0、P1 与 P2 的非 MCP 部分已经落地，下面只留仍然存在的缺口：
 
 | 能力 | 现状 | 对标 |
 | --- | --- | --- |
@@ -1043,7 +1069,7 @@ P0、P1 与 P2 的非 MCP 部分已经落地，下面只留仍然存在的缺口
 | 评测 | 策略 / prompt / patch / verify / 子 Agent / scrollback 有单测，请求失败恢复（超窗 500 → 压缩重试而非终止）有轨迹测试，其余轨迹仍缺 | SWE-bench 风格：edit → 语法检查 → 独立确认 |
 | 记忆写回 | `AGENTS.md` 能读能写，但「从被拒绝的操作里提炼约定」仍靠人开口 | Reflexion：失败轨迹沉淀为候选规则 |
 
-已经补掉的（P0 / P1 / P2）：Plan / Agent 模式切换、`.bak` 检查点与一键 Restore、`@path`、Slash 命令、队列与待批 UX（P0）；`apply_patch`、`git_read` / `git_commit`、远程 `AGENTS.md` 主机记忆、循环内 LLM 摘要、计划 verify 断言的 harness 拦截（P1）；per-chat busy 与按主机写互斥、`delegate_to_host` 隔离子 Agent、`search_terminal` scrollback 检索（P2）。
+已经补掉的（P0 / P1 / P2）：Plan / Agent / **Execute** 模式切换（「按此执行」切到 Execute，见第 1 节）、`.bak` 检查点与一键 Restore、`@path`、Slash 命令（含 `/execute`）、队列与待批 UX（P0）；`apply_patch`、`git_read` / `git_commit`、远程 `AGENTS.md` 主机记忆、循环内 LLM 摘要、计划 verify 断言的 harness 拦截（P1）；per-chat busy 与按主机写互斥、`delegate_to_host` 隔离子 Agent（Execute 不发此工具，见第 1 节）、`search_terminal` scrollback 检索（P2）。
 
 仍然要小心的两处摩擦，没有代码缺陷但会咬用户：
 
@@ -1056,20 +1082,26 @@ P0、P1 与 P2 的非 MCP 部分已经落地，下面只留仍然存在的缺口
 
 ```mermaid
 flowchart TD
-  User["用户"] --> Mode{"Plan 或 Agent"}
+  User["用户"] --> Mode{"Plan / Agent / Execute"}
   Mode -->|"Plan"| PlanLoop["只读工具加 update_plan"]
   PlanLoop --> Review["用户审计划"]
-  Review -->|"Implement"| AgentLoop["现有 ReAct 循环"]
-  Mode -->|"Agent"| AgentLoop
+  Review -->|"按此执行"| ExecLoop["Execute: run_in_terminal 可见 PTY"]
+  Mode -->|"Agent"| AgentLoop["现有 ReAct: exec_command 后台通道"]
+  Mode -->|"Execute"| ExecLoop
   AgentLoop --> Tools["工具面"]
+  ExecLoop --> Tools
   Tools --> HostA["主机 A 的 SFTP 与 exec"]
   Tools --> HostB["子 Agent 跑主机 B"]
   AgentLoop --> Mem["分层记忆"]
+  ExecLoop --> Mem
   Mem --> Global["user_rules"]
   Mem --> HostMd["远程 AGENTS.md"]
   Mem --> Task["plan 与 taskMemory"]
   AgentLoop --> Ckpt["检查点 可回滚编辑"]
+  ExecLoop --> Ckpt
 ```
+
+Execute 模式不发 `delegate_to_host`（用户要看着每条命令落在自己终端里，子 Agent 正好相反）。Agent 才走后台 `exec_command` 与可选子 Agent。工具面按档位与 intent 门控见第 1 节。
 
 分层记忆（对标 Claude Code / MemGPT，但绑定的是 **SSH 主机**，不是本地 git 仓库）：
 
@@ -1078,11 +1110,11 @@ flowchart TD
 3. **每任务** `update_plan`（含 verify 断言）+ Task execution history（已有）。
 4. **会话 Allowlist**（已有）：Plan 通过或用户点「本会话总允许」后更好暴露，不跨 app 重启。
 
-工具面继续按档位与 intent 门控（第 1 节）：fast 不堆 MCP / git 写 / 子 Agent schema。
+工具面继续按档位、模式与 intent 门控（第 1 节）：fast 不堆 MCP / git 写 / 子 Agent schema。
 
 ### 9.4 对标与可借鉴的研究
 
-- **Cursor**：Plan / Agent 切换、`@` 上下文、会话 Allowlist、检查点。自主度模型直接采用，不采用「跳过权限」。
+- **Cursor**：Plan / Agent / Execute 切换、`@` 上下文、会话 Allowlist、检查点。自主度模型直接采用，不采用「跳过权限」。
 - **Claude Code**：`CLAUDE.md` 映射为远程 `AGENTS.md`；Skills 渐进披露已有，补「任务匹配时先 `read_skill`」的评测；`Task` 子 Agent 只用于多机并行诊断，摘要交回，避免三台机的 journal 撑爆 32k。
 - **Codex**：`apply_patch`（unified diff）比反复 `old_string` 更稳；沙箱思路映射为「独立 exec 通道 + 审批」，不引入完整 OS sandbox。
 - **ReAct**（已实现）：第 4–5 节的 think → tool → observe → verify。
@@ -1094,14 +1126,14 @@ flowchart TD
 
 #### P0 — 模式、回滚与侧栏诚实度（✅ 已完成）
 
-目标：先补齐 Cursor 侧栏体验，改动面小，不新增 MCP / 子 Agent。
+目标：先补齐 Cursor 侧栏体验，改动面小，不新增 MCP / 子 Agent。Plan / Agent / Execute 三模式与「按此执行」切 Execute 已在后续迭代补进同一套循环。
 
 | 项 | 做法 | 主要模块 | 验收 |
 | --- | --- | --- | --- |
-| Plan / Agent 切换 | Plan 档只发读工具 + `update_plan`，禁止变更类 `exec_command`、`edit_file` / `write_file`、`open_ssh` 等；用户点「按此执行」再开现有循环 | `aiService.ts` 工具面门控、`SidePanel` | Plan 下重启 nginx 只出计划卡片，不打到主机 |
+| Plan / Agent / Execute | Plan 档只发读工具 + `update_plan` + 只读 `exec_command` + `delegate_to_host`；禁止变更类命令。用户点「按此执行」切到 **Execute**（可见 PTY），不是 Agent | `aiService.ts` 工具面门控、`ModeSelect`、`PlanCard` | Plan 下重启 nginx 只出计划卡片；「按此执行」后命令进用户终端 |
 | 检查点 | 把已有 `.bak.*` 收成会话「编辑清单」；计划卡 / 审批卡提供 Restore；Stop 不留下未登记的写 | `fileTools.ts`、ToolCallCard | 改 `/etc/nginx.conf` 后可一键还原 bak |
 | `@path` | Composer 可提及钉住主机上的文件，按 `read_file` 预算注入，而不是再加终端行数 | `ComposerInput`、`pinnedTerminal.ts` | `@/etc/nginx.conf` 进入下一轮 context |
-| Slash | `/plan` `/compact` `/skill` 映射到模式切换、已有 compact、`read_skill` | `ComposerInput` | 输入 `/` 出现菜单 |
+| Slash | `/plan` `/agent` `/execute` `/compact` `/skill` 映射到模式切换、已有 compact、`read_skill` | `slashCommands.ts`、`ComposerInput` | 输入 `/` 出现菜单 |
 | 队列 | 要么 busy 时仍可排队并可视化，要么删掉 `queuedPrompts` 和「已排队」文案 | `SidePanel`、`aiService.ts` | 文案与行为一致 |
 | 待批 UX | 待批时保留批准入口（不要只剩 Stop）；新消息 supersede 待批要有明确提示 | `SidePanel`、`toolApproval.ts` | busy+pending 仍能点批准 |
 
@@ -1149,7 +1181,7 @@ flowchart TD
 
 ### 9.7 建议落地顺序
 
-P0、P1 与 P2（MCP 除外）已完成。P1 的 verify 断言把第 5 节那种「重启必须独立检查」从 prompt 软约束变成了 harness 可测的行为，P2 又把「只读」「单主机」「会停」三条同样做成了代码里的硬边界而不是 prompt 里的叮嘱——这两处正好是 P3 轨迹评测最需要的那种可断言行为。
+P0、P1 与 P2（MCP 除外）已完成，包括 Execute 模式（命令落在用户看着的终端）和「按此执行」切到 Execute。P1 的 verify 断言把第 5 节那种「重启必须独立检查」从 prompt 软约束变成了 harness 可测的行为，P2 又把「只读」「单主机」「会停」三条同样做成了代码里的硬边界而不是 prompt 里的叮嘱——这两处正好是 P3 轨迹评测最需要的那种可断言行为。
 
-接下来：P3 建议先做「拒绝 / 失败提炼成候选 `AGENTS.md` 段落」，读写主机记忆的通路已经通了；轨迹评测集现在也更值得做，因为 `runSubAgent` 的执行器是注入的、`searchScrollback` 是纯函数，两者都能在不调真实 LLM 的情况下跑固定轨迹。MCP 仍然放最后：它是唯一一项会让工具面无上限增长的，而门控策略（按档位 + intent）必须先在现有工具上站稳。
+接下来：P3 建议先做「拒绝 / 失败提炼成候选 `AGENTS.md` 段落」，读写主机记忆的通路已经通了；轨迹评测集现在也更值得做，因为 `runSubAgent` 的执行器是注入的、`searchScrollback` 是纯函数，两者都能在不调真实 LLM 的情况下跑固定轨迹。MCP 仍然放最后：它是唯一一项会让工具面无上限增长的，而门控策略（按档位 + intent + 模式）必须先在现有工具上站稳。不把 Execute 再列为待做。
 
