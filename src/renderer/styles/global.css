@@ -5138,6 +5138,80 @@ select:focus {
   --tool-accent: #c39bff;
 }
 
+.tool-call-card.tool-cat-agent {
+  --tool-accent: #5fd0b8;
+}
+
+/* Live sub-agent progress on a delegate_to_host card. */
+.tool-call-body--subagent {
+  border-top: 1px solid var(--line);
+  padding: 7px 10px 8px;
+}
+
+.tool-subagent-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.tool-subagent-host {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.tool-subagent-meta {
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.tool-subagent-toggle {
+  margin-left: auto;
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.tool-subagent-toggle:hover {
+  color: var(--text);
+}
+
+.tool-subagent-latest,
+.tool-subagent-list code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+.tool-subagent-latest {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.tool-subagent-list {
+  margin: 5px 0 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.tool-subagent-list code {
+  word-break: break-all;
+}
+
 /* Diff preview for pending edit_file / write_file calls. */
 .tool-call-body--diff {
   border-top: 1px solid var(--line);
@@ -5743,6 +5817,41 @@ select:focus {
 
 .plan-item--cancelled .plan-item-text {
   text-decoration: line-through;
+}
+
+/*
+ * Steps of one parallel group are tied together by a rail down their left edge,
+ * rather than by indenting them: the numbering has to keep matching the plan the
+ * model sent, and an indent reads as "sub-step of the one above".
+ */
+.plan-item--parallel {
+  position: relative;
+  padding-left: 6px;
+}
+
+.plan-item--parallel::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--signal) 40%, transparent);
+}
+
+.plan-item-parallel {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  border: 1px solid color-mix(in srgb, var(--signal) 30%, var(--line));
+  background: color-mix(in srgb, var(--signal) 8%, transparent);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 15px;
+  color: var(--text-dim);
+  vertical-align: 1px;
 }
 
 .plan-item-verify {

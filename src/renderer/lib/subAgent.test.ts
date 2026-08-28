@@ -14,6 +14,9 @@ vi.mock('./terminalObservation', () => ({
 vi.mock('./debugLog', () => ({ debugLog: () => {} }))
 
 const { MAX_SUB_AGENT_STEPS, formatSubAgentResult, runSubAgent } = await import('./subAgent')
+type SubAgentProgress = Parameters<
+  NonNullable<Parameters<typeof runSubAgent>[0]['onProgress']>
+>[0]
 
 function session(id: string): TerminalSession {
   return {
@@ -203,7 +206,7 @@ describe('runSubAgent', () => {
     expect(outcome.budgetExhausted).toBe(true)
   })
 
-  it('surfaces a provider error as a failed outcome', async () => {
+  it('surfaces a provider error as a failed outcome, without retrying a fatal one', async () => {
     turns = [{ error: 'no API key configured' }]
     const outcome = await runSubAgent({
       terminalTabId: 't1',
@@ -211,6 +214,65 @@ describe('runSubAgent', () => {
       execute: recordingExecutor([])
     })
     expect(outcome).toMatchObject({ ok: false, error: 'no API key configured' })
+    // A missing key will still be missing in two seconds; retrying only delays
+    // the message the user needs.
+    expect(requests).toHaveLength(1)
+  })
+
+  it('retries a transient failure rather than discarding the investigation', async () => {
+    // With sub-agents sharing the parent's model and several running at once, a
+    // 429 is routine. Reporting "No report" for it is indistinguishable, from
+    // the parent's side, from a host that had nothing to say.
+    vi.useFakeTimers()
+    try {
+      turns = [{ error: 'HTTP 429 rate limit exceeded' }, { content: 'nginx is active' }]
+      const running = runSubAgent({
+        terminalTabId: 't1',
+        task: 'is nginx up',
+        execute: recordingExecutor([])
+      })
+      await vi.runAllTimersAsync()
+      await expect(running).resolves.toMatchObject({ ok: true, report: 'nginx is active' })
+      expect(requests).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops retrying a transient failure once its budget is spent', async () => {
+    vi.useFakeTimers()
+    try {
+      turns = Array.from({ length: 4 }, () => ({ error: '503 service unavailable' }))
+      const running = runSubAgent({
+        terminalTabId: 't1',
+        task: 'x',
+        execute: recordingExecutor([])
+      })
+      await vi.runAllTimersAsync()
+      const outcome = await running
+      expect(outcome.ok).toBe(false)
+      // The initial attempt plus MAX_TRANSIENT_RETRIES, and no more.
+      expect(requests).toHaveLength(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('publishes progress as it works, so its card is not an anonymous spinner', async () => {
+    turns = [call('exec_command', { command: 'ss -ltnp' }), { content: 'java holds 8080' }]
+    const updates: SubAgentProgress[] = []
+
+    await runSubAgent({
+      terminalTabId: 't1',
+      task: 'who holds 8080',
+      execute: recordingExecutor([]),
+      onProgress: (p) => updates.push({ ...p, commands: [...p.commands] })
+    })
+
+    expect(updates[0]).toEqual({ step: 1, maxSteps: MAX_SUB_AGENT_STEPS, commands: [] })
+    // Published BEFORE the command runs: showing it is how the wait is explained.
+    expect(updates.some((u) => u.commands.includes('ss -ltnp'))).toBe(true)
+    expect(updates.at(-1)?.step).toBe(2)
   })
 
   it('stops on abort and cancels the child command', async () => {

@@ -438,6 +438,9 @@ const zh = {
   'tool.reject': '拒绝',
   'tool.running': '执行中…',
   'tool.runningWithWait': '执行中… 已等待 {elapsed}',
+  'tool.subAgent.step': '第 {step}/{max} 步',
+  'tool.subAgent.queued': '排队中（每台主机同时只跑一个子 Agent）',
+  'tool.subAgent.commands': '{count} 条命令',
   'tool.done': '已完成',
   'tool.rejected': '已拒绝',
   'tool.error': '出错',
@@ -724,8 +727,13 @@ const zh = {
     '当前为 Plan 模式，已拒绝会改动主机的操作。请先完成计划，再点「按此执行」。',
   'copilot.plan.verify': '验证：',
   'copilot.plan.verifyHint': '该步骤声明的独立校验命令；未通过前不允许结束任务。',
+  'copilot.plan.parallel': '{count} 步并行',
+  'copilot.plan.parallelHint': '这些步骤互不依赖，会同时推进。',
+  'copilot.plan.parallelRunning': '{count} 步并行中',
   'copilot.execute.denied':
     '当前为 Execute 模式，已拒绝后台通道命令。请用可见终端中的 run_in_terminal。',
+  'copilot.execute.delegateDenied':
+    '当前为 Execute 模式，已拒绝委派子 Agent：该模式要求每条命令都落在你看着的终端里。请用 run_in_terminal 逐台查，或切到 Agent 模式再委派。',
   'copilot.restore': 'Restore',
   'copilot.restore.ok': '已还原 {path}',
   'copilot.restore.fail': '还原失败：{error}',
@@ -1204,6 +1212,9 @@ const en: Record<keyof typeof zh, string> = {
   'tool.reject': 'Reject',
   'tool.running': 'Running…',
   'tool.runningWithWait': 'Running… waited {elapsed}',
+  'tool.subAgent.step': 'Step {step}/{max}',
+  'tool.subAgent.queued': 'Queued (one sub-agent per host at a time)',
+  'tool.subAgent.commands': '{count} commands',
   'tool.done': 'Done',
   'tool.rejected': 'Rejected',
   'tool.error': 'Error',
@@ -1510,8 +1521,13 @@ const en: Record<keyof typeof zh, string> = {
   'copilot.plan.verify': 'Verify:',
   'copilot.plan.verifyHint':
     'The independent check this step declared; the task cannot finish until it passes.',
+  'copilot.plan.parallel': '{count} in parallel',
+  'copilot.plan.parallelHint': 'These steps do not depend on each other and run together.',
+  'copilot.plan.parallelRunning': '{count} steps running in parallel',
   'copilot.execute.denied':
     'Execute mode blocked a background-channel command. Use run_in_terminal in the visible terminal.',
+  'copilot.execute.delegateDenied':
+    'Execute mode blocked a delegated sub-agent: this mode requires every command to land in the terminal you are watching. Inspect each host with run_in_terminal, or switch to Agent mode to delegate.',
   'copilot.restore': 'Restore',
   'copilot.restore.ok': 'Restored {path}',
   'copilot.restore.fail': 'Restore failed: {error}',

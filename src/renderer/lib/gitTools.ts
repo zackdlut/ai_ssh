@@ -99,23 +99,27 @@ function buildReadCommand(
   }
 }
 
-/** Cap the returned text against the live per-result budget. */
-function clampResult(text: string): string {
-  const cap = Math.min(GIT_MAX_RESULT_CHARS, Math.max(1000, toolResultCharBudget()))
+/** Cap the returned text against the calling turn's per-result budget. */
+function clampResult(text: string, budgetChars?: number): string {
+  const cap = Math.min(
+    GIT_MAX_RESULT_CHARS,
+    Math.max(1000, toolResultCharBudget(budgetChars))
+  )
   if (text.length <= cap) return text
   return `${text.slice(0, cap)}\n… (truncated at ${cap} characters; narrow the request with path or limit)`
 }
 
 function formatResult(
   command: string,
-  res: { output: string; exitCode: number | null; cwd: string | null }
+  res: { output: string; exitCode: number | null; cwd: string | null },
+  budgetChars?: number
 ): string {
   const body = res.output.trim()
   return [
     `command: ${command}`,
     `exit_code: ${res.exitCode ?? 'unknown'}`,
     'output:',
-    body ? clampResult(body) : '(no output)'
+    body ? clampResult(body, budgetChars) : '(no output)'
   ].join('\n')
 }
 
@@ -126,7 +130,10 @@ function formatResult(
  * be steered into a write. That is a property of the code, not of a regex over
  * a model-authored string — which is why the approval policy can trust it.
  */
-export async function gitRead(args: Record<string, unknown>): Promise<ToolResult> {
+export async function gitRead(
+  args: Record<string, unknown>,
+  ctx?: { resultCharBudget?: number }
+): Promise<ToolResult> {
   const resolved = resolveTab(str(args.tab_id))
   if ('error' in resolved) return { ok: false, error: resolved.error }
 
@@ -164,7 +171,7 @@ export async function gitRead(args: Record<string, unknown>): Promise<ToolResult
   // A non-zero exit is reported as a successful CALL with a failing command:
   // `git diff` in a directory that is not a repo is information the model needs
   // to act on, not a tool malfunction.
-  return { ok: true, result: formatResult(command, res) }
+  return { ok: true, result: formatResult(command, res, ctx?.resultCharBudget) }
 }
 
 /**

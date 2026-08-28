@@ -1,5 +1,5 @@
 /**
- * Character budget for a single tool result, published by the agent loop.
+ * Character budget for a single tool result.
  *
  * The loop is the only place that knows the live context window and what the
  * rest of the payload costs, but the tools are where output is produced. A tool
@@ -7,18 +7,21 @@
  * accurate continuation offset, which loses nothing; the loop applies the same
  * bound as a blunt head/tail cut for tools that cannot, which does.
  *
- * Deliberately a single value rather than per-tab: it only steers how a tool
- * sizes its own output, and the loop's cap remains the actual invariant, so a
- * stale value from another tab's turn costs at most one extra page.
+ * This used to be one module-level value that the loop wrote before each turn.
+ * That was defensible while turns were effectively serial — a stale value from
+ * another tab cost at most one extra page. It stops being defensible once
+ * sub-agents investigate several hosts at once, because each of those carries a
+ * much smaller budget of its own: with a shared slot, whichever turn started
+ * most recently silently decides how much every other one's `read_file`
+ * returns. So the budget now travels with the call, and this default applies
+ * only to a caller that supplies none.
  */
-const DEFAULT_RESULT_CHARS = 4000
+export const DEFAULT_TOOL_RESULT_CHARS = 4000
 
-let resultCharBudget = DEFAULT_RESULT_CHARS
-
-export function setToolResultCharBudget(chars: number): void {
-  if (Number.isFinite(chars) && chars > 0) resultCharBudget = Math.floor(chars)
-}
-
-export function toolResultCharBudget(): number {
-  return resultCharBudget
+/** Resolve a caller-supplied budget, falling back to the default. */
+export function toolResultCharBudget(requested?: number): number {
+  if (requested !== undefined && Number.isFinite(requested) && requested > 0) {
+    return Math.floor(requested)
+  }
+  return DEFAULT_TOOL_RESULT_CHARS
 }

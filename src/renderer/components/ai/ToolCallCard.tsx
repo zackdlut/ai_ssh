@@ -11,7 +11,7 @@ import { matchCheckpoint, parseBackupPath } from '../../lib/fileCheckpoints'
 import AppSettingsToolPanel from './AppSettingsToolPanel'
 import FileDiffPreview from './FileDiffPreview'
 import LinkifiedText from './LinkifiedText'
-import type { PlanItemStatus, ToolCallView } from '../../../shared/types'
+import type { PlanItemStatus, SubAgentProgressView, ToolCallView } from '../../../shared/types'
 
 interface Props {
   tabId: string
@@ -21,7 +21,15 @@ interface Props {
 
 const SECRET_KEYS = new Set(['password', 'privateKey', 'passphrase', 'apiKey'])
 
-type ToolCategory = 'connection' | 'config' | 'command' | 'settings' | 'read' | 'file' | 'plan'
+type ToolCategory =
+  | 'connection'
+  | 'config'
+  | 'command'
+  | 'settings'
+  | 'read'
+  | 'file'
+  | 'plan'
+  | 'agent'
 
 const TOOL_CATEGORY: Record<string, ToolCategory> = {
   open_ssh: 'connection',
@@ -48,7 +56,11 @@ const TOOL_CATEGORY: Record<string, ToolCategory> = {
   git_commit: 'command',
   grep: 'read',
   glob: 'read',
-  update_plan: 'plan'
+  update_plan: 'plan',
+  // Its own category rather than 'read': a delegation is the longest call the
+  // app makes and it is the one card the user has to be able to tell apart from
+  // its siblings when three hosts are surveyed at once.
+  delegate_to_host: 'agent'
 }
 
 /** Tools whose pending card shows a live diff of the proposed change. */
@@ -164,7 +176,86 @@ function ToolGlyph({ category }: { category: ToolCategory }): JSX.Element {
           />
         </svg>
       )}
+      {/* One node handing work to two others: the shape of a delegation. */}
+      {category === 'agent' && (
+        <svg viewBox="0 0 20 20" fill="none">
+          <circle cx="4.5" cy="10" r="2" stroke="currentColor" strokeWidth="1.4" />
+          <circle cx="15.5" cy="5" r="2" stroke="currentColor" strokeWidth="1.4" />
+          <circle cx="15.5" cy="15" r="2" stroke="currentColor" strokeWidth="1.4" />
+          <path
+            d="M6.4 9.1 13.6 5.6M6.4 10.9l7.2 3.5"
+            stroke="currentColor"
+            strokeWidth="1.4"
+            strokeLinecap="round"
+          />
+        </svg>
+      )}
     </span>
+  )
+}
+
+/**
+ * Live view of a delegated sub-agent: which host, how far through its budget,
+ * and the commands it has actually run.
+ *
+ * A delegation used to render as the same anonymous spinner as a directory
+ * listing while spending tens of seconds and a whole nested LLM loop. That is
+ * survivable for one, but the point of the tool is to survey several hosts at
+ * once — and then the user is watching identical spinners with no way to tell
+ * which machine is slow, which is already answering, and which has not started
+ * because the pool is full.
+ *
+ * The command list is collapsed by default: on a finished call the report below
+ * is the answer, and the commands are for when the user wants to know how it got
+ * there. It opens itself while the work is in flight, which is exactly when
+ * there is no report to read yet.
+ */
+function SubAgentPanel({ progress }: { progress: SubAgentProgressView }): JSX.Element {
+  const t = useT()
+  const running = !!progress.step && !progress.queued
+  const [open, setOpen] = useState(running)
+  const commands = progress.commands
+  const latest = commands[commands.length - 1]
+
+  return (
+    <div className="tool-subagent">
+      <div className="tool-subagent-head">
+        <span className="tool-subagent-host" title={progress.host}>
+          {progress.host}
+        </span>
+        <span className="tool-subagent-meta">
+          {progress.queued
+            ? t('tool.subAgent.queued')
+            : t('tool.subAgent.step', { step: progress.step, max: progress.maxSteps })}
+        </span>
+        {commands.length > 0 && (
+          <button
+            type="button"
+            className="tool-subagent-toggle"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+          >
+            {t('tool.subAgent.commands', { count: commands.length })}
+            <span aria-hidden>{open ? ' ▾' : ' ▸'}</span>
+          </button>
+        )}
+      </div>
+      {/* Closed, the newest command still shows: it is what the wait is FOR. */}
+      {!open && latest && (
+        <pre className="tool-subagent-latest">
+          <LinkifiedText text={latest} />
+        </pre>
+      )}
+      {open && commands.length > 0 && (
+        <ol className="tool-subagent-list">
+          {commands.map((cmd, i) => (
+            <li key={`${i}-${cmd}`}>
+              <code>{cmd}</code>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
   )
 }
 
@@ -716,18 +807,24 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
   const checkpoints = useAIStore((s) => s.chatTabs.find((t) => t.id === tabId)?.checkpoints)
   const pinnedTabId = useAIStore((s) => s.chatTabs.find((t) => t.id === tabId)?.pinnedTabId)
 
-  const statusLabel =
-    call.status === 'running' && isCommandTool && call.progressMs
-      ? t('tool.runningWithWait', { elapsed: formatCaptureElapsed(call.progressMs) })
-      : call.status === 'running'
-        ? t('tool.running')
-        : call.status === 'done'
-          ? t('tool.done')
-          : call.status === 'rejected'
-            ? t('tool.rejected')
-            : call.status === 'error'
-              ? t('tool.error')
-              : t('tool.pending')
+  const statusLabel = ((): string => {
+    if (call.status === 'running') {
+      if (isCommandTool && call.progressMs) {
+        return t('tool.runningWithWait', { elapsed: formatCaptureElapsed(call.progressMs) })
+      }
+      // A sub-agent's pill carries its own progress: "running" for a minute
+      // says nothing, while "step 3/6" says the budget is being spent.
+      if (call.subAgent?.queued) return t('tool.subAgent.queued')
+      if (call.subAgent?.step) {
+        return t('tool.subAgent.step', { step: call.subAgent.step, max: call.subAgent.maxSteps })
+      }
+      return t('tool.running')
+    }
+    if (call.status === 'done') return t('tool.done')
+    if (call.status === 'rejected') return t('tool.rejected')
+    if (call.status === 'error') return t('tool.error')
+    return t('tool.pending')
+  })()
 
   const isListTool =
     call.name === 'list_ssh_configs' ||
@@ -881,6 +978,12 @@ export default function ToolCallCard({ tabId, messageId, call }: Props): JSX.Ele
               )}
             </>
           )}
+        </div>
+      )}
+
+      {call.subAgent && (
+        <div className="tool-call-body tool-call-body--subagent">
+          <SubAgentPanel progress={call.subAgent} />
         </div>
       )}
 

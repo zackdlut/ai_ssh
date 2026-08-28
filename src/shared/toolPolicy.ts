@@ -164,6 +164,11 @@ export function decideToolCall(input: PolicyInput): ToolDecision {
 
   if (agentMode === 'plan') {
     if (isAutoApprovedTool(tool)) return 'auto'
+    // Surveying several hosts before proposing a plan is the read-only work
+    // this mode exists for, and PLAN_MODE_TOOLS advertises the tool for exactly
+    // that. Without this line it fell through to the catch-all deny below, so
+    // the model was shown a tool it could never successfully call.
+    if (tool === 'delegate_to_host') return 'auto'
     if (tool === 'exec_command' || tool === 'run_in_terminal') {
       const command = parseCommand(argsJson)
       if (command === null) return 'deny'
@@ -174,10 +179,25 @@ export function decideToolCall(input: PolicyInput): ToolDecision {
   }
 
   // Execute mode has no silent exec channel: a leftover exec_command is deny
-  // even if the session allowlist would otherwise auto-run it.
-  if (agentMode === 'execute' && tool === 'exec_command') return 'deny'
+  // even if the session allowlist would otherwise auto-run it. Delegation is
+  // refused for the mirror-image reason — the mode's premise is that the user
+  // watches every command land in their own terminal, and a sub-agent works on
+  // a private channel and reports a summary.
+  if (agentMode === 'execute' && (tool === 'exec_command' || tool === 'delegate_to_host')) {
+    return 'deny'
+  }
 
   if (isAutoApprovedTool(tool)) return 'auto'
+
+  // Delegation cannot change anything: the sub-agent's surface is read-only,
+  // its policy is Plan mode's, and its tab_id is rewritten on every child call.
+  // So approval here would be about COST, not risk — and cost is bounded much
+  // better by the step budget and the agent pool than by a user judging one
+  // card at a time. Left asking, the "one call per host, in parallel" fan-out
+  // the prompt asks for cost three clicks to authorize work that was already
+  // incapable of touching the hosts. Conservative still asks, because there the
+  // point is to see everything before it happens.
+  if (tool === 'delegate_to_host') return mode === 'conservative' ? 'ask' : 'auto'
 
   if (tool === 'exec_command' || tool === 'run_in_terminal') {
     const command = parseCommand(argsJson)

@@ -192,7 +192,8 @@ function execution(t: ToolSet): string {
     ? lines(
         'Plan (multi-step tasks only — deploy, diagnose, migrate, edit-then-verify): open with update_plan and 2-6 concrete steps, then update it as each lands. Single-step requests stay direct. The plan and the Task execution history are re-injected every turn: treat them as your memory of what remains, keep going until every step is resolved instead of asking the user to say "continue", and do not redo a step the history already records unless you need fresh state.',
         !!shell &&
-          `- Give every step that CHANGES state a \`verify\` block naming the INDEPENDENT check that proves it — \`systemctl is-active nginx\`, \`nginx -t\`, \`curl -fsS localhost/health\` — never the change command itself. The app matches each one against the commands you actually ran through ${shell} and will not let you finish while one is unproven, so declare a check you intend to run and then run it.`
+          `- Give every step that CHANGES state a \`verify\` block naming the INDEPENDENT check that proves it — \`systemctl is-active nginx\`, \`nginx -t\`, \`curl -fsS localhost/health\` — never the change command itself. The app matches each one against the commands you actually ran through ${shell} and will not let you finish while one is unproven, so declare a check you intend to run and then run it.`,
+        '- Steps with no reason to wait for each other — the same check on three hosts, independent read-only probes on one — take the SAME `group` number and may be in_progress together; emit their calls in one response so they actually do run together. Anything whose input is another step\'s output stays in a later group.'
       )
     : false
   const verify = shell
@@ -291,7 +292,7 @@ function toolRules(t: ToolSet): string {
         shell ? `re-running through ${shell} ` : 'a fresh command '
       }costs the host a command and answers about NOW, not about the moment the user is asking about.`,
     t.has('delegate_to_host') &&
-      'Several hosts. When the same question has to be answered on more than one OTHER host, emit one delegate_to_host per host in the SAME response rather than working through them yourself one at a time — they run in parallel and only their reports come back. Keep the host you are already on for yourself.'
+      'Several hosts. When the same question has to be answered on more than one OTHER host, emit one delegate_to_host per host in the SAME response rather than working through them yourself one at a time — they run in parallel and only their reports come back. One sub-agent per host: a second delegation to a machine already being investigated waits for the first, so send one call per HOST carrying everything you need from it, not one call per question. Keep the host you are already on for yourself.'
   )
 
   const folders = t.has('create_folder')

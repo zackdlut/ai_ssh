@@ -39,6 +39,7 @@ import { debugLog } from './debugLog'
 import {
   buildAITools,
   isAutoApprovedTool,
+  isParallelSafeTool,
   isDisplayTool,
   toolNamesFor,
   toolTierForProfile,
@@ -86,7 +87,6 @@ import { claimVerifyCheckpoint, recordTaskEvidence, taskEvidence } from './taskE
 import { unmetPlanSteps, unmetStepsPrompt } from '../../shared/planVerify'
 import { parseExecToolResult, parsedExitCode } from './execResult'
 import { buildHostMemoryMessage, loadHostMemory } from './hostMemory'
-import { setToolResultCharBudget } from './toolBudget'
 import { refreshCommandTimeoutMinutes } from './execCapture'
 import { transition, type AgentEvent, type AgentPhase } from './agentPhase'
 import { planRecovery, planTruncationRecovery } from './turnRecovery'
@@ -186,6 +186,13 @@ interface LoopState {
    * capped against the same number when they come back.
    */
   conversationBudget?: number
+  /**
+   * Per-result character cap for this turn's tool calls, derived from the
+   * budget above. Kept on the loop rather than in module state so a parent turn
+   * and the sub-agents it delegated to cannot resize each other's reads while
+   * running concurrently.
+   */
+  resultCharCap?: number
   /**
    * File bodies injected from @path on the opening send. Held for the task so
    * continuation turns still see what the user mentioned.
@@ -802,7 +809,7 @@ function startTurn(loop: LoopState, epilogue = false): void {
   const budget = squeezeBudget(available, loop.budgetSqueeze)
   if (budget > 0) {
     loop.conversationBudget = budget
-    setToolResultCharBudget(perResultCap(budget))
+    loop.resultCharCap = perResultCap(budget)
     const compacted = compactConversation(loop.conversation, budget)
     if (compacted.trimmed > 0 || compacted.dropped > 0 || compacted.condensed > 0) {
       loop.conversation = compacted.messages
@@ -950,10 +957,17 @@ async function runToolCall(
         chatTabId: tabId,
         pinnedTabId: chat?.pinnedTabId,
         execEvidence: taskEvidence(tabId),
+        resultCharBudget: loops.get(messageId)?.resultCharCap,
         onCaptureProgress:
           call.name === 'exec_command' || call.name === 'run_in_terminal'
             ? (elapsedMs) => {
                 ai.updateToolCall(tabId, messageId, callId, { progressMs: elapsedMs })
+              }
+            : undefined,
+        onSubAgentProgress:
+          call.name === 'delegate_to_host'
+            ? (subAgent) => {
+                ai.updateToolCall(tabId, messageId, callId, { subAgent })
               }
             : undefined,
         onAbortHandle: (abort) => {
@@ -1025,19 +1039,26 @@ async function runToolCall(
  * they cannot interfere with each other; anything that mutates runs one at a
  * time so two edits to the same file cannot interleave. The loop is advanced
  * once, after the whole batch settles, instead of once per call.
+ *
+ * The split is by EFFECT (`isParallelSafeTool`), not by whether the call needed
+ * approval. Those two questions used to share one answer, which quietly
+ * serialized every `delegate_to_host` in a turn — the one tool whose whole
+ * purpose is to survey several hosts at once, and which cannot write anything.
+ * How many of those actually run at a time is the agent pool's business, not
+ * this function's.
  */
 async function runAutoToolCalls(tabId: string, messageId: string, callIds: string[]): Promise<void> {
   const calls = findMessage(tabId, messageId)?.toolCalls ?? []
   const byId = new Map(calls.map((c) => [c.id, c]))
-  const readonly = callIds.filter((id) => isAutoApprovedTool(byId.get(id)?.name ?? ''))
-  const mutating = callIds.filter((id) => !readonly.includes(id))
+  const parallel = callIds.filter((id) => isParallelSafeTool(byId.get(id)?.name ?? ''))
+  const serial = callIds.filter((id) => !parallel.includes(id))
 
-  await Promise.all(readonly.map((id) => runToolCall(tabId, messageId, id, { deferContinue: true })))
-  for (let i = 0; i < mutating.length; i++) {
-    const out = await runToolCall(tabId, messageId, mutating[i], { deferContinue: true })
+  await Promise.all(parallel.map((id) => runToolCall(tabId, messageId, id, { deferContinue: true })))
+  for (let i = 0; i < serial.length; i++) {
+    const out = await runToolCall(tabId, messageId, serial[i], { deferContinue: true })
     if (!out.aborted) continue
     const cancelled = tNotice('copilot.interruptedCancel')
-    for (const restId of mutating.slice(i + 1)) {
+    for (const restId of serial.slice(i + 1)) {
       useAIStore.getState().updateToolCall(tabId, messageId, restId, {
         status: 'rejected',
         result: cancelled,
@@ -1699,7 +1720,11 @@ export function initAIService(): void {
       const denied = isPlanMode(tabId)
         ? tNotice('copilot.plan.denied')
         : chatAgentMode(tabId) === 'execute'
-          ? tNotice('copilot.execute.denied')
+          ? tNotice(
+              tc.name === 'delegate_to_host'
+                ? 'copilot.execute.delegateDenied'
+                : 'copilot.execute.denied'
+            )
           : 'Blocked by the current autonomy policy: this command is destructive.'
       ai.updateToolCall(tabId, messageId, tc.id, {
         status: 'rejected',

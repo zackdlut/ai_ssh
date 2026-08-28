@@ -7,6 +7,12 @@
  * later turns — so by step 8 the model no longer knew what step 2 had promised.
  * Making the plan a tool-maintained structure fixes all three: it is stored per
  * chat, re-injected verbatim every turn, and rendered as live progress.
+ *
+ * Steps may declare a parallel `group`. Read-only calls in one response already
+ * execute concurrently, so the plan was the only part of the system that
+ * insisted a three-host survey was three sequential steps — and since exactly
+ * one step could be in progress, every update had to nominate one host as "the"
+ * current one while the other two were running.
  */
 import { useAIStore } from '../store/aiStore'
 import type { PlanItem, PlanItemStatus, PlanStepVerify } from '../../shared/types'
@@ -22,6 +28,50 @@ const STATUSES: PlanItemStatus[] = ['pending', 'in_progress', 'completed', 'canc
 
 function isStatus(v: unknown): v is PlanItemStatus {
   return typeof v === 'string' && (STATUSES as string[]).includes(v)
+}
+
+/**
+ * Read the optional parallel group. Omitted means the step stands alone, which
+ * is the linear plan this tool started with.
+ *
+ * A bad value is rejected rather than dropped, for the same reason a bad verify
+ * block is: silently ignoring it would turn "these three run together" into
+ * three steps the harness then refuses to let run together, and the model would
+ * have no way to see why.
+ */
+function parseGroup(
+  raw: unknown,
+  index: number
+): { ok: true; group?: number } | { ok: false; error: string } {
+  if (raw === undefined || raw === null) return { ok: true }
+  if (!Number.isInteger(raw) || (raw as number) < 1) {
+    return {
+      ok: false,
+      error: `items[${index}].group must be a positive integer. Steps sharing one group number run together; omit it for a step that runs alone.`
+    }
+  }
+  return { ok: true, group: raw as number }
+}
+
+/**
+ * How many steps each group holds, so a group of one is not labelled parallel.
+ * Shared with the plan card: the rule for what counts as a parallel group
+ * should not be able to differ between what the model is told and what the user
+ * sees.
+ */
+export function planGroupSizes(items: readonly PlanItem[]): Map<number, number> {
+  const sizes = new Map<number, number>()
+  for (const item of items) {
+    if (item.group === undefined) continue
+    sizes.set(item.group, (sizes.get(item.group) ?? 0) + 1)
+  }
+  return sizes
+}
+
+/** Label for a step that shares its group with at least one sibling. */
+function groupLabel(item: PlanItem, sizes: Map<number, number>): string {
+  if (item.group === undefined) return ''
+  return (sizes.get(item.group) ?? 0) > 1 ? `  (parallel group ${item.group})` : ''
 }
 
 /**
@@ -156,7 +206,11 @@ export function updatePlan(
     if (!entry || typeof entry !== 'object') {
       return { ok: false, error: `items[${i}] is not an object.` }
     }
-    const { title, verify } = entry as { title?: unknown; verify?: unknown }
+    const { title, verify, group } = entry as {
+      title?: unknown
+      verify?: unknown
+      group?: unknown
+    }
     if (typeof title !== 'string' || !title.trim()) {
       return { ok: false, error: `items[${i}].title must be a non-empty string.` }
     }
@@ -169,19 +223,29 @@ export function updatePlan(
     }
     const parsedVerify = parseVerify(verify, i)
     if (!parsedVerify.ok) return { ok: false, error: parsedVerify.error }
+    const parsedGroup = parseGroup(group, i)
+    if (!parsedGroup.ok) return { ok: false, error: parsedGroup.error }
     items.push({
       id: `${i + 1}`,
       title: title.trim().slice(0, TITLE_MAX),
       status,
-      ...(parsedVerify.verify ? { verify: parsedVerify.verify } : {})
+      ...(parsedVerify.verify ? { verify: parsedVerify.verify } : {}),
+      ...(parsedGroup.group === undefined ? {} : { group: parsedGroup.group })
     })
   }
 
-  const inProgress = items.filter((i) => i.status === 'in_progress').length
-  if (inProgress > 1) {
-    return {
-      ok: false,
-      error: `${inProgress} steps are marked in_progress. Exactly one step may be in progress at a time.`
+  // Several steps may be in progress at once, but only as a declared parallel
+  // group. Without that requirement the check would have to be dropped
+  // entirely, and "everything is in progress" is how a plan stops being a
+  // record of what remains.
+  const inProgress = items.filter((i) => i.status === 'in_progress')
+  if (inProgress.length > 1) {
+    const groups = new Set(inProgress.map((i) => i.group))
+    if (groups.size > 1 || inProgress.some((i) => i.group === undefined)) {
+      return {
+        ok: false,
+        error: `${inProgress.length} steps are marked in_progress but they are not one parallel group. Give the steps that genuinely run together the SAME \`group\` number, or keep exactly one step in progress.`
+      }
     }
   }
 
@@ -192,8 +256,9 @@ export function updatePlan(
   store.setPlan(chatTabId, items)
 
   const done = items.filter((i) => i.status === 'completed').length
+  const sizes = planGroupSizes(items)
   const body = `Plan updated (${done}/${items.length} completed).\n${items
-    .map((i, idx) => `${idx + 1}. ${statusMark(i.status)} ${i.title}`)
+    .map((i, idx) => `${idx + 1}. ${statusMark(i.status)} ${i.title}${groupLabel(i, sizes)}`)
     .join('\n')}`
 
   // Contradict a completed step whose check DID run and failed. A check that
@@ -228,8 +293,9 @@ export function buildPlanContextMessage(chatTabId: string | undefined): string |
   // Re-state each step's declared check alongside it. The assertion is the part
   // most worth repeating: it is what the harness will hold the model to, and a
   // step whose check has scrolled out of view is a step it will forget to run.
+  const sizes = planGroupSizes(plan)
   const lines = plan.map((item, idx) => {
-    const head = `${idx + 1}. ${statusMark(item.status)} ${item.title}`
+    const head = `${idx + 1}. ${statusMark(item.status)} ${item.title}${groupLabel(item, sizes)}`
     if (!item.verify) return head
     const expectations = [
       item.verify.expectExitCode !== undefined && `exit ${item.verify.expectExitCode}`,
@@ -248,9 +314,15 @@ export function buildPlanContextMessage(chatTabId: string | undefined): string |
   const checks = hasChecks
     ? '\nThe app checks each verify line against the commands you actually ran, and will not let the turn end while one is unproven.'
     : ''
+  // Only mentioned when a group actually has siblings. Explaining parallel
+  // groups on a linear plan spends window on a feature this task is not using,
+  // and invites the model to invent one.
+  const parallel = [...sizes.values()].some((n) => n > 1)
+    ? '\nSteps in the same parallel group do not wait for each other: emit their calls in ONE response so they run together, and mark the whole group in_progress at once.'
+    : ''
 
   return `Current task plan (maintained by you via update_plan):
 ${lines.join('\n')}
 
-${tail}${checks}`
+${tail}${checks}${parallel}`
 }

@@ -24,7 +24,8 @@
 import { buildSubAgentSystemPrompt, buildContextMessage, describeTabOs } from '../../shared/prompts'
 import { SUB_AGENT_TOOLS } from '../../shared/aiTools'
 import { decideToolCall } from '../../shared/toolPolicy'
-import type { ChatMessageDTO } from '../../shared/types'
+import { planRecovery } from './turnRecovery'
+import type { AIAgentTurnResult, ChatMessageDTO } from '../../shared/types'
 import { useSessionsStore } from '../store/sessionsStore'
 import { COPILOT_CONTEXT_MAX_LINES, readTerminalOutput } from './terminalRegistry'
 import { getTabObservation } from './terminalObservation'
@@ -40,7 +41,7 @@ export const MAX_SUB_AGENT_STEPS = 6
  * the parent's, and a single `journalctl` can fill it — the point of delegating
  * was to bound exactly this.
  */
-const SUB_AGENT_RESULT_CHARS = 6000
+export const SUB_AGENT_RESULT_CHARS = 6000
 
 /** Result shape the sub-agent needs from an executor, mirroring `ToolResult`. */
 export interface SubAgentToolResult {
@@ -59,6 +60,16 @@ export type SubAgentExecutor = (
   onAbortHandle: (abort: () => void) => void
 ) => Promise<SubAgentToolResult>
 
+/** Progress the sub-agent publishes as it works, for the parent's tool card. */
+export interface SubAgentProgress {
+  /** Tool-calling turns spent so far. */
+  step: number
+  /** The step budget. */
+  maxSteps: number
+  /** Commands run so far, in order. */
+  commands: string[]
+}
+
 export interface SubAgentParams {
   /** Terminal tab to investigate; every host call is pinned to it. */
   terminalTabId: string
@@ -69,6 +80,13 @@ export interface SubAgentParams {
   onAbortHandle?: (abort: () => void) => void
   /** Chat tab that delegated, for debug-log correlation only. */
   chatTabId?: string
+  /**
+   * Called as work lands, so the parent's card can show which host is on which
+   * step instead of an anonymous spinner. Reported on entering each turn and
+   * after each command, which is a handful of updates over tens of seconds —
+   * no throttling needed, and the commands are what the user actually watches.
+   */
+  onProgress?: (progress: SubAgentProgress) => void
 }
 
 export interface SubAgentOutcome {
@@ -158,24 +176,70 @@ export async function runSubAgent(params: SubAgentParams): Promise<SubAgentOutco
   if (context) conversation.push({ role: 'system', content: context })
   conversation.push({ role: 'user', content: task })
 
+  let currentStep = 0
+  const report = (): void => {
+    params.onProgress?.({
+      step: currentStep,
+      maxSteps: MAX_SUB_AGENT_STEPS,
+      commands: [...commands]
+    })
+  }
+
+  /**
+   * One turn, retrying a transient provider failure in place.
+   *
+   * The parent loop has had bounded recovery for this for a while; a sub-agent
+   * had none, so a single 429 discarded the whole investigation and handed the
+   * parent "No report" — indistinguishable, from the parent's side, from a host
+   * that genuinely had nothing to say. That stopped being a rare case once
+   * several sub-agents began running at once against the parent's own model.
+   *
+   * Only transient failures are retried. `planRecovery` also proposes
+   * compaction for an over-window prompt, which a sub-agent cannot do: it has
+   * no compactor, and its conversation is short by construction, so an
+   * over-window here means a single tool result was too large and re-sending it
+   * would fail identically.
+   */
+  const turnWithRetry = async (toolNames: string[]): Promise<AIAgentTurnResult> => {
+    let transientRetries = 0
+    for (;;) {
+      const requestId = crypto.randomUUID()
+      currentTurnId = requestId
+      const turn = await window.api.ai.agentTurn({
+        requestId,
+        systemPrompt,
+        messages: conversation,
+        toolNames
+      })
+      currentTurnId = null
+      if (!turn.error || aborted) return turn
+
+      const plan = planRecovery({ transientRetries }, turn.error)
+      if (plan.kind !== 'backoff') return turn
+      transientRetries = plan.attempt
+      debugLog({
+        category: 'action.triggered',
+        tabId: params.chatTabId ?? terminalTabId,
+        message: 'agent.subAgent.retry',
+        data: { host: label, attempt: plan.attempt, max: plan.max, waitMs: plan.waitMs }
+      })
+      await new Promise((resolve) => setTimeout(resolve, plan.waitMs))
+      if (aborted) return turn
+    }
+  }
+
   for (let step = 0; step <= MAX_SUB_AGENT_STEPS; step++) {
     if (aborted) {
       return { ok: false, error: 'Cancelled by the user.', steps: step, commands }
     }
+    currentStep = step + 1
+    report()
     // The extra iteration is the summary turn: tools off, so the only thing the
     // model can do is write the report.
     const budgetExhausted = step === MAX_SUB_AGENT_STEPS
     if (budgetExhausted) conversation.push({ role: 'user', content: SUMMARY_NUDGE })
 
-    const requestId = crypto.randomUUID()
-    currentTurnId = requestId
-    const turn = await window.api.ai.agentTurn({
-      requestId,
-      systemPrompt,
-      messages: conversation,
-      toolNames: budgetExhausted ? [] : [...SUB_AGENT_TOOLS]
-    })
-    currentTurnId = null
+    const turn = await turnWithRetry(budgetExhausted ? [] : [...SUB_AGENT_TOOLS])
     if (aborted) {
       return { ok: false, error: 'Cancelled by the user.', steps: step, commands }
     }
@@ -223,7 +287,12 @@ export async function runSubAgent(params: SubAgentParams): Promise<SubAgentOutco
         // The delegated tab is not negotiable: whatever the model passed, the
         // call lands on the host this delegation is about.
         const scoped: Record<string, unknown> = { ...args, tab_id: terminalTabId }
-        if (typeof scoped.command === 'string') commands.push(scoped.command)
+        if (typeof scoped.command === 'string') {
+          commands.push(scoped.command)
+          // Publish before running, not after: the point of showing the command
+          // is to explain the wait it is about to cause.
+          report()
+        }
         // Per-host serialization is applied by the shared tool dispatcher, so a
         // sub-agent's call is ordered against other chats' writes without this
         // loop needing to know the rule (and without locking against itself).

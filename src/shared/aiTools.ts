@@ -129,6 +129,24 @@ export function isAutoApprovedTool(name: string): boolean {
   return READONLY_TOOLS.has(name) || LOCAL_BOOKKEEPING_TOOLS.has(name)
 }
 
+/**
+ * Whether two calls to this tool may overlap, because it changes no state
+ * anywhere that another call could observe.
+ *
+ * Deliberately NOT `isAutoApprovedTool`. That answers "may this run without
+ * asking the user", which is about cost and reversibility; this answers "can
+ * these overlap", which is about effect. The two diverge on
+ * `delegate_to_host`: it spends a sub-agent's whole step budget, so it is worth
+ * gating, yet it cannot write anything — read-only tool surface, Plan mode's
+ * policy, and `tab_id` rewritten on every child call. Bucketing the turn by
+ * approval instead of by effect is what made the prompt's "one call per host,
+ * they run in parallel" promise false: the delegations were serialized behind
+ * each other for no reason a host could detect.
+ */
+export function isParallelSafeTool(name: string): boolean {
+  return isAutoApprovedTool(name) || name === 'delegate_to_host'
+}
+
 export function isDisplayTool(name: string): boolean {
   return DISPLAY_TOOLS.has(name)
 }
@@ -777,7 +795,7 @@ const BASE_TOOLS: AIToolDefinition[] = [
     function: {
       name: 'update_plan',
       description:
-        'Create or update the task plan shown to the user, then call it again to mark each step done. Send the COMPLETE list every time — it replaces the previous plan. Exactly one step is in_progress at a time. Give every step that CHANGES state a verify block: the app checks it against what you actually ran and will not let you finish while one is unproven.',
+        'Create or update the task plan shown to the user, then call it again to mark each step done. Send the COMPLETE list every time — it replaces the previous plan. One step is in_progress at a time, unless several share a `group` and genuinely run together. Give every step that CHANGES state a verify block: the app checks it against what you actually ran and will not let you finish while one is unproven.',
       parameters: {
         type: 'object',
         properties: {
@@ -791,6 +809,11 @@ const BASE_TOOLS: AIToolDefinition[] = [
                 status: {
                   type: 'string',
                   enum: ['pending', 'in_progress', 'completed', 'cancelled']
+                },
+                group: {
+                  type: 'number',
+                  description:
+                    'Optional positive integer. Steps sharing a group run TOGETHER and may be in_progress at the same time; groups run in order. Use it when steps have no reason to wait for each other — the same check on three hosts, or independent read-only probes on one. Omit it for a step that runs alone.'
                 },
                 verify: {
                   type: 'object',

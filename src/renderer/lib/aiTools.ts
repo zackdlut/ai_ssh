@@ -23,7 +23,13 @@ import { isInteractiveTuiCommand } from '../../shared/interactiveCommands'
 import { getTabObservation, setTabObservation } from './terminalObservation'
 import { snapshotTabMarkers, applyPinnedTabId, formatTerminalLabel } from './pinnedTerminal'
 import { readFullTerminalOutput } from './terminalRegistry'
-import { formatSubAgentResult, runSubAgent } from './subAgent'
+import {
+  formatSubAgentResult,
+  runSubAgent,
+  MAX_SUB_AGENT_STEPS,
+  SUB_AGENT_RESULT_CHARS
+} from './subAgent'
+import { SubAgentCancelled, withSubAgentSlot } from './agentPool'
 import { withHostLock } from './hostLock'
 import { formatScrollbackResult, searchScrollback } from '../../shared/scrollbackSearch'
 import {
@@ -49,7 +55,8 @@ import type {
   AppLocale,
   AppTheme,
   ConnectionConfig,
-  ModelProfile
+  ModelProfile,
+  SubAgentProgressView
 } from '../../shared/types'
 
 export interface ToolResult {
@@ -521,19 +528,64 @@ async function delegateToHost(
   if (tab.status !== 'connected' || !tab.sessionId) {
     return { ok: false, error: `Tab "${tabId}" is not connected (status: ${tab.status}).` }
   }
+  const label = formatTerminalLabel(tab)
 
-  const outcome = await runSubAgent({
-    terminalTabId: tabId,
-    task,
-    chatTabId: ctx?.chatTabId,
-    onAbortHandle: ctx?.onAbortHandle,
-    execute: (name, toolArgs, onAbortHandle) =>
-      executeToolCall(name, toolArgs, { chatTabId: ctx?.chatTabId, onAbortHandle })
+  // One canceller is registered with the parent, not two. The sub-agent
+  // installs its own once its loop exists, which is too late for a delegation
+  // still queued behind another host — and registering twice would leak the
+  // first handle, since the caller only remembers the last unregister it got.
+  let cancelled = false
+  let abortRunning: (() => void) | null = null
+  ctx?.onAbortHandle?.(() => {
+    cancelled = true
+    abortRunning?.()
   })
-  const text = formatSubAgentResult(formatTerminalLabel(tab), outcome)
-  // A sub-agent that could not report is a failed tool call: the parent must not
-  // read "no report" as "nothing to report".
-  return outcome.ok ? { ok: true, result: text } : { ok: false, error: text }
+
+  try {
+    const outcome = await withSubAgentSlot(
+      tabId,
+      () =>
+        runSubAgent({
+          terminalTabId: tabId,
+          task,
+          chatTabId: ctx?.chatTabId,
+          onAbortHandle: (abort) => {
+            abortRunning = abort
+          },
+          onProgress: (progress) => ctx?.onSubAgentProgress?.({ host: label, ...progress }),
+          execute: (name, toolArgs, onAbortHandle) =>
+            executeToolCall(name, toolArgs, {
+              chatTabId: ctx?.chatTabId,
+              onAbortHandle,
+              // The sub-agent's own, much tighter cap — not whatever the parent
+              // turn published. Sharing one budget across concurrent
+              // investigations let the last turn to start resize everyone's
+              // reads.
+              resultCharBudget: SUB_AGENT_RESULT_CHARS
+            })
+        }),
+      {
+        cancelled: () => cancelled,
+        onQueued: () =>
+          ctx?.onSubAgentProgress?.({
+            host: label,
+            step: 0,
+            maxSteps: MAX_SUB_AGENT_STEPS,
+            commands: [],
+            queued: true
+          })
+      }
+    )
+    const text = formatSubAgentResult(label, outcome)
+    // A sub-agent that could not report is a failed tool call: the parent must
+    // not read "no report" as "nothing to report".
+    return outcome.ok ? { ok: true, result: text } : { ok: false, error: text }
+  } catch (e) {
+    if (e instanceof SubAgentCancelled) {
+      return { ok: false, error: `Delegation to ${label} was cancelled before it started.` }
+    }
+    throw e
+  }
 }
 
 function listSshConfigs(): ToolResult {
@@ -870,6 +922,14 @@ export interface ToolExecContext {
   onCaptureProgress?: (elapsedMs: number) => void
   /** Receives a canceller once a long-running command starts, for Stop. */
   onAbortHandle?: (abort: () => void) => void
+  /**
+   * Per-result character budget for this call. Carried on the context rather
+   * than read from module state so concurrent turns — a parent and the
+   * sub-agents it delegated to — cannot resize each other's reads.
+   */
+  resultCharBudget?: number
+  /** Live progress from a delegated sub-agent, for its tool card. */
+  onSubAgentProgress?: (progress: SubAgentProgressView) => void
 }
 
 /**
@@ -921,7 +981,7 @@ async function dispatchToolCall(
     case 'delegate_to_host':
       return delegateToHost(args, ctx)
     case 'read_file':
-      return readFile(args)
+      return readFile(args, ctx)
     case 'edit_file':
       return editFile(args, ctx)
     case 'apply_patch':
@@ -933,7 +993,7 @@ async function dispatchToolCall(
     case 'glob':
       return globFiles(args)
     case 'git_read':
-      return gitRead(args)
+      return gitRead(args, ctx)
     case 'git_commit':
       return gitCommit(args)
     case 'update_plan':

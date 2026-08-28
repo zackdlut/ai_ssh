@@ -150,6 +150,33 @@ describe('decideToolCall', () => {
     ).toBe('deny')
   })
 
+  it('runs a delegated sub-agent unattended everywhere it is offered', () => {
+    // The tool cannot write: read-only surface, Plan mode's policy inside, and
+    // tab_id rewritten on every child call. Making the user approve it per host
+    // taxed the one fan-out the prompt explicitly asks for.
+    expect(decideToolCall({ tool: 'delegate_to_host', mode: 'balanced' })).toBe('auto')
+    expect(decideToolCall({ tool: 'delegate_to_host', mode: 'autonomous' })).toBe('auto')
+    // Plan mode ADVERTISES the tool (PLAN_MODE_TOOLS), so denying it there
+    // handed the model a tool it could never successfully call.
+    expect(decideToolCall({ tool: 'delegate_to_host', mode: 'balanced', agentMode: 'plan' })).toBe(
+      'auto'
+    )
+  })
+
+  it('still asks before delegating in conservative mode', () => {
+    // Conservative means the user wants to see things before they happen, and a
+    // sub-agent is a lot of activity to start without being asked.
+    expect(decideToolCall({ tool: 'delegate_to_host', mode: 'conservative' })).toBe('ask')
+  })
+
+  it('denies delegation in execute mode, where the user watches every command', () => {
+    // Execute mode omits the tool from the schema; a leftover call is refused
+    // rather than quietly run on a private channel.
+    expect(decideToolCall({ tool: 'delegate_to_host', mode: 'autonomous', agentMode: 'execute' })).toBe(
+      'deny'
+    )
+  })
+
   it('in execute mode denies leftover exec_command and still asks before writes', () => {
     expect(
       decideToolCall({

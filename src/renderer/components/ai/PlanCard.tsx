@@ -4,6 +4,7 @@ import { useT } from '../../lib/i18n'
 import { sendPrompt } from '../../lib/aiService'
 import { restoreRemoteBackup } from '../../lib/fileTools'
 import { shortCheckpointPath } from '../../lib/fileCheckpoints'
+import { planGroupSizes } from '../../lib/planTool'
 import type { PlanItem } from '../../../shared/types'
 
 function isOpen(item: PlanItem): boolean {
@@ -27,8 +28,15 @@ export default function PlanCard(): JSX.Element | null {
   if ((!plan || plan.length === 0) && checkpoints.length === 0) return null
 
   const done = plan?.filter((i) => i.status === 'completed').length ?? 0
-  const current = plan?.find((i) => i.status === 'in_progress')
+  const running = plan?.filter((i) => i.status === 'in_progress') ?? []
+  // Collapsed, a parallel group has no single "current step" to name, and
+  // picking the first would hide that two others are also running.
+  const currentLabel =
+    running.length > 1
+      ? t('copilot.plan.parallelRunning', { count: running.length })
+      : running[0]?.title
   const allResolved = !plan || plan.length === 0 || plan.every((i) => !isOpen(i))
+  const groupSizes = planGroupSizes(plan ?? [])
   const showExecute = (tab?.agentMode ?? 'agent') === 'plan' && !!plan && plan.length > 0
 
   const implement = (): void => {
@@ -69,33 +77,52 @@ export default function PlanCard(): JSX.Element | null {
             {done}/{plan.length}
           </span>
         )}
-        {collapsed && current && <span className="plan-card-current">{current.title}</span>}
+        {collapsed && currentLabel && <span className="plan-card-current">{currentLabel}</span>}
       </button>
       {!collapsed && plan && plan.length > 0 && (
         <ol className="plan-card-list">
-          {plan.map((item) => (
-            <li key={item.id} className={`plan-item plan-item--${item.status}`}>
-              <span className="plan-item-mark" aria-hidden>
-                {item.status === 'completed'
-                  ? '✓'
-                  : item.status === 'in_progress'
-                    ? '●'
-                    : item.status === 'cancelled'
-                      ? '✕'
-                      : '○'}
-              </span>
-              <span className="plan-item-text">
-                {item.title}
-                {item.verify && (
-                  // The check is the user's handle on whether "done" means
-                  // anything: showing it makes an unverified claim visible.
-                  <span className="plan-item-verify" title={t('copilot.plan.verifyHint')}>
-                    {t('copilot.plan.verify')} <code>{item.verify.command}</code>
-                  </span>
-                )}
-              </span>
-            </li>
-          ))}
+          {plan.map((item, idx) => {
+            const size = item.group === undefined ? 1 : (groupSizes.get(item.group) ?? 1)
+            const parallel = size > 1
+            // Adjacency, not "every step with this group number": the model
+            // sends the step order, and gathering a scattered group would show
+            // a plan nobody wrote. A non-adjacent group renders as two blocks,
+            // which is honest about what was declared.
+            const opensGroup = parallel && plan[idx - 1]?.group !== item.group
+            return (
+              <li
+                key={item.id}
+                className={`plan-item plan-item--${item.status}${
+                  parallel ? ' plan-item--parallel' : ''
+                }`}
+              >
+                <span className="plan-item-mark" aria-hidden>
+                  {item.status === 'completed'
+                    ? '✓'
+                    : item.status === 'in_progress'
+                      ? '●'
+                      : item.status === 'cancelled'
+                        ? '✕'
+                        : '○'}
+                </span>
+                <span className="plan-item-text">
+                  {item.title}
+                  {opensGroup && (
+                    <span className="plan-item-parallel" title={t('copilot.plan.parallelHint')}>
+                      {t('copilot.plan.parallel', { count: size })}
+                    </span>
+                  )}
+                  {item.verify && (
+                    // The check is the user's handle on whether "done" means
+                    // anything: showing it makes an unverified claim visible.
+                    <span className="plan-item-verify" title={t('copilot.plan.verifyHint')}>
+                      {t('copilot.plan.verify')} <code>{item.verify.command}</code>
+                    </span>
+                  )}
+                </span>
+              </li>
+            )
+          })}
         </ol>
       )}
       {!collapsed && showExecute && (

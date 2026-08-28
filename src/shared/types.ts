@@ -251,6 +251,32 @@ export interface ChatMessageDTO {
 
 export type ToolCallStatus = 'pending' | 'running' | 'done' | 'rejected' | 'error'
 
+/**
+ * Live state of a delegated sub-agent, mirrored onto its own tool call.
+ *
+ * A delegation is the longest-running call the app makes — its own bounded LLM
+ * loop plus a stream of remote commands — and it used to render as the same
+ * anonymous spinner as a directory listing. That is tolerable for one; with
+ * several hosts surveyed at once it leaves the user watching identical spinners
+ * with no way to tell which machine is slow, which is already answering, and
+ * which has not started because the pool is full.
+ *
+ * Only what the parent could not already read off the final report belongs
+ * here: progress through the budget, and the commands as they land.
+ */
+export interface SubAgentProgressView {
+  /** Host label, e.g. `root@prod.example.com:22`. */
+  host: string
+  /** Tool-calling turns spent so far. */
+  step: number
+  /** The step budget, so the card can show `3/6` rather than a bare count. */
+  maxSteps: number
+  /** Commands run so far, in order. */
+  commands: string[]
+  /** Holding no slot yet: one agent per host, and the pool has a ceiling. */
+  queued?: boolean
+}
+
 /** A tool call attached to a Copilot assistant message (persisted + rendered). */
 export interface ToolCallView {
   id: string
@@ -270,6 +296,8 @@ export interface ToolCallView {
   error?: string
   /** Elapsed ms while a long-running tool (e.g. exec_command) is in flight. */
   progressMs?: number
+  /** Live sub-agent state; only ever set on a `delegate_to_host` call. */
+  subAgent?: SubAgentProgressView
 }
 
 /** Persisted ECharts replay data for a chart block inside an assistant message. */
@@ -344,6 +372,26 @@ export interface PlanItem {
   status: PlanItemStatus
   /** Independent check this step must pass before it may be reported done. */
   verify?: PlanStepVerify
+  /**
+   * Steps sharing a group number run TOGETHER; groups run in order.
+   *
+   * A plan used to be strictly linear with exactly one step in progress, which
+   * made the most common shape of a multi-host task inexpressible: "collect the
+   * same evidence from these three machines" is one step per host, and they have
+   * no reason to wait for each other. The model could already run those
+   * concurrently — read-only calls in one response go out together — but it had
+   * no way to SAY so, so the plan claimed a sequence the execution did not
+   * follow, and each `update_plan` had to pick an arbitrary winner to mark
+   * in_progress.
+   *
+   * Groups of concurrent steps rather than a full dependency graph: a DAG invites
+   * cycles and orphaned nodes that the harness would then have to diagnose, while
+   * "these together, then those" covers the shapes ops work actually takes
+   * (survey N hosts in parallel, then analyze, then fix one at a time). Omitted
+   * means the step is alone in its own group, which is exactly the old
+   * behaviour.
+   */
+  group?: number
 }
 
 /** Copilot loop autonomy for this chat: plan is read-only; agent/execute can mutate. */

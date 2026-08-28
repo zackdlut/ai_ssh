@@ -170,7 +170,10 @@ function withLineNumbers(lines: string[], firstLineNo: number): string {
     .join('\n')
 }
 
-export async function readFile(args: Record<string, unknown>): Promise<ToolResult> {
+export async function readFile(
+  args: Record<string, unknown>,
+  ctx?: { resultCharBudget?: number }
+): Promise<ToolResult> {
   const resolved = resolveSftpTab(str(args.tab_id))
   if ('error' in resolved) return { ok: false, error: resolved.error }
   const path = str(args.path)
@@ -197,10 +200,13 @@ export async function readFile(args: Record<string, unknown>): Promise<ToolResul
     }
   }
 
-  // Page against the live budget the agent loop publishes. Returning fewer
-  // lines with an accurate next offset costs a round trip; returning more than
-  // the window holds costs the whole request.
-  const resultCap = Math.min(READ_MAX_RESULT_CHARS, toolResultCharBudget())
+  // Page against the budget the caller's turn carries. Returning fewer lines
+  // with an accurate next offset costs a round trip; returning more than the
+  // window holds costs the whole request.
+  const resultCap = Math.min(
+    READ_MAX_RESULT_CHARS,
+    toolResultCharBudget(ctx?.resultCharBudget)
+  )
   const notes: string[] = []
   let charBudget = resultCap - READ_HEADER_RESERVE_CHARS
   let kept = 0

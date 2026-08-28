@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { AI_SETTINGS_INTENT, buildAITools, toolNamesFor } from './aiTools'
+import {
+  AI_SETTINGS_INTENT,
+  buildAITools,
+  isAutoApprovedTool,
+  isParallelSafeTool,
+  toolNamesFor
+} from './aiTools'
 import { normalizeCopilotAgentMode } from './types'
 
 const settingsTool = (opts: Parameters<typeof buildAITools>[1]) =>
@@ -165,11 +171,42 @@ describe('buildAITools', () => {
     expect(JSON.stringify(del)).not.toContain('Defaults to the pinned tab')
   })
 
+  it('documents the parallel group on update_plan', () => {
+    // Without it in the schema the model cannot express the most common shape of
+    // a multi-host task, and every update has to nominate one host as "the"
+    // current step while the others are also running.
+    const plan = buildAITools('core').find((t) => t.function.name === 'update_plan')!
+    const params = plan.function.parameters as {
+      properties: { items: { items: { properties: Record<string, unknown> } } }
+    }
+    expect(params.properties.items.items.properties.group).toBeDefined()
+  })
+
   it('lets planMode win when both mode flags are set', () => {
     const names = toolNamesFor('full', { planMode: true, executeMode: true, hasSkills: true })
     expect(names).toContain('exec_command')
     expect(names).not.toContain('run_in_terminal')
     expect(names).not.toContain('write_file')
+  })
+})
+
+describe('isParallelSafeTool', () => {
+  it('covers reads and bookkeeping, but not host writes', () => {
+    for (const tool of ['read_file', 'grep', 'git_read', 'search_terminal', 'update_plan']) {
+      expect(isParallelSafeTool(tool), tool).toBe(true)
+    }
+    for (const tool of ['exec_command', 'run_in_terminal', 'edit_file', 'write_file', 'git_commit']) {
+      expect(isParallelSafeTool(tool), tool).toBe(false)
+    }
+  })
+
+  it('includes delegate_to_host, unlike the approval test', () => {
+    // This is the whole reason the two predicates are separate. Delegation is
+    // worth gating on cost (isAutoApprovedTool says no) but changes nothing, so
+    // several delegations may overlap — which is what "one call per host, they
+    // run in parallel" in the prompt promises.
+    expect(isParallelSafeTool('delegate_to_host')).toBe(true)
+    expect(isAutoApprovedTool('delegate_to_host')).toBe(false)
   })
 })
 
