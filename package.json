@@ -1,6 +1,6 @@
 {
   "name": "ai-augmented-terminal",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AI-Augmented multi-tab SSH terminal (Edge Copilot side panel + kubectl-ai style)",
   "main": "./out/main/index.js",
   "author": "",
