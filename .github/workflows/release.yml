@@ -26,8 +26,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
+
+      # The runner's bundled npm carries node-gyp 10, which cannot detect the
+      # Visual Studio 2026 that windows-latest ships. npm 11 bundles node-gyp 12.
+      - if: runner.os == 'Windows'
+        run: npm install -g npm@11
 
       - run: npm ci
       - run: npm run ${{ matrix.build }}

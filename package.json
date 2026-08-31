@@ -43,7 +43,7 @@
     "dompurify": "^3.4.11",
     "echarts": "^6.1.0",
     "electron": "^33.4.11",
-    "electron-builder": "^25.1.8",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^2.3.0",
     "marked": "^18.0.5",
     "mermaid": "^11.15.0",
