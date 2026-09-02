@@ -54,17 +54,23 @@ const PROGRESS_INTERVAL_MS = 1000
 const SLOW_COMMAND_RE =
   /\b(du|find|locate|mlocate|updatedb|rsync|ncdu|tree|sleep|apt(?:-get)?|yum|dnf|pacman|zypper|npm|npx|pnpm|yarn|pip3?|conda|docker|podman|kubectl|make|cmake|ninja|cargo|mvn|gradle|git|curl|wget|scp|python3?|node|tar|unzip|gzip|xz|dd)\b/i
 
-/** Echoed helper: `__ec=$?; __m=AISSH_…; printf …` */
-const HELPER_SRC_RE = /__ec=\$\?;\s*__m=AISSH_[A-Za-z0-9]+;/
+/**
+ * Echoed helper head. ConPTY/readline wrap at COLUMNS, so `__m=AISSH_…` often
+ * lands on the next physical line — `__ec=` alone is enough to cut.
+ */
+const HELPER_SRC_RE = /__ec=/
 /** Printed sentinel: `AISSH_… ec=0 cwd=/tmp AISSH_…` */
 const MARKER_OUT_RE = /AISSH_[A-Za-z0-9]+ ec=-?\d+ cwd=/
 /**
- * Tail of an echoed helper that readline wrapped onto its own physical line, so
- * the fragment carries neither the marker nor the `__ec=$?` head.
+ * Tail of an echoed helper that wrapped onto its own physical line, so the
+ * fragment carries neither the marker nor the `__ec=` head.
  */
-const HELPER_TAIL_RE = /\$__m|\$__ec|\$\(pwd 2>\/dev\/null\)|printf '\\n%s ec=/
+const HELPER_TAIL_RE =
+  /\$__m|\$__ec|\$\(pwd 2>\/dev\/null\)|printf '\\n%s ec=|%s ec=%s cwd=%s|__m"|__ec"|2>\/dev\/null\)/
+/** Wrap remnant of `__ec=$?` after `;` (`cmd; _`, `cmd; __e`, `cmd; __ec=`). */
+const HELPER_HEAD_RE = /;[ \t]*_{1,2}(?:e(?:c(?:=(?:\$\??)?)?)?)?$/
 /** Anything worth line-scanning for; a chunk without these is passed straight through. */
-const ARTIFACT_HINT_RE = /AISSH_|__ec=\$\?|\$__m/
+const ARTIFACT_HINT_RE = /AISSH_|__ec=|\$__m|\$__ec|%s ec=%s cwd=%s/
 
 /** Live absolute ceiling; Settings / app start push the configured value here. */
 let cachedAbsoluteMaxMs = commandAbsoluteTimeoutMs(DEFAULT_COMMAND_TIMEOUT_MINUTES)
@@ -217,7 +223,7 @@ function buildWrappedCommand(command: string, marker: string): string {
  * A helper glued to a prompt keeps the prompt prefix.
  */
 export function stripCaptureArtifacts(data: string): string {
-  if (!ARTIFACT_HINT_RE.test(data)) return data
+  if (!ARTIFACT_HINT_RE.test(data) && !HELPER_HEAD_RE.test(data)) return data
   const pieces = data.split(/(\r?\n)/)
   const out: string[] = []
   for (const piece of pieces) {
@@ -230,6 +236,12 @@ export function stripCaptureArtifacts(data: string): string {
     const helperAt = plain.search(HELPER_SRC_RE)
     if (helperAt >= 0) {
       const kept = plain.slice(0, helperAt).replace(/[ \t;]+$/, '')
+      if (kept) out.push(kept)
+      continue
+    }
+    const head = HELPER_HEAD_RE.exec(plain)
+    if (head) {
+      const kept = plain.slice(0, head.index).replace(/[ \t;]+$/, '')
       if (kept) out.push(kept)
       continue
     }
@@ -391,16 +403,55 @@ export function clampOutput(text: string, max = EXEC_OUTPUT_MAX): string {
   return `${head}\n…[truncated ${droppedLines} lines — re-run with grep/head/tail to narrow the output]…\n${tail}`
 }
 
+/** True when a leftover physical line is only a wrap fragment of the helper. */
+function isOrphanHelperLine(line: string, marker: string): boolean {
+  const t = line.trim()
+  if (!t) return false
+  if (marker && t.includes(marker)) return true
+  if (t.includes(CAPTURE_MARKER_PREFIX)) return true
+  if (HELPER_TAIL_RE.test(t) || HELPER_SRC_RE.test(t) || HELPER_HEAD_RE.test(t)) return true
+  // Wrap leftovers from `"$__m"` / the printf quotes: a line that is only helper punctuation.
+  if (/^["'`\\;]+$/.test(t)) return true
+  if (t.length >= 4) {
+    const helper = captureHelper(marker || `${CAPTURE_MARKER_PREFIX}x`)
+    if (helper.includes(t)) return true
+  }
+  return false
+}
+
+/**
+ * True when `line` is the shell echoing `command` (optional prompt / trailing `;`).
+ * Requires a prompt delimiter before the command so `totals` is not treated as `ls`.
+ */
+function isLeadingCommandEcho(line: string, cmdTrim: string): boolean {
+  const t = line.trim().replace(/[ \t;]+$/, '')
+  if (!t) return true
+  if (t === cmdTrim || t === `{ ${cmdTrim}` || t === `{${cmdTrim}`) return true
+  const escaped = cmdTrim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`[#$%>]\\s+${escaped}$`).test(t)
+}
+
+/** ConPTY wrap leftover of `cmd; helper` that still sits above real output. */
+function isLeadingWrapFragment(line: string, cmdTrim: string, marker: string): boolean {
+  const t = line.trim()
+  if (!t) return true
+  if (isLeadingCommandEcho(line, cmdTrim) || isOrphanHelperLine(line, marker)) return true
+  const wrapSource = `${cmdTrim}; ${captureHelper(marker)}`
+  if (!wrapSource.includes(t)) return false
+  if (/__ec|__m|\$\?|printf|AISSH_|%s|2>\/dev\/null/.test(t)) return true
+  return t.length >= 2 && t.length <= 6 && /[_$%"'\\]/.test(t)
+}
+
 /**
  * Clean captured output: strip ANSI, drop every marker line (the echoed helper
  * and the printed sentinel), drop the echoed command line(s) at the top and any
  * trailing shell prompt, then clamp.
  */
 export function cleanCapturedOutput(raw: string, command: string, marker: string): string {
-  let lines = stripAnsi(raw).split(/\r?\n/)
+  let lines = stripCaptureArtifacts(stripAnsi(raw)).split(/\r?\n/)
   const cmdTrim = command.trim()
-  lines = lines.filter((l) => !l.includes(marker))
-  while (lines.length && (lines[0].trim() === '' || lines[0].trim() === cmdTrim)) {
+  lines = lines.filter((l) => (marker ? !l.includes(marker) : true) && !isOrphanHelperLine(l, marker))
+  while (lines.length && isLeadingWrapFragment(lines[0], cmdTrim, marker)) {
     lines.shift()
   }
   const promptRe = /\S+@\S+.*[#$%>]\s*$/

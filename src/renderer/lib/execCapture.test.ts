@@ -13,7 +13,8 @@ import {
   refreshCommandTimeoutMinutes,
   registerCaptureEcho,
   runCapturedCommand,
-  stripCaptureArtifacts
+  stripCaptureArtifacts,
+  cleanCapturedOutput
 } from './execCapture'
 import { DEFAULT_COMMAND_TIMEOUT_MINUTES } from '../../shared/aiSettings'
 
@@ -55,6 +56,66 @@ describe('stripCaptureArtifacts', () => {
   it('leaves ordinary output untouched', () => {
     const chunk = 'hello\nworld\n'
     expect(stripCaptureArtifacts(chunk)).toBe(chunk)
+  })
+
+  it('drops a helper that ConPTY wrapped before __m=', () => {
+    const leaked =
+      '(base) zackzh@host:~$ rm ~/index.html && ls ~; __ec=$?; _\n' +
+      '_m=AISSH_51c51f426fa9; printf \'\\n%s ec=%s cwd=%s %s\\n\' "$__m" "$__ec" "$(pwd 2>/dev/null)" "$__m"\n'
+    const visible = stripCaptureArtifacts(leaked)
+    expect(visible).toContain('(base) zackzh@host:~$ rm ~/index.html && ls ~')
+    expect(visible).not.toContain('__ec=')
+    expect(visible).not.toContain('$__m')
+    expect(visible).not.toContain('AISSH_')
+    expect(visible).not.toMatch(/;\s*_/)
+  })
+})
+
+function wrapAt(s: string, cols: number, eol = '\n'): string {
+  const parts: string[] = []
+  for (let i = 0; i < s.length; i += cols) parts.push(s.slice(i, i + cols))
+  return parts.join(eol)
+}
+
+function helperSrc(marker: string): string {
+  return `__ec=$?; __m=${marker}; printf '\\n%s ec=%s cwd=%s %s\\n' "$__m" "$__ec" "$(pwd 2>/dev/null)" "$__m"`
+}
+
+describe('cleanCapturedOutput', () => {
+  const cmd = 'rm ~/index.html && ls ~'
+  const marker = 'AISSH_51c51f426fa9'
+  const listing = 'miniconda3  misc  workspace'
+
+  it('keeps command output and drops a ConPTY-wrapped helper', () => {
+    const echoed = `(base) zackzh@host:~$ ${cmd}; ${helperSrc(marker)}`
+    const raw =
+      wrapAt(echoed, 80) +
+      `\n${listing}\n` +
+      `${marker} ec=0 cwd=/home/zackzh ${marker}\n` +
+      'zackzh@host:~$ '
+    expect(cleanCapturedOutput(raw, cmd, marker)).toBe(listing)
+  })
+
+  it('drops helper fragments at typical terminal widths, including CRLF wraps', () => {
+    const echoed = `(base) zackzh@host:~$ ${cmd}; ${helperSrc(marker)}`
+    for (const eol of ['\n', '\r\n'] as const) {
+      for (let cols = 46; cols <= 120; cols++) {
+        const raw =
+          wrapAt(echoed, cols, eol) +
+          `${eol}${listing}${eol}` +
+          `${marker} ec=0 cwd=/home/zackzh ${marker}${eol}` +
+          'zackzh@host:~$ '
+        const out = cleanCapturedOutput(raw, cmd, marker)
+        expect(out, `cols=${cols} eol=${JSON.stringify(eol)}`).toBe(listing)
+        expect(out).not.toContain('__ec=')
+        expect(out).not.toContain('$__m')
+        expect(out).not.toContain('AISSH_')
+      }
+    }
+  })
+
+  it('does not treat a line that merely ends with the command as an echo', () => {
+    expect(cleanCapturedOutput('totals\nfile.txt\n', 'ls', 'AISSH_abc')).toBe('totals\nfile.txt')
   })
 })
 
@@ -162,6 +223,19 @@ describe('createCaptureEchoFilter', () => {
     ])
     expect(out).not.toContain('$__m')
     expect(out).not.toContain('pwd 2>/dev/null')
+  })
+
+  it('drops a helper that ConPTY wrapped between __ec=$? and __m=', () => {
+    const out = echoOf([
+      '(base) zackzh@host:~$ rm ~/index.html && ls ~; __ec=$?; _\n',
+      '_m=AISSH_51c51f426fa9; printf \'\\n%s ec=%s cwd=%s %s\\n\' "$__m" "$__ec" "$(pwd 2>/dev/null)" "$__m"\n',
+      'miniconda3  misc  workspace\n'
+    ])
+    expect(out).toContain('rm ~/index.html && ls ~')
+    expect(out).toContain('miniconda3  misc  workspace')
+    expect(out).not.toContain('__ec')
+    expect(out).not.toContain('$__m')
+    expect(out).not.toContain('AISSH_')
   })
 
   it('passes plain output straight through and keeps carriage-return progress live', () => {

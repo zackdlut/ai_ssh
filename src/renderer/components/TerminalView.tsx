@@ -22,8 +22,7 @@ import { handlePaneKey } from '../lib/paneShortcuts'
 import { hasGpuWebgl2 } from '../lib/webglSupport'
 import { askAboutSelection } from '../lib/aiService'
 import { extractCommands, isDangerous } from '../lib/commands'
-import { stripAnsi } from '../lib/streamParse'
-import { buildMarkerCommand, parseMarker, runCapturedCommand, getCaptureTiming, nextCaptureDeadline, hasCaptureMarker, formatCaptureElapsed, isSessionCaptureActive, interruptSessionCapture, registerCaptureEcho, stripCaptureArtifacts, CAPTURE_INTERRUPT_SETTLE_MS } from '../lib/execCapture'
+import { buildMarkerCommand, parseMarker, runCapturedCommand, getCaptureTiming, nextCaptureDeadline, hasCaptureMarker, formatCaptureElapsed, isSessionCaptureActive, interruptSessionCapture, registerCaptureEcho, stripCaptureArtifacts, cleanCapturedOutput, CAPTURE_INTERRUPT_SETTLE_MS } from '../lib/execCapture'
 import { getTabObservation, setTabObservation } from '../lib/terminalObservation'
 import { describeTabOs } from '../../shared/prompts'
 import {
@@ -155,33 +154,12 @@ async function ensureTabCwd(tabId: string, sessionId: string): Promise<string | 
   return refreshTabCwd(tabId, sessionId)
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 /**
  * Format captured command output for display / summary: strip ANSI, drop the
  * echoed command line and any trailing shell prompt, then trim and clamp.
  */
-function formatCaptured(raw: string, cmd: string, username?: string, marker?: string): string {
-  let lines = stripAnsi(raw).split(/\r?\n/)
-  const cmdTrim = cmd.trim()
-  // Drop sentinel-marker lines (the echoed helper and the printed marker).
-  if (marker) lines = lines.filter((l) => !l.includes(marker))
-  // Drop the shell-echoed command line(s) at the top.
-  while (lines.length && (lines[0].trim() === '' || lines[0].trim() === cmdTrim)) {
-    lines.shift()
-  }
-  // Drop trailing shell prompt(s) and blank lines at the bottom.
-  const promptRe = username
-    ? new RegExp(`${escapeRegExp(username)}@.*[#$%>]\\s*$`)
-    : /\S+@\S+.*[#$%>]\s*$/
-  while (lines.length) {
-    const last = lines[lines.length - 1].trim()
-    if (last === '' || promptRe.test(last)) lines.pop()
-    else break
-  }
-  return lines.join('\n').trim().slice(0, MAX_CAPTURE)
+function formatCaptured(raw: string, cmd: string, _username?: string, marker?: string): string {
+  return cleanCapturedOutput(raw, cmd, marker ?? '').slice(0, MAX_CAPTURE)
 }
 
 /** Short single-command output can be shown directly without a second LLM call. */
