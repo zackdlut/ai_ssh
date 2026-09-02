@@ -59,8 +59,53 @@ const SLOW_COMMAND_RE =
  * lands on the next physical line — `__ec=` alone is enough to cut.
  */
 const HELPER_SRC_RE = /__ec=/
+/** Prefix for sentinel marker tokens embedded in wrapped commands. */
+export const CAPTURE_MARKER_PREFIX = 'AISSH_'
 /** Printed sentinel: `AISSH_… ec=0 cwd=/tmp AISSH_…` */
 const MARKER_OUT_RE = /AISSH_[A-Za-z0-9]+ ec=-?\d+ cwd=/
+/**
+ * Wrap break allowed between any two characters of the sentinel.
+ *
+ * WSL tabs are ConPTY pseudo-terminals: Windows re-renders the shell's output
+ * into a screen buffer `cols` wide and serializes it row by row, so a sentinel
+ * line longer than the terminal is delivered split across rows with a CR/LF
+ * injected mid-token. A real SSH pty forwards bytes untouched, which is why the
+ * strict single-line patterns above only ever failed on WSL — and failed by
+ * silently missing completion, leaving the command card spinning until the
+ * stall timeout fired.
+ */
+const WRAP = '[\\r\\n]*'
+
+/**
+ * Regex source matching `literal` even when ConPTY wrapped it across rows.
+ * A space becomes optional whitespace, because a space that lands on the right
+ * margin can be dropped when the row is serialized.
+ */
+function looseSource(literal: string): string {
+  return literal
+    .split('')
+    .map((ch) => {
+      if (ch === ' ') return '[ \\t\\r\\n]*'
+      return /[A-Za-z0-9_]/.test(ch) ? ch : `\\${ch}`
+    })
+    .join(WRAP)
+}
+
+/** Random characters after {@link CAPTURE_MARKER_PREFIX} in a marker token. */
+const MARKER_SUFFIX_LEN = 12
+/**
+ * One sentinel token (`AISSH_` + random suffix), tolerating wrap breaks. The
+ * suffix length is pinned rather than open-ended: `[A-Za-z0-9]+` would run past
+ * a row break and swallow the shell prompt printed on the next line.
+ */
+const LOOSE_TOKEN =
+  `${looseSource(CAPTURE_MARKER_PREFIX)}(?:${WRAP}[A-Za-z0-9]){${MARKER_SUFFIX_LEN}}`
+/** A whole printed sentinel, tolerating wrap breaks, for artifact removal. */
+const MARKER_OUT_LOOSE_RE = new RegExp(
+  `${LOOSE_TOKEN}${looseSource(' ec=')}-?[\\d\\r\\n]+${looseSource(' cwd=')}` +
+    `[\\s\\S]*?${looseSource(' ')}${LOOSE_TOKEN}`,
+  'g'
+)
 /**
  * Tail of an echoed helper that wrapped onto its own physical line, so the
  * fragment carries neither the marker nor the `__ec=` head.
@@ -155,15 +200,13 @@ export function formatCaptureElapsed(ms: number): string {
   return rem > 0 ? `${m}m ${rem}s` : `${m}m`
 }
 
-/** Prefix for sentinel marker tokens embedded in wrapped commands. */
-export const CAPTURE_MARKER_PREFIX = 'AISSH_'
-
 function markerToken(): string {
   const rand =
     typeof crypto !== 'undefined' && 'randomUUID' in crypto
-      ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
-      : Math.random().toString(36).slice(2, 14)
-  return `${CAPTURE_MARKER_PREFIX}${rand}`
+      ? crypto.randomUUID().replace(/-/g, '')
+      : Math.random().toString(36).slice(2)
+  // Padded to a fixed width so LOOSE_TOKEN can pin the suffix length.
+  return `${CAPTURE_MARKER_PREFIX}${rand.padEnd(MARKER_SUFFIX_LEN, '0').slice(0, MARKER_SUFFIX_LEN)}`
 }
 
 /**
@@ -224,7 +267,10 @@ function buildWrappedCommand(command: string, marker: string): string {
  */
 export function stripCaptureArtifacts(data: string): string {
   if (!ARTIFACT_HINT_RE.test(data) && !HELPER_HEAD_RE.test(data)) return data
-  const pieces = data.split(/(\r?\n)/)
+  // Remove wrapped sentinels whole: a row break inside the closing token leaves
+  // a continuation row ("3bcd") that carries no artifact hint of its own, so the
+  // per-line pass below would let that fragment through onto the screen.
+  const pieces = data.replace(MARKER_OUT_LOOSE_RE, '').split(/(\r?\n)/)
   const out: string[] = []
   for (const piece of pieces) {
     if (piece === '\n' || piece === '\r\n') {
@@ -283,6 +329,22 @@ function artifactStart(tail: string): number {
   return best
 }
 
+/**
+ * Where a printed sentinel begins, or -1.
+ *
+ * `printf` leads with a newline, so the sentinel always starts a physical line.
+ * That is what separates it from the shell echoing `__m=AISSH_…` back at the
+ * top of the capture — holding output from *that* occurrence would buffer the
+ * whole command run instead of streaming it.
+ */
+function sentinelLineStart(buf: string): number {
+  let at = buf.indexOf(CAPTURE_MARKER_PREFIX)
+  while (at > 0 && buf[at - 1] !== '\n' && buf[at - 1] !== '\r') {
+    at = buf.indexOf(CAPTURE_MARKER_PREFIX, at + 1)
+  }
+  return at
+}
+
 export interface CaptureEchoFilter {
   /** Write a raw PTY chunk, minus any sentinel artifact, to the terminal. */
   feed: (chunk: string) => void
@@ -315,6 +377,15 @@ export function createCaptureEchoFilter(write: CaptureEchoWrite): CaptureEchoFil
   return {
     feed: (chunk) => {
       const buf = pending + chunk
+      // The sentinel is the last thing the wrapped command prints, and ConPTY
+      // may wrap it across rows — so once it starts, hold everything after it
+      // instead of letting the newline scan below release a continuation row.
+      const markerAt = sentinelLineStart(buf)
+      if (markerAt >= 0 && buf.length - markerAt <= MAX_HELD_TAIL) {
+        pending = buf.slice(markerAt)
+        emit(buf.slice(0, markerAt))
+        return
+      }
       // \r counts as a boundary so progress bars keep updating live.
       const cut = Math.max(buf.lastIndexOf('\n'), buf.lastIndexOf('\r')) + 1
       const tail = buf.slice(cut)
@@ -351,8 +422,29 @@ export function registerCaptureEcho(sessionId: string, write: CaptureEchoWrite):
   }
 }
 
+/**
+ * Compiled sentinel matchers per marker. `hasCaptureMarker` runs once per
+ * stream chunk, so the (larger) wrap-tolerant pattern is built only once.
+ */
+const markerRegexCache = new Map<string, RegExp>()
+
 function markerRegex(marker: string): RegExp {
-  return new RegExp(`${marker} ec=(-?\\d+) cwd=([\\s\\S]*?) ${marker}`)
+  let re = markerRegexCache.get(marker)
+  if (!re) {
+    const token = looseSource(marker)
+    re = new RegExp(
+      `${token}${looseSource(' ec=')}(-?[\\d\\r\\n]+)${looseSource(' cwd=')}` +
+        `([\\s\\S]*?)${looseSource(' ')}${token}`
+    )
+    if (markerRegexCache.size > 64) markerRegexCache.clear()
+    markerRegexCache.set(marker, re)
+  }
+  return re
+}
+
+/** Undo the CR/LF a ConPTY row break injected into a sentinel field. */
+function unwrapField(value: string): string {
+  return value.replace(/[\r\n]+/g, '').trim()
 }
 
 /** True when raw SSH output contains the completion marker for this capture. */
@@ -380,8 +472,8 @@ export function parseMarker(
 ): { exitCode: number | null; cwd: string | null } {
   const m = markerRegex(marker).exec(stripAnsi(raw))
   if (!m) return { exitCode: null, cwd: null }
-  const ec = Number.parseInt(m[1], 10)
-  return { exitCode: Number.isFinite(ec) ? ec : null, cwd: m[2].trim() || null }
+  const ec = Number.parseInt(unwrapField(m[1]), 10)
+  return { exitCode: Number.isFinite(ec) ? ec : null, cwd: unwrapField(m[2]) || null }
 }
 
 /**
@@ -528,13 +620,10 @@ export function runCapturedCommand(
       unsubStatus()
       // A last line with no trailing newline is still the user's output.
       echo?.flush()
-      const stripped = stripAnsi(buffer)
-      const m = re.exec(stripped)
-      const exitCode = m ? Number.parseInt(m[1], 10) : null
-      const cwd = m && m[2].trim() ? m[2].trim() : null
+      const { exitCode, cwd } = parseMarker(buffer, marker)
       resolve({
         output: cleanCapturedOutput(buffer, command, marker),
-        exitCode: Number.isFinite(exitCode as number) ? exitCode : null,
+        exitCode,
         cwd,
         timedOut: !aborted && (timedOut || timeoutInterrupt),
         disconnected,

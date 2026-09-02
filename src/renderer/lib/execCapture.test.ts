@@ -114,6 +114,19 @@ describe('cleanCapturedOutput', () => {
     }
   })
 
+  it('drops a printed sentinel that ConPTY wrapped, keeping the prompt after it', () => {
+    const cwd = '/home/zackzh/workspace/javascript/ai_ssh'
+    const line = `${marker} ec=0 cwd=${cwd} ${marker}`
+    for (const eol of ['\n', '\r\n'] as const) {
+      for (let cols = 40; cols <= 200; cols++) {
+        const raw =
+          `${listing}${eol}` + `${wrapAt(line, cols, eol)}${eol}` + 'zackzh@host:~$ '
+        const where = `cols=${cols} eol=${JSON.stringify(eol)}`
+        expect(cleanCapturedOutput(raw, cmd, marker), where).toBe(listing)
+      }
+    }
+  })
+
   it('does not treat a line that merely ends with the command as an echo', () => {
     expect(cleanCapturedOutput('totals\nfile.txt\n', 'ls', 'AISSH_abc')).toBe('totals\nfile.txt')
   })
@@ -128,6 +141,47 @@ describe('parseMarker', () => {
     expect(parseMarker(echoed + printed, marker)).toEqual({
       exitCode: 0,
       cwd: '/home/zackzh/caf/caf_pltf/httpsv'
+    })
+  })
+
+  // WSL tabs run over ConPTY, which re-renders output into a `cols`-wide screen
+  // buffer and serializes it row by row. A sentinel longer than the terminal
+  // therefore arrives split, and the break can land inside the closing token —
+  // which used to stop the capture from ever seeing completion, so the command
+  // card spun until the stall timeout fired.
+  it('sees a sentinel that ConPTY wrapped, at any width and path length', () => {
+    const marker = 'AISSH_51c51f426fa9'
+    for (const eol of ['\n', '\r\n'] as const) {
+      for (let cwdLen = 1; cwdLen <= 90; cwdLen += 3) {
+        const cwd = '/' + 'a'.repeat(cwdLen - 1)
+        const line = `${marker} ec=0 cwd=${cwd} ${marker}`
+        for (let cols = 40; cols <= 200; cols++) {
+          const raw = `${eol}${wrapAt(line, cols, eol)}${eol}`
+          const where = `cols=${cols} cwdLen=${cwdLen} eol=${JSON.stringify(eol)}`
+          expect(hasCaptureMarker(raw, marker), where).toBe(true)
+          expect(parseMarker(raw, marker), where).toEqual({ exitCode: 0, cwd })
+        }
+      }
+    }
+  })
+
+  it('reads a negative or multi-digit exit code split across a wrap', () => {
+    const marker = 'AISSH_51c51f426fa9'
+    expect(parseMarker(`${marker} ec=1\n27 cwd=/tmp ${marker}\n`, marker)).toEqual({
+      exitCode: 127,
+      cwd: '/tmp'
+    })
+    expect(parseMarker(`${marker} ec=-\r\n1 cwd=/tmp ${marker}\n`, marker)).toEqual({
+      exitCode: -1,
+      cwd: '/tmp'
+    })
+  })
+
+  it('keeps a space inside a wrapped path', () => {
+    const marker = 'AISSH_51c51f426fa9'
+    expect(parseMarker(`${marker} ec=0 cwd=/mnt/c/My Doc\r\numents ${marker}\n`, marker)).toEqual({
+      exitCode: 0,
+      cwd: '/mnt/c/My Documents'
     })
   })
 })
@@ -213,6 +267,39 @@ describe('createCaptureEchoFilter', () => {
       const out = echoOf([line.slice(0, cut), line.slice(cut)])
       expect(out).not.toContain('AISSH_')
       expect(out.trim()).toBe('total 4')
+    }
+  })
+
+  it('streams output as it arrives instead of holding it for the sentinel', () => {
+    const marker = 'AISSH_51c51f426fa9'
+    let out = ''
+    const filter = createCaptureEchoFilter((text) => {
+      out += text
+    })
+    // The echoed helper carries the marker too; holding from there would keep a
+    // build's whole log off the screen until the command finished.
+    filter.feed(`zackzh@host:~$ make; __ec=$?; __m=${marker}; printf '\\n%s\\n' "$__m"\r\n`)
+    filter.feed('[1/2] compiling\r\n')
+    expect(out).toContain('[1/2] compiling')
+    expect(out).not.toContain('AISSH')
+    filter.feed('[2/2] linking\r\n')
+    expect(out).toContain('[2/2] linking')
+  })
+
+  it('never leaks a fragment of a sentinel that ConPTY wrapped', () => {
+    const marker = 'AISSH_51c51f426fa9'
+    const line = `${marker} ec=0 cwd=/home/zackzh/workspace/javascript/ai_ssh ${marker}`
+    for (const eol of ['\n', '\r\n'] as const) {
+      for (let cols = 40; cols <= 200; cols += 7) {
+        const stream = `total 4${eol}${wrapAt(line, cols, eol)}${eol}`
+        const where = `cols=${cols} eol=${JSON.stringify(eol)}`
+        // Split at every chunk boundary the pty could pick.
+        for (let cut = 1; cut < stream.length; cut++) {
+          const out = echoOf([stream.slice(0, cut), stream.slice(cut)])
+          expect(out, `${where} cut=${cut}`).not.toContain('AISSH')
+          expect(out.trim(), `${where} cut=${cut}`).toBe('total 4')
+        }
+      }
     }
   })
 
