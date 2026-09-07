@@ -30,9 +30,11 @@ import {
 } from '../../shared/prompts'
 import {
   buildChatPayload,
+  buildDetailedChatPayload,
   estimateTokens,
   selectMessagesToCompress,
-  type BudgetMessage
+  type BudgetMessage,
+  type DetailedContextBreakdown
 } from '../../shared/contextBudget'
 import { translate } from './i18n/translations'
 import { useLocaleStore } from '../store/localeStore'
@@ -45,6 +47,7 @@ import {
   toolNamesFor,
   toolTierForProfile,
   AI_SETTINGS_INTENT,
+  hasSettingsIntent,
   type ToolSurfaceOptions,
   type ToolTier
 } from '../../shared/aiTools'
@@ -158,9 +161,15 @@ interface LoopState {
    */
   mermaidIntent?: boolean
   /**
+   * Whether this task's request is about app settings, so the settings tools
+   * ride along. Decided once and held, like mermaidIntent: the schema for a
+   * given tool must not change shape between turns of one task.
+   */
+  settingsIntent?: boolean
+  /**
    * Whether this task's request is about AI configuration, so the settings tool
-   * carries its full `ai` branch. Decided once and held, like mermaidIntent: the
-   * schema for a given tool must not change shape between turns of one task.
+   * carries its full `ai` branch. Only applies when settingsIntent is true.
+   * Decided once and held, like mermaidIntent.
    */
   aiSettingsIntent?: boolean
   /**
@@ -271,7 +280,7 @@ function squeezeBudget(budget: number, squeeze = 1): number {
 const toolSchemaTokens = new Map<string, number>()
 
 function toolSurfaceKey(tier: ToolTier, surface: ToolSurfaceOptions): string {
-  return `${tier}:${!!surface.hasSkills}:${!!surface.aiSettingsIntent}:${!!surface.planMode}:${!!surface.executeMode}`
+  return `${tier}:${!!surface.hasSkills}:${!!surface.settingsIntent}:${!!surface.aiSettingsIntent}:${!!surface.planMode}:${!!surface.executeMode}`
 }
 
 function toolTokens(tier: ToolTier, surface: ToolSurfaceOptions): number {
@@ -335,6 +344,7 @@ function toolSurfaceFor(
 ): ToolSurfaceOptions {
   return {
     hasSkills: hasEnabledSkills(),
+    settingsIntent: hasSettingsIntent(userIntent ?? ''),
     aiSettingsIntent: AI_SETTINGS_INTENT.test(userIntent ?? ''),
     planMode: agentMode === 'plan',
     executeMode: agentMode === 'execute'
@@ -759,6 +769,7 @@ function startTurn(loop: LoopState, epilogue = false): void {
   // the request — testing that would drop the rules exactly when they are due.
   // A genuinely new instruction supersedes the loop, so it arrives as a new one.
   loop.mermaidIntent ??= !chartTurn && MERMAID_INTENT.test(loop.userIntent ?? '')
+  loop.settingsIntent ??= hasSettingsIntent(loop.userIntent ?? '')
   loop.aiSettingsIntent ??= AI_SETTINGS_INTENT.test(loop.userIntent ?? '')
   const chat = ai.chatTabs.find((t) => t.id === loop.tabId)
   const agentMode = chat?.agentMode ?? 'agent'
@@ -766,6 +777,7 @@ function startTurn(loop: LoopState, epilogue = false): void {
   const executeMode = agentMode === 'execute'
   const toolSurface = {
     hasSkills: hasEnabledSkills(),
+    settingsIntent: loop.settingsIntent,
     aiSettingsIntent: loop.aiSettingsIntent,
     planMode,
     executeMode
@@ -884,6 +896,7 @@ function startTurn(loop: LoopState, epilogue = false): void {
     enableTools: !toolsOff,
     userRules,
     promptSections,
+    settingsIntent: loop.settingsIntent,
     aiSettingsIntent: loop.aiSettingsIntent,
     planMode,
     executeMode
@@ -1559,13 +1572,17 @@ export function initAIService(): void {
     // Epilogue turns have no visible message yet; their text is dropped unless
     // the turn turns out to emit a tool call (handled in onDone).
     if (entry && !entry.epilogue) {
-      useAIStore.getState().appendToMessage(entry.tabId, entry.messageId, delta)
+      const ai = useAIStore.getState()
+      ai.markStreamStarted(entry.tabId, entry.messageId)
+      ai.appendToMessage(entry.tabId, entry.messageId, delta)
     }
   })
   window.api.ai.onReasoning(({ requestId, delta }) => {
     const entry = pending.get(requestId)
     if (entry && !entry.epilogue) {
-      useAIStore.getState().appendReasoning(entry.tabId, entry.messageId, delta)
+      const ai = useAIStore.getState()
+      ai.markStreamStarted(entry.tabId, entry.messageId)
+      ai.appendReasoning(entry.tabId, entry.messageId, delta)
     }
   })
   window.api.ai.onDone(({ requestId, content, toolCalls, usage, finishReason }) => {
@@ -1581,6 +1598,14 @@ export function initAIService(): void {
     }
     const { tabId, messageId, loop, epilogue } = entry
     const ai = useAIStore.getState()
+
+    if (!epilogue) {
+      const tab = ai.chatTabs.find((t) => t.id === tabId)
+      const msg = tab?.messages.find((m) => m.id === messageId)
+      const generationMs =
+        msg?.streamStartedAt !== undefined ? Date.now() - msg.streamStartedAt : undefined
+      ai.setMessageUsage(tabId, messageId, { usage, generationMs })
+    }
 
     // Swap this turn's estimate for the provider's real count before the guard
     // checks the task budget below.
@@ -1927,12 +1952,21 @@ export async function compactActiveChat(): Promise<void> {
   ai.setNotice(tNotice('copilot.context.compressed', { count }))
 }
 
+export interface SendPromptOptions {
+  /** Force the settings tool surface (e.g. /settings slash). */
+  settingsIntent?: boolean
+}
+
 /**
  * Send a user prompt to the AI, attaching the pinned terminal's recent output
  * and host info as context. Mid-task prompts are queued and replayed when the
  * loop finishes.
  */
-export async function sendPrompt(text: string, targetTabId?: string): Promise<void> {
+export async function sendPrompt(
+  text: string,
+  targetTabId?: string,
+  opts?: SendPromptOptions
+): Promise<void> {
   const prompt = text.trim()
   if (!prompt) return
 
@@ -2062,6 +2096,7 @@ export async function sendPrompt(text: string, targetTabId?: string): Promise<vo
     guard: createGuardState(),
     // Raw instruction, kept for the Verify step's display-only stop decision.
     userIntent: prompt,
+    settingsIntent: opts?.settingsIntent,
     chartIntent,
     fileContext
   })
@@ -2122,6 +2157,29 @@ function toolsDefinitionText(tier: ToolTier, surface: ToolSurfaceOptions): strin
  * decision so the two cannot disagree about how much of the window is already
  * spoken for.
  */
+function fixedOverheadSegments(
+  context: TerminalContext | undefined,
+  chatTabId: string | undefined,
+  tier: ToolTier | undefined,
+  surface: ToolSurfaceOptions
+): { terminal: string; tools: string; injections: string } {
+  const pinnedTabId = chatTabId
+    ? useAIStore.getState().chatTabs.find((t) => t.id === chatTabId)?.pinnedTabId
+    : undefined
+  const terminal = buildContextMessage(context) ?? ''
+  const tools = tier ? toolsDefinitionText(tier, surface) : ''
+  const injections = [
+    buildToolContextMessage(tier, pinnedTabId),
+    buildSkillsContextMessage(),
+    buildHostMemoryMessage(pinnedTabId),
+    chatTabId ? buildTaskMemoryMessage(chatTabId) : undefined,
+    buildPlanContextMessage(chatTabId)
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+  return { terminal, tools, injections }
+}
+
 function fixedOverheadText(
   context: TerminalContext | undefined,
   chatTabId: string | undefined,
@@ -2129,23 +2187,11 @@ function fixedOverheadText(
   tier: ToolTier | undefined,
   surface: ToolSurfaceOptions
 ): string {
-  const pinnedTabId = chatTabId
-    ? useAIStore.getState().chatTabs.find((t) => t.id === chatTabId)?.pinnedTabId
-    : undefined
-  return [
-    buildContextMessage(context),
-    buildToolContextMessage(tier, pinnedTabId),
-    buildSkillsContextMessage(),
-    buildHostMemoryMessage(pinnedTabId),
-    chatTabId ? buildTaskMemoryMessage(chatTabId) : undefined,
-    buildPlanContextMessage(chatTabId),
-    tier ? toolsDefinitionText(tier, surface) : undefined
-  ]
-    .filter(Boolean)
-    .join('\n\n')
+  const { terminal, tools, injections } = fixedOverheadSegments(context, chatTabId, tier, surface)
+  return [terminal, injections, tools].filter(Boolean).join('\n\n')
 }
 
-/** Build context budget for the active chat tab (for UI meter). */
+/** Build detailed context budget for the active chat tab (for UI meter). */
 export function computeActiveTabBudget(params: {
   messages: { role: 'user' | 'assistant'; content: string }[]
   draft: string
@@ -2154,7 +2200,7 @@ export function computeActiveTabBudget(params: {
   userRules?: string
   /** Active copilot model profile; decides how large a tool schema is sent. */
   profile?: ModelProfile
-}) {
+}): DetailedContextBreakdown {
   const activeChatTabId = useAIStore.getState().activeChatTabId ?? undefined
   const tier = toolTierForProfile(params.profile)
   const agentMode = activeChatTabId
@@ -2162,12 +2208,13 @@ export function computeActiveTabBudget(params: {
     : 'agent'
   const surface: ToolSurfaceOptions = {
     hasSkills: hasEnabledSkills(),
+    settingsIntent: true,
     aiSettingsIntent: true,
     planMode: agentMode === 'plan',
     executeMode: agentMode === 'execute'
   }
 
-  return buildChatPayload({
+  return buildDetailedChatPayload({
     // The meter is a headroom gauge, so it keeps the worst-case chart+mermaid
     // sections — but scoped to the tier's tools, since a trimmed tier can never
     // be charged for schemas and rules it does not receive.
@@ -2176,7 +2223,7 @@ export function computeActiveTabBudget(params: {
       mermaid: true,
       toolNames: toolNamesFor(tier, surface)
     }),
-    contextMessage: fixedOverheadText(params.context, activeChatTabId, tier, surface),
+    ...fixedOverheadSegments(params.context, activeChatTabId, tier, surface),
     messages: params.messages,
     draft: params.draft,
     limit: params.limit

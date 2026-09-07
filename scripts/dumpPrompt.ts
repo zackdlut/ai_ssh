@@ -3,13 +3,14 @@
  * `docs/copilot-prompt-and-agent-loop.md` can be regenerated rather than
  * hand-edited (and quietly drift from what the app actually sends).
  *
- *   npx tsx scripts/dumpPrompt.ts [full|core|none]
+ *   npx tsx scripts/dumpPrompt.ts [full|full-settings|core|none]
  */
 import { buildCopilotSystemPrompt } from '../src/shared/prompts/copilot'
 import { toolNamesFor } from '../src/shared/aiTools'
 
 const variants = {
   full: () => toolNamesFor('full'),
+  'full-settings': () => toolNamesFor('full', { settingsIntent: true }),
   core: () => toolNamesFor('core'),
   none: () => [] as string[]
 }

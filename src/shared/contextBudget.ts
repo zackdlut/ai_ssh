@@ -69,6 +69,62 @@ export interface ChatPayloadBudget {
   usageRatio: number
 }
 
+/** Finer-grained breakdown for the context meter popover. */
+export interface DetailedContextBreakdown {
+  system: number
+  terminal: number
+  tools: number
+  injections: number
+  history: number
+  draft: number
+  outputReserve: number
+  total: number
+  limit: number
+  usageRatio: number
+}
+
+const OUTPUT_RESERVE_MAX = 8192
+const OUTPUT_RESERVE_MIN = 2048
+const OUTPUT_RESERVE_SHARE = 0.25
+
+/** Tokens held back for the model's reply within a context window. */
+export function outputReserveTokens(limit = 0): number {
+  if (limit <= 0) return OUTPUT_RESERVE_MAX
+  const share = Math.floor(limit * OUTPUT_RESERVE_SHARE)
+  return Math.max(OUTPUT_RESERVE_MIN, Math.min(OUTPUT_RESERVE_MAX, share))
+}
+
+export function buildDetailedChatPayload(params: {
+  systemPrompt: string
+  terminalContext?: string
+  toolDefinitions?: string
+  injections?: string
+  messages: BudgetMessage[]
+  draft?: string
+  limit: number
+}): DetailedContextBreakdown {
+  const system = estimateTokens(params.systemPrompt)
+  const terminal = estimateTokens(params.terminalContext ?? '')
+  const tools = estimateTokens(params.toolDefinitions ?? '')
+  const injections = estimateTokens(params.injections ?? '')
+  const history = params.messages.reduce((sum, m) => sum + estimateTokens(m.content), 0)
+  const draft = estimateTokens(params.draft ?? '')
+  const total = system + terminal + tools + injections + history + draft
+  const limit = params.limit > 0 ? params.limit : 1
+  return {
+    system,
+    terminal,
+    tools,
+    injections,
+    history,
+    draft,
+    outputReserve: outputReserveTokens(limit),
+    total,
+    limit,
+    usageRatio: total / limit
+  }
+}
+
 /**
  * Heuristic token estimate. CJK is charged at ~1.5 chars/token; everything else
  * is charged on a ratio interpolated from how dense the text is, so a log or a

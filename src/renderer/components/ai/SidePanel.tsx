@@ -38,6 +38,7 @@ import TerminalTabPicker from './TerminalTabPicker'
 import ComposerInput from './ComposerInput'
 import SlashMenu from './SlashMenu'
 import { COPILOT_CONTEXT_MAX_LINES, COPILOT_TERMINAL_MENTION_MAX_LINES, readTerminalOutput } from '../../lib/terminalRegistry'
+import { messageBudgetText } from '../../lib/toolTrace'
 import {
   caretOnMentionChip,
   filterTabsForMention,
@@ -205,7 +206,10 @@ export default function SidePanel(): JSX.Element {
         }
       : undefined
     return computeActiveTabBudget({
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: messages.map((m) => ({
+        role: m.role,
+        content: messageBudgetText(m)
+      })),
       draft: input,
       context,
       limit,
@@ -303,6 +307,10 @@ export default function SidePanel(): JSX.Element {
     }
     if (name === 'compact') {
       void compactActiveChat()
+      return
+    }
+    if (name === 'settings') {
+      void sendPrompt(t('copilot.slash.settingsPrompt'), undefined, { settingsIntent: true })
       return
     }
     const enabled = useSkillsStore.getState().skills.filter((s) => s.enabled)

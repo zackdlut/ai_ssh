@@ -7,6 +7,7 @@ describe('parseSlashCommand', () => {
     expect(parseSlashCommand('/agent')).toEqual({ kind: 'command', name: 'agent', arg: '' })
     expect(parseSlashCommand('/execute')).toEqual({ kind: 'command', name: 'execute', arg: '' })
     expect(parseSlashCommand('/compact')).toEqual({ kind: 'command', name: 'compact', arg: '' })
+    expect(parseSlashCommand('/settings')).toEqual({ kind: 'command', name: 'settings', arg: '' })
     expect(parseSlashCommand('/skill nginx')).toEqual({
       kind: 'command',
       name: 'skill',
@@ -41,7 +42,8 @@ describe('filterSlashCommands', () => {
       'agent',
       'execute',
       'compact',
-      'skill'
+      'skill',
+      'settings'
     ])
     expect(filterSlashCommands('pl').map((c) => c.name)).toEqual(['plan'])
     expect(filterSlashCommands('ex').map((c) => c.name)).toEqual(['execute'])

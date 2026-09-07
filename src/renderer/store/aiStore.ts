@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import {
   normalizeCopilotAgentMode,
+  type AITokenUsage,
   type ChartSnapshot,
   type CopilotAgentMode,
   type CopilotChatMessage,
@@ -21,6 +22,8 @@ import { clearTaskEvidence } from '../lib/taskEvidence'
 export interface ChatMessage extends CopilotChatMessage {
   streaming?: boolean
   thinkingStartedAt?: number
+  /** First streamed chunk timestamp; runtime only, not persisted. */
+  streamStartedAt?: number
 }
 
 export interface ChatTab extends Omit<CopilotChatTab, 'messages'> {
@@ -193,7 +196,9 @@ function toPersistedState(
         chartSnapshots: m.chartSnapshots,
         isContextSummary: m.isContextSummary,
         error: m.error,
-        toolCalls: m.toolCalls
+        toolCalls: m.toolCalls,
+        usage: m.usage,
+        generationMs: m.generationMs
       }))
     }))
   }
@@ -326,6 +331,14 @@ interface AIState {
   appendToMessage: (tabId: string, id: string, delta: string) => void
   appendReasoning: (tabId: string, id: string, delta: string) => void
   finishMessage: (tabId: string, id: string) => void
+  /** Record when streaming output begins for a turn. */
+  markStreamStarted: (tabId: string, id: string) => void
+  /** Attach provider usage and generation timing to a completed turn. */
+  setMessageUsage: (
+    tabId: string,
+    id: string,
+    metrics: { usage?: AITokenUsage; generationMs?: number }
+  ) => void
   /** Attach a provider failure to a message for display only (never replayed). */
   setMessageError: (tabId: string, id: string, error: string) => void
   setPlan: (tabId: string, plan: PlanItem[]) => void
@@ -623,8 +636,39 @@ export const useAIStore = create<AIState>((set, get) => ({
               m.thinkingMs === undefined && m.thinkingStartedAt !== undefined
                 ? Date.now() - m.thinkingStartedAt
                 : m.thinkingMs
-            return { ...m, streaming: false, thinkingMs }
+            const { streamStartedAt: _drop, ...rest } = m
+            return { ...rest, streaming: false, thinkingMs }
           })
+        }
+      })
+    }))
+    schedulePersist(get)
+  },
+  markStreamStarted: (tabId, id) => {
+    set((s) => ({
+      chatTabs: s.chatTabs.map((tab) => {
+        if (tab.id !== tabId) return tab
+        return {
+          ...tab,
+          messages: tab.messages.map((m) =>
+            m.id === id && m.streamStartedAt === undefined
+              ? { ...m, streamStartedAt: Date.now() }
+              : m
+          )
+        }
+      })
+    }))
+  },
+  setMessageUsage: (tabId, id, metrics) => {
+    set((s) => ({
+      chatTabs: s.chatTabs.map((tab) => {
+        if (tab.id !== tabId) return tab
+        return {
+          ...tab,
+          updatedAt: Date.now(),
+          messages: tab.messages.map((m) =>
+            m.id === id ? { ...m, ...metrics } : m
+          )
         }
       })
     }))

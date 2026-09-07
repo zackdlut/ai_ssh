@@ -200,9 +200,17 @@ export interface ToolSurfaceOptions {
    */
   hasSkills?: boolean
   /**
+   * Whether this turn's request is about app settings at all (see
+   * SETTINGS_INTENT). When false, neither get_app_settings nor
+   * update_app_settings ride along — their schemas and prompt paragraphs are
+   * withheld until the user asks or uses /settings.
+   */
+  settingsIntent?: boolean
+  /**
    * Whether this turn's request is about AI configuration (see
-   * AI_SETTINGS_INTENT). Only then does update_app_settings carry its `ai`
-   * branch, the single largest schema in the app.
+   * AI_SETTINGS_INTENT). Only meaningful when settingsIntent is true: then
+   * update_app_settings carries its `ai` branch, the single largest schema in
+   * the app.
    */
   aiSettingsIntent?: boolean
   /**
@@ -244,10 +252,12 @@ export function buildAITools(tier: ToolTier, opts: ToolSurfaceOptions = {}): AIT
     ? withSkills.filter((t) => PLAN_MODE_TOOLS.has(t.function.name))
     : withSkills
   if (opts.executeMode && !opts.planMode) gated = applyExecuteModeTools(gated)
-  if (!opts.aiSettingsIntent) return gated
-  return gated.map((t) =>
-    t.function.name === 'update_app_settings' ? UPDATE_APP_SETTINGS_FULL : t
-  )
+  if (!opts.settingsIntent) return gated
+  const next = [...gated, GET_APP_SETTINGS_TOOL]
+  if (!opts.planMode) {
+    next.push(opts.aiSettingsIntent ? UPDATE_APP_SETTINGS_FULL : UPDATE_APP_SETTINGS_SLIM)
+  }
+  return next
 }
 
 /**
@@ -867,17 +877,18 @@ const BASE_TOOLS: AIToolDefinition[] = [
         additionalProperties: false
       }
     }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_app_settings',
-      description:
-        'Read the current application settings: UI theme, language, terminal appearance, startup panel preferences, user_rules (custom copilot instructions), and AI configuration (apiKey is not returned; only hasApiKey). Call this when unsure of current values before updating.',
-      parameters: { type: 'object', properties: {}, additionalProperties: false }
-    }
-  },
+  }
 ]
+
+const GET_APP_SETTINGS_TOOL: AIToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'get_app_settings',
+    description:
+      'Read the current application settings: UI theme, language, terminal appearance, startup panel preferences, user_rules (custom copilot instructions), and AI configuration (apiKey is not returned; only hasApiKey). Call this when unsure of current values before updating.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false }
+  }
+}
 
 /**
  * The `ai` branch of update_app_settings: provider endpoints, keys, per-profile
@@ -982,6 +993,21 @@ const AI_SETTINGS_SCHEMA = {
  */
 export const AI_SETTINGS_INTENT =
   /\b(?:llm|api[\s_-]?keys?|base[\s_-]?urls?|ollama|openai|anthropic|deepseek|context[\s_-]?(?:length|window)|copilot\s+model|model\s+profile|ai\s+(?:settings?|model|provider|config\w*)|command\s+timeout)\b|ai\s*(?:设置|配置)|模型|接口地址|密钥|上下文长度|上下文窗口|档位|供应商|命令超时|执行超时/i
+
+/**
+ * Requests that need the settings tools at all — theme, locale, terminal
+ * appearance, startup panels, user rules, or a general "show/change app
+ * settings" ask. Deliberately narrow: bare `settings`/`config` match remote
+ * service work constantly, so we anchor on app/UI vocabulary or explicit
+ * 应用设置 phrasing. AI-configuration asks are covered via AI_SETTINGS_INTENT.
+ */
+export const SETTINGS_INTENT =
+  /\b(?:app(?:lication)?\s+settings?|user[\s_-]?rules?|copilot\s+instructions?|(?:ui\s+)?theme(?:\s+setting)?|locale|(?:ui\s+)?language(?:\s+setting)?|terminal\s+(?:appearance|font|color[\s_-]?scheme)|startup\s+panel|(?:connection|copilot)\s+sidebar|preferences?)\b|(?:查看|显示|打开|修改|更改|切换).*(?:应用)?设置|应用设置|用户规则|(?:界面|UI)?主题|语言设置|终端(?:外观|字体|配色)|启动(?:面板|项)|(?:连接|侧边)栏(?:默认)?(?:打开|显示)?/i
+
+/** Whether a user request should load the settings tool surface. */
+export function hasSettingsIntent(userIntent: string): boolean {
+  return SETTINGS_INTENT.test(userIntent) || AI_SETTINGS_INTENT.test(userIntent)
+}
 
 /**
  * update_app_settings, with or without the heavyweight `ai` branch. The tool
@@ -1103,8 +1129,8 @@ const UPDATE_APP_SETTINGS_SLIM = buildUpdateAppSettingsTool(false)
 const UPDATE_APP_SETTINGS_FULL = buildUpdateAppSettingsTool(true)
 
 /**
- * The canonical full tool surface. Carries the SLIM settings tool, because that
- * is what a turn gets unless it asks about AI configuration — so consumers that
- * measure "the whole tool set" measure the common case.
+ * The canonical full tool surface without settings tools. Settings ride along
+ * only when settingsIntent is true (see buildAITools), so consumers measuring
+ * the common case do not count schemas the model was not given.
  */
-export const AI_TOOLS: AIToolDefinition[] = [...BASE_TOOLS, UPDATE_APP_SETTINGS_SLIM]
+export const AI_TOOLS: AIToolDefinition[] = [...BASE_TOOLS]

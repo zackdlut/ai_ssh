@@ -4,6 +4,7 @@ import ToolCallCard from './ToolCallCard'
 import Markdown from './Markdown'
 import HtmlPreview from './HtmlPreview'
 import ThinkingBlock from './ThinkingBlock'
+import TurnTokenStats from './TurnTokenStats'
 import { parseJsonLoose } from '../../lib/chartSpec'
 import { useAIStore, type ChatMessage as ChatMessageType } from '../../store/aiStore'
 import type { ChartSnapshot } from '../../../shared/types'
@@ -334,6 +335,14 @@ export default function ChatMessage({ message }: Props): JSX.Element {
             ))}
           </div>
         )}
+        <TurnTokenStats
+          streaming={message.streaming}
+          content={body}
+          reasoning={reasoning}
+          usage={message.usage}
+          generationMs={message.generationMs}
+          streamStartedAt={message.streamStartedAt}
+        />
       </div>
     </div>
   )

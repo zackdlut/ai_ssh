@@ -335,6 +335,10 @@ export interface CopilotChatMessage {
   error?: string
   /** Function/tool calls requested by the model in this assistant turn. */
   toolCalls?: ToolCallView[]
+  /** Provider-reported token usage for this assistant turn. */
+  usage?: AITokenUsage
+  /** Wall-clock ms from first streamed chunk to onDone for this turn. */
+  generationMs?: number
 }
 
 export type PlanItemStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
@@ -471,10 +475,17 @@ export interface AIChatRequest {
     mermaid?: boolean
   }
   /**
+   * Whether this turn's request is about app settings, so the settings tools
+   * should ride along. Decided in the renderer, which holds the task's opening
+   * request and must charge its budget for the same schema main will send.
+   */
+  settingsIntent?: boolean
+  /**
    * Whether this turn's request is about AI configuration, so the settings tool
-   * should carry its heavyweight `ai` branch. Decided in the renderer, which
-   * holds the task's opening request and must charge its budget for the same
-   * schema main will send.
+   * should carry its heavyweight `ai` branch. Only meaningful when
+   * settingsIntent is true. Decided in the renderer, which holds the task's
+   * opening request and must charge its budget for the same schema main will
+   * send.
    */
   aiSettingsIntent?: boolean
   /**

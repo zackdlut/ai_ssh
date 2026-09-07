@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildChatPayload,
+  buildDetailedChatPayload,
   estimateTokens,
   MIN_KEEP_MESSAGES,
+  outputReserveTokens,
   selectMessagesToCompress,
   TARGET_RATIO_AFTER_COMPRESS,
   type BudgetMessage
@@ -55,6 +57,31 @@ describe('estimateTokens', () => {
 
   it('handles text that is entirely CJK', () => {
     expect(estimateTokens('中文')).toBe(2)
+  })
+})
+
+describe('buildDetailedChatPayload', () => {
+  it('splits usage into detailed parts and sums them', () => {
+    const budget = buildDetailedChatPayload({
+      systemPrompt: 'system prompt text',
+      terminalContext: 'terminal text',
+      toolDefinitions: 'tool schema text',
+      injections: 'skills and memory',
+      messages: messages(2, 'hello'),
+      draft: 'draft text',
+      limit: 1000
+    })
+    const { system, terminal, tools, injections, history, draft, total } = budget
+    expect(total).toBe(system + terminal + tools + injections + history + draft)
+    expect(budget.outputReserve).toBe(outputReserveTokens(1000))
+    expect(budget.usageRatio).toBeCloseTo(total / 1000)
+  })
+})
+
+describe('outputReserveTokens', () => {
+  it('returns a bounded reserve for typical windows', () => {
+    expect(outputReserveTokens(32768)).toBeGreaterThanOrEqual(2048)
+    expect(outputReserveTokens(32768)).toBeLessThanOrEqual(8192)
   })
 })
 

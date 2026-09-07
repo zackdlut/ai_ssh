@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   AI_SETTINGS_INTENT,
+  SETTINGS_INTENT,
   buildAITools,
+  hasSettingsIntent,
   isAutoApprovedTool,
   isParallelSafeTool,
   toolNamesFor
@@ -19,24 +21,40 @@ const aiBranch = (opts: Parameters<typeof buildAITools>[1]) => {
   return params.properties.updates.properties.ai
 }
 
+describe('settings tools on-demand loading', () => {
+  it('withholds settings tools until settingsIntent is set', () => {
+    expect(toolNamesFor('full')).not.toContain('get_app_settings')
+    expect(toolNamesFor('full')).not.toContain('update_app_settings')
+    const withSettings = toolNamesFor('full', { settingsIntent: true })
+    expect(withSettings).toContain('get_app_settings')
+    expect(withSettings).toContain('update_app_settings')
+  })
+
+  it('in plan mode offers get_app_settings but not update_app_settings', () => {
+    const names = toolNamesFor('full', { settingsIntent: true, planMode: true })
+    expect(names).toContain('get_app_settings')
+    expect(names).not.toContain('update_app_settings')
+  })
+})
+
 describe('the AI-settings branch of update_app_settings', () => {
   it('carries its full field list only when the request is about AI config', () => {
-    expect(aiBranch({ aiSettingsIntent: true }).properties).toBeDefined()
-    expect(aiBranch({}).properties).toBeUndefined()
+    expect(aiBranch({ settingsIntent: true, aiSettingsIntent: true }).properties).toBeDefined()
+    expect(aiBranch({ settingsIntent: true }).properties).toBeUndefined()
   })
 
   it('leaves a usable escape hatch when the field list is withheld', () => {
     // A withheld schema must not become a withheld capability: the field still
     // exists and says where to learn its shape, and the renderer dispatcher
     // applies `updates.ai` either way.
-    const slim = aiBranch({}) as { type: string; description: string }
+    const slim = aiBranch({ settingsIntent: true }) as { type: string; description: string }
     expect(slim.type).toBe('object')
     expect(slim.description).toContain('get_app_settings')
   })
 
   it('is worth withholding', () => {
-    const withAI = JSON.stringify(settingsTool({ aiSettingsIntent: true })).length
-    const without = JSON.stringify(settingsTool({})).length
+    const withAI = JSON.stringify(settingsTool({ settingsIntent: true, aiSettingsIntent: true })).length
+    const without = JSON.stringify(settingsTool({ settingsIntent: true })).length
     // The branch was roughly a quarter of the whole tool payload. If trimming it
     // ever stops saving on the order of a thousand characters per turn, the
     // split has stopped paying for its complexity.
@@ -46,7 +64,40 @@ describe('the AI-settings branch of update_app_settings', () => {
   it('keeps one tool name across both shapes', () => {
     // The dispatcher, approval policy, result card and i18n labels all key off
     // the name, and a task must not see the tool change identity mid-flight.
-    expect(toolNamesFor('full', { aiSettingsIntent: true })).toEqual(toolNamesFor('full'))
+    expect(toolNamesFor('full', { settingsIntent: true, aiSettingsIntent: true })).toEqual(
+      toolNamesFor('full', { settingsIntent: true })
+    )
+  })
+})
+
+describe('SETTINGS_INTENT', () => {
+  it('fires on general app-settings requests', () => {
+    for (const req of [
+      'switch the app theme to dawn',
+      'change the UI language to English',
+      'make the terminal font bigger',
+      'show me the application settings',
+      'update my user rules',
+      '把主题改成浅色',
+      '查看应用设置',
+      '改一下终端字体',
+      '打开启动时显示 Copilot 侧边栏'
+    ]) {
+      expect(SETTINGS_INTENT.test(req), req).toBe(true)
+      expect(hasSettingsIntent(req), req).toBe(true)
+    }
+  })
+
+  it('stays quiet on ordinary operations work', () => {
+    for (const req of [
+      'cat /etc/nginx/nginx.conf settings',
+      'restart nginx',
+      'check docker settings on the server',
+      '看一下 /etc/nginx 的配置'
+    ]) {
+      expect(SETTINGS_INTENT.test(req), req).toBe(false)
+      expect(hasSettingsIntent(req), req).toBe(false)
+    }
   })
 })
 
@@ -65,6 +116,7 @@ describe('AI_SETTINGS_INTENT', () => {
       '把命令超时改成 2 小时'
     ]) {
       expect(AI_SETTINGS_INTENT.test(req), req).toBe(true)
+      expect(hasSettingsIntent(req), req).toBe(true)
     }
   })
 
@@ -94,8 +146,10 @@ describe('buildAITools', () => {
   it('keeps the app-management tools off the core tier', () => {
     for (const tool of ['update_app_settings', 'open_ssh', 'close_tabs', 'run_in_terminal']) {
       expect(toolNamesFor('core'), tool).not.toContain(tool)
-      expect(toolNamesFor('full'), tool).toContain(tool)
+      expect(toolNamesFor('full', { settingsIntent: true }), tool).toContain(tool)
     }
+    expect(toolNamesFor('full')).not.toContain('update_app_settings')
+    expect(toolNamesFor('full')).toContain('open_ssh')
   })
 
   it('keeps apply_patch and the git tools off the core tier', () => {

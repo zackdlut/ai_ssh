@@ -8,9 +8,10 @@ import { READONLY_TOOLS, toolNamesFor } from '../aiTools'
 
 const CORE = toolNamesFor('core')
 const FULL = toolNamesFor('full')
+const FULL_SETTINGS = toolNamesFor('full', { settingsIntent: true })
 
 /** Tools the core tier withholds; the prompt must not mention any of them. */
-const NOT_IN_CORE = FULL.filter((n) => !CORE.includes(n))
+const NOT_IN_CORE = FULL_SETTINGS.filter((n) => !CORE.includes(n))
 
 describe('buildCopilotSystemPrompt tool gating', () => {
   it('never names a tool it was not given', () => {
@@ -73,6 +74,7 @@ describe('buildCopilotSystemPrompt tool gating', () => {
   it('promises only the snapshot fields the tier can consume', () => {
     const core = buildCopilotSystemPrompt({ toolNames: CORE })
     const full = buildCopilotSystemPrompt({ toolNames: FULL })
+    const fullSettings = buildCopilotSystemPrompt({ toolNames: FULL_SETTINGS })
     // Nothing on the core tier accepts a config_id or folder_id, and nothing
     // reads app settings, so the snapshot omits them — the prompt must not
     // announce context the turn will not receive.
@@ -81,7 +83,8 @@ describe('buildCopilotSystemPrompt tool gating', () => {
     expect(core).not.toContain('folder_id')
     expect(core).not.toContain('App settings line')
     expect(full).toContain('bookmark folders')
-    expect(full).toContain('App settings line')
+    expect(full).not.toContain('App settings line')
+    expect(fullSettings).toContain('App settings line')
   })
 
   it('tells the model to default to the pinned tab', () => {

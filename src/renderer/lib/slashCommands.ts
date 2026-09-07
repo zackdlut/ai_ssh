@@ -1,7 +1,7 @@
 /**
  * Composer slash commands. Parsed locally; they never go to the LLM.
  */
-export const SLASH_NAMES = ['plan', 'agent', 'execute', 'compact', 'skill'] as const
+export const SLASH_NAMES = ['plan', 'agent', 'execute', 'compact', 'skill', 'settings'] as const
 
 export type SlashName = (typeof SLASH_NAMES)[number]
 
@@ -13,6 +13,7 @@ export interface SlashCommandMeta {
     | 'copilot.slash.execute'
     | 'copilot.slash.compact'
     | 'copilot.slash.skill'
+    | 'copilot.slash.settings'
 }
 
 export const SLASH_COMMANDS: readonly SlashCommandMeta[] = [
@@ -20,7 +21,8 @@ export const SLASH_COMMANDS: readonly SlashCommandMeta[] = [
   { name: 'agent', hintKey: 'copilot.slash.agent' },
   { name: 'execute', hintKey: 'copilot.slash.execute' },
   { name: 'compact', hintKey: 'copilot.slash.compact' },
-  { name: 'skill', hintKey: 'copilot.slash.skill' }
+  { name: 'skill', hintKey: 'copilot.slash.skill' },
+  { name: 'settings', hintKey: 'copilot.slash.settings' }
 ]
 
 export type ParsedSlash =

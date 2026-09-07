@@ -513,6 +513,7 @@ export class AIProvider {
     const tier = toolTierForProfile(profile)
     const tools = buildAITools(tier, {
       hasSkills: this.getSkills().some((s) => s.enabled),
+      settingsIntent: req.settingsIntent,
       aiSettingsIntent: req.aiSettingsIntent,
       planMode: req.planMode,
       executeMode: req.executeMode
