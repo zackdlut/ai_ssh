@@ -1165,7 +1165,9 @@ export function buildToolContextMessage(
                 }${t.deviceKind ? ` (${deviceKindLabel(t.deviceKind)})` : ''} — no shell`
               : t.kind === 'wsl'
                 ? `wsl ${t.wslDistro ?? '(default distro)'}`
-                : `${t.username}@${t.host}:${t.port}`
+                : t.kind === 'local'
+                  ? `local shell ${t.localShell ?? '(default)'} on this machine`
+                  : `${t.username}@${t.host}:${t.port}`
           return `- tab_id=${t.id} | ${identity} | ${t.status}${
             snapshotTabMarkers(t.id, activeSessionId, pinnedTabId)
           }${cwd}${last}`
@@ -1183,7 +1185,9 @@ export function buildToolContextMessage(
           const target =
             c.kind === 'serial'
               ? `serial ${c.serial?.path ?? '(no port)'}`
-              : `${c.username}@${c.host}:${c.port}`
+              : c.kind === 'local'
+                ? `local shell ${c.local?.shell ?? '(default)'}`
+                : `${c.username}@${c.host}:${c.port}`
           return `- config_id=${c.id} | ${c.name} | ${target}${
             c.password ? ' | has-password' : ''
           }${c.privateKey ? ' | has-key' : ''}${

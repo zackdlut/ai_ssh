@@ -252,8 +252,8 @@ function toolRules(t: ToolSet): string {
     ? lines(
         `Files (${fileToolNames.join(' / ')}). Prefer these over shelling out: read_file beats \`cat\`, grep beats \`grep | head\`${
           writeTool ? `, ${writeTool} beats \`sed -i\`` : ''
-        }, and they run over SFTP so they leave the terminal alone${
-          shell ? ` (a local WSL tab has no SFTP: use ${shell} there)` : ''
+        }, and they bypass the shell so they leave the terminal alone${
+          shell ? ` (a WSL tab is the exception and has no file channel: use ${shell} there)` : ''
         }.`,
         t.has('apply_patch') &&
           t.has('edit_file') &&

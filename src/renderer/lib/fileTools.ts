@@ -1,5 +1,5 @@
 /**
- * Remote file tools for the agent loop.
+ * File tools for the agent loop.
  *
  * The copilot used to reach the host through a single `exec_command`, which
  * made every file change a blind `sed -i` / heredoc: nothing could be read back
@@ -7,14 +7,16 @@
  * nothing could be rolled back. These tools give the loop the missing half of
  * the "read -> edit -> verify" cycle.
  *
- * Reads and writes go over SFTP rather than the interactive shell, so they do
- * not fight the user for the terminal, are not clamped by the capture buffer,
- * and cannot be corrupted by shell quoting. Search still shells out (there is
- * no SFTP equivalent of grep) but returns structured results.
+ * Reads and writes go through `fileAccess` rather than the interactive shell,
+ * so they do not fight the user for the terminal, are not clamped by the
+ * capture buffer, and cannot be corrupted by shell quoting. Which transport
+ * that turns into — SFTP on a remote host, the filesystem on a local tab — is
+ * `fileAccess`'s problem, not this file's.
  */
 import { useSessionsStore, type TerminalSession } from '../store/sessionsStore'
 import { useAIStore } from '../store/aiStore'
 import { runAgentCommand } from './agentExec'
+import * as files from './fileAccess'
 import { toolResultCharBudget } from './toolBudget'
 import { computeTextDiff, formatDiffStat } from '../../shared/textDiff'
 import { applyUniqueEdit, type EditOutcome } from '../../shared/textEdit'
@@ -63,11 +65,11 @@ interface ResolvedTab {
 }
 
 /**
- * Resolve a tab_id to a live SFTP-capable session. Only SSH tabs have one — a
- * WSL pty and a serial port are both rejected with a pointer to whatever does
- * work there instead.
+ * Resolve a tab_id to a live session with a file channel. SSH has one over
+ * SFTP and a local shell has one over the filesystem; a WSL pty and a serial
+ * port are rejected with a pointer to whatever does work there instead.
  */
-function resolveSftpTab(tabId: string | undefined): ResolvedTab | { error: string } {
+function resolveFileTab(tabId: string | undefined): ResolvedTab | { error: string } {
   if (!tabId) return { error: 'tab_id is required.' }
   const tab = useSessionsStore.getState().sessions.find((t) => t.id === tabId)
   if (!tab) return { error: `No open tab with id "${tabId}".` }
@@ -101,11 +103,11 @@ export function shellQuote(value: string): string {
 
 /** Read a whole file, or fail when it exceeds `maxBytes`. */
 async function readWholeFile(
-  sessionId: string,
+  tab: TerminalSession,
   path: string,
   maxBytes: number
 ): Promise<{ text: string } | { error: string }> {
-  const res = await window.api.sftp.readText(sessionId, path, { maxBytes })
+  const res = await files.readText(tab, path, { maxBytes })
   if (res.error || !res.read) return { error: res.error ?? 'Failed to read the file.' }
   if (res.read.truncated) {
     return {
@@ -129,7 +131,7 @@ interface BackupCtx {
  * target is overwritten — so Stop cannot leave an unindexed `.bak` on disk.
  */
 async function backupRemoteFile(
-  sessionId: string,
+  tab: TerminalSession,
   path: string,
   content: string,
   ctx?: BackupCtx
@@ -138,7 +140,7 @@ async function backupRemoteFile(
     return `backup skipped (file exceeds ${BACKUP_MAX_BYTES} bytes)`
   }
   const backupPath = `${path}.bak.${Date.now()}`
-  const res = await window.api.sftp.writeText(sessionId, backupPath, content)
+  const res = await files.writeText(tab, backupPath, content)
   if (res.error) return `backup failed: ${res.error}`
   const note = `backup: ${backupPath}`
   if (ctx?.chatTabId) {
@@ -173,7 +175,7 @@ export async function readFile(
   args: Record<string, unknown>,
   ctx?: { resultCharBudget?: number }
 ): Promise<ToolResult> {
-  const resolved = resolveSftpTab(str(args.tab_id))
+  const resolved = resolveFileTab(str(args.tab_id))
   if ('error' in resolved) return { ok: false, error: resolved.error }
   const path = str(args.path)
   if (!path) return { ok: false, error: 'path is required.' }
@@ -181,9 +183,7 @@ export async function readFile(
   const offset = Math.max(1, num(args.offset) ?? 1)
   const limit = Math.min(READ_MAX_LINES, Math.max(1, num(args.limit) ?? READ_DEFAULT_LINES))
 
-  const res = await window.api.sftp.readText(resolved.sessionId, path, {
-    maxBytes: READ_WINDOW_BYTES
-  })
+  const res = await files.readText(resolved.tab, path, { maxBytes: READ_WINDOW_BYTES })
   if (res.error || !res.read) return { ok: false, error: res.error ?? 'Failed to read the file.' }
 
   const allLines = res.read.text.split('\n')
@@ -244,7 +244,7 @@ export async function editFile(
   args: Record<string, unknown>,
   ctx?: { chatTabId?: string }
 ): Promise<ToolResult> {
-  const resolved = resolveSftpTab(str(args.tab_id))
+  const resolved = resolveFileTab(str(args.tab_id))
   if ('error' in resolved) return { ok: false, error: resolved.error }
   const path = str(args.path)
   if (!path) return { ok: false, error: 'path is required.' }
@@ -255,17 +255,17 @@ export async function editFile(
     return { ok: false, error: 'old_string and new_string are required.' }
   }
 
-  const read = await readWholeFile(resolved.sessionId, path, EDIT_MAX_BYTES)
+  const read = await readWholeFile(resolved.tab, path, EDIT_MAX_BYTES)
   if ('error' in read) return { ok: false, error: read.error }
 
   const edit = applyUniqueEdit(read.text, oldString, newString, args.replace_all === true)
   if (!edit.ok) return { ok: false, error: editFailureMessage(edit, path) }
 
-  const backupNote = await backupRemoteFile(resolved.sessionId, path, read.text, {
+  const backupNote = await backupRemoteFile(resolved.tab, path, read.text, {
     chatTabId: ctx?.chatTabId,
     terminalTabId: resolved.tab.id
   })
-  const written = await window.api.sftp.writeText(resolved.sessionId, path, edit.text)
+  const written = await files.writeText(resolved.tab, path, edit.text)
   if (written.error) return { ok: false, error: written.error }
   noteWrite(resolved.tab.id, path)
 
@@ -314,14 +314,14 @@ export async function applyPatch(
   args: Record<string, unknown>,
   ctx?: { chatTabId?: string }
 ): Promise<ToolResult> {
-  const resolved = resolveSftpTab(str(args.tab_id))
+  const resolved = resolveFileTab(str(args.tab_id))
   if ('error' in resolved) return { ok: false, error: resolved.error }
   const path = str(args.path)
   if (!path) return { ok: false, error: 'path is required.' }
   const raw = rawStr(args.patch)
   if (raw === undefined || !raw.trim()) return { ok: false, error: 'patch is required.' }
 
-  const read = await readWholeFile(resolved.sessionId, path, EDIT_MAX_BYTES)
+  const read = await readWholeFile(resolved.tab, path, EDIT_MAX_BYTES)
   if ('error' in read) return { ok: false, error: read.error }
 
   const outcome = applyPatchWithFallback(read.text, raw)
@@ -334,11 +334,11 @@ export async function applyPatch(
     )
   }
 
-  const backupNote = await backupRemoteFile(resolved.sessionId, path, read.text, {
+  const backupNote = await backupRemoteFile(resolved.tab, path, read.text, {
     chatTabId: ctx?.chatTabId,
     terminalTabId: resolved.tab.id
   })
-  const written = await window.api.sftp.writeText(resolved.sessionId, path, outcome.text)
+  const written = await files.writeText(resolved.tab, path, outcome.text)
   if (written.error) return { ok: false, error: written.error }
   noteWrite(resolved.tab.id, path)
 
@@ -382,7 +382,7 @@ export async function writeFile(
   args: Record<string, unknown>,
   ctx?: { chatTabId?: string }
 ): Promise<ToolResult> {
-  const resolved = resolveSftpTab(str(args.tab_id))
+  const resolved = resolveFileTab(str(args.tab_id))
   if ('error' in resolved) return { ok: false, error: resolved.error }
   const path = str(args.path)
   if (!path) return { ok: false, error: 'path is required.' }
@@ -391,20 +391,20 @@ export async function writeFile(
 
   // Read the previous contents (when the file exists) so the write can be
   // backed up and summarized as a diff rather than an opaque "wrote N bytes".
-  const existing = await window.api.sftp.readText(resolved.sessionId, path, {
+  const existing = await files.readText(resolved.tab, path, {
     maxBytes: BACKUP_MAX_BYTES
   })
   const previous = existing.read && !existing.read.truncated ? existing.read.text : undefined
 
   let backupNote: string | undefined
   if (previous !== undefined) {
-    backupNote = await backupRemoteFile(resolved.sessionId, path, previous, {
+    backupNote = await backupRemoteFile(resolved.tab, path, previous, {
       chatTabId: ctx?.chatTabId,
       terminalTabId: resolved.tab.id
     })
   }
 
-  const written = await window.api.sftp.writeText(resolved.sessionId, path, content)
+  const written = await files.writeText(resolved.tab, path, content)
   if (written.error) return { ok: false, error: written.error }
   noteWrite(resolved.tab.id, path)
 
@@ -416,13 +416,17 @@ export async function writeFile(
 }
 
 /**
- * Search file contents on the host. Shells out because there is no SFTP
- * equivalent, but the command is fully quoted, bounded, and its output is
+ * Search file contents on the host.
+ *
+ * On a remote host this shells out — there is no SFTP equivalent of grep, and
+ * the one already installed there is faster than anything streamed over the
+ * wire — but the command is fully quoted and bounded, and its output is
  * returned as structured `path:line:text` records rather than raw terminal
  * text, so a failed search reports why instead of looking like an empty result.
+ * A local tab walks the tree in the main process instead; see `fileAccess.grep`.
  */
 export async function grepFiles(args: Record<string, unknown>): Promise<ToolResult> {
-  const resolved = resolveSftpTab(str(args.tab_id))
+  const resolved = resolveFileTab(str(args.tab_id))
   if ('error' in resolved) return { ok: false, error: resolved.error }
   const pattern = rawStr(args.pattern)
   if (!pattern) return { ok: false, error: 'pattern is required.' }
@@ -431,21 +435,38 @@ export async function grepFiles(args: Record<string, unknown>): Promise<ToolResu
   const glob = str(args.glob)
   const max = Math.min(SEARCH_HARD_MAX, Math.max(1, num(args.max_results) ?? SEARCH_DEFAULT_MAX))
 
-  const parts = ['grep', '-rnIE', '--color=never', '--exclude-dir=.git', '--exclude-dir=node_modules']
-  if (glob) parts.push(`--include=${shellQuote(glob)}`)
-  parts.push('--', shellQuote(pattern), shellQuote(path))
-  const command = `${parts.join(' ')} 2>/dev/null | head -n ${max}`
+  let matches: string[]
+  let truncated: boolean
 
-  const cap = await runAgentCommand(resolved.tab, command)
-  if (cap.disconnected) {
-    return { ok: false, error: `SSH session for tab "${resolved.tab.id}" disconnected during the search.` }
+  if (resolved.tab.kind === 'local') {
+    const res = await files.grep(resolved.tab, path, pattern, { glob, max })
+    if (res.error) return { ok: false, error: res.error }
+    matches = res.lines
+    truncated = res.truncated
+  } else {
+    const parts = [
+      'grep',
+      '-rnIE',
+      '--color=never',
+      '--exclude-dir=.git',
+      '--exclude-dir=node_modules'
+    ]
+    if (glob) parts.push(`--include=${shellQuote(glob)}`)
+    parts.push('--', shellQuote(pattern), shellQuote(path))
+    const command = `${parts.join(' ')} 2>/dev/null | head -n ${max}`
+
+    const cap = await runAgentCommand(resolved.tab, command)
+    if (cap.disconnected) {
+      return { ok: false, error: `Tab "${resolved.tab.id}" disconnected during the search.` }
+    }
+    matches = cap.output
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .filter((line) => !line.startsWith('grep:'))
+    // `head -n` gives no signal of its own, so a full page is the only hint.
+    truncated = matches.length >= max
   }
-
-  const matches = cap.output
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !line.startsWith('grep:'))
 
   if (matches.length === 0) {
     return {
@@ -454,47 +475,56 @@ export async function grepFiles(args: Record<string, unknown>): Promise<ToolResu
     }
   }
 
-  const header =
-    matches.length >= max
-      ? `${matches.length}+ matches (truncated at ${max}) for /${pattern}/ under ${path}:`
-      : `${matches.length} match(es) for /${pattern}/ under ${path}:`
+  const header = truncated
+    ? `${matches.length}+ matches (truncated at ${max}) for /${pattern}/ under ${path}:`
+    : `${matches.length} match(es) for /${pattern}/ under ${path}:`
   return { ok: true, result: `${header}\n${matches.join('\n')}` }
 }
 
 /** List files matching a name/path pattern on the host. */
 export async function globFiles(args: Record<string, unknown>): Promise<ToolResult> {
-  const resolved = resolveSftpTab(str(args.tab_id))
+  const resolved = resolveFileTab(str(args.tab_id))
   if ('error' in resolved) return { ok: false, error: resolved.error }
   const pattern = str(args.pattern)
   if (!pattern) return { ok: false, error: 'pattern is required.' }
 
   const path = str(args.path) ?? '.'
   const max = Math.min(SEARCH_HARD_MAX, Math.max(1, num(args.max_results) ?? SEARCH_DEFAULT_MAX))
-  // A pattern containing a separator is a path shape (`**/conf.d/*.conf`), so
-  // it has to be matched against the full path rather than the basename.
-  const matcher = pattern.includes('/')
-    ? `-path ${shellQuote(pattern.startsWith('/') ? pattern : `*${pattern}`)}`
-    : `-name ${shellQuote(pattern)}`
-  const command = `find ${shellQuote(path)} -not -path '*/.git/*' -not -path '*/node_modules/*' ${matcher} 2>/dev/null | head -n ${max}`
 
-  const cap = await runAgentCommand(resolved.tab, command)
-  if (cap.disconnected) {
-    return { ok: false, error: `SSH session for tab "${resolved.tab.id}" disconnected during the search.` }
+  let found: string[]
+  let truncated: boolean
+
+  if (resolved.tab.kind === 'local') {
+    const res = await files.glob(resolved.tab, path, pattern, { max })
+    if (res.error) return { ok: false, error: res.error }
+    found = res.lines
+    truncated = res.truncated
+  } else {
+    // A pattern containing a separator is a path shape (`**/conf.d/*.conf`), so
+    // it has to be matched against the full path rather than the basename.
+    const matcher = pattern.includes('/')
+      ? `-path ${shellQuote(pattern.startsWith('/') ? pattern : `*${pattern}`)}`
+      : `-name ${shellQuote(pattern)}`
+    const command = `find ${shellQuote(path)} -not -path '*/.git/*' -not -path '*/node_modules/*' ${matcher} 2>/dev/null | head -n ${max}`
+
+    const cap = await runAgentCommand(resolved.tab, command)
+    if (cap.disconnected) {
+      return { ok: false, error: `Tab "${resolved.tab.id}" disconnected during the search.` }
+    }
+    found = cap.output
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .filter((line) => !line.startsWith('find:'))
+    truncated = found.length >= max
   }
-
-  const found = cap.output
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !line.startsWith('find:'))
 
   if (found.length === 0) {
     return { ok: true, result: `No files matching "${pattern}" under ${path}.` }
   }
-  const header =
-    found.length >= max
-      ? `${found.length}+ files (truncated at ${max}) matching "${pattern}" under ${path}:`
-      : `${found.length} file(s) matching "${pattern}" under ${path}:`
+  const header = truncated
+    ? `${found.length}+ files (truncated at ${max}) matching "${pattern}" under ${path}:`
+    : `${found.length} file(s) matching "${pattern}" under ${path}:`
   return { ok: true, result: `${header}\n${found.join('\n')}` }
 }
 
@@ -507,9 +537,9 @@ export async function restoreRemoteBackup(opts: {
   path: string
   backupPath: string
 }): Promise<{ ok: true } | { ok: false; error: string }> {
-  const resolved = resolveSftpTab(opts.terminalTabId)
+  const resolved = resolveFileTab(opts.terminalTabId)
   if ('error' in resolved) return { ok: false, error: resolved.error }
-  const read = await window.api.sftp.readText(resolved.sessionId, opts.backupPath, {
+  const read = await files.readText(resolved.tab, opts.backupPath, {
     maxBytes: BACKUP_MAX_BYTES
   })
   if (read.error || !read.read) {
@@ -521,7 +551,7 @@ export async function restoreRemoteBackup(opts: {
       error: `Backup "${opts.backupPath}" is larger than ${BACKUP_MAX_BYTES} bytes and cannot be restored here.`
     }
   }
-  const written = await window.api.sftp.writeText(resolved.sessionId, opts.path, read.read.text)
+  const written = await files.writeText(resolved.tab, opts.path, read.read.text)
   if (written.error) return { ok: false, error: written.error }
   noteWrite(resolved.tab.id, opts.path)
   return { ok: true }

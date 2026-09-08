@@ -1,5 +1,5 @@
 /**
- * Command execution for the agent, on a dedicated SSH channel.
+ * Command execution for the agent, on a channel of its own.
  *
  * Running agent commands through the user's interactive shell meant three
  * problems at once: a keystroke typed while a capture was in flight was
@@ -9,12 +9,16 @@
  * removes all three — at the cost of losing the shell's working directory,
  * which is restored explicitly from the tab's observed cwd.
  *
- * WSL tabs are local pseudo-terminals with no SSH client behind them, so they
- * keep the sentinel-capture path. SSH exec uses the same stall + absolute
- * ceiling as Execute: output postpones the stall window up to the configured cap.
+ * SSH gets that channel from the protocol and a local shell gets it by spawning
+ * the command as its own process; both answer on `ssh:exec`. WSL is the one
+ * transport with neither — its pty lives inside the distro and there is nothing
+ * to spawn a second one with — so it keeps the sentinel-capture path. Both exec
+ * paths use the same stall + absolute ceiling as Execute: output postpones the
+ * stall window up to the configured cap.
  */
 import { clampOutput, getCaptureTiming, runCapturedCommand } from './execCapture'
 import { getTabObservation } from './terminalObservation'
+import { shellDialect } from '../../shared/shellDialect'
 import type { TerminalSession } from '../store/sessionsStore'
 
 export interface AgentCommandResult {
@@ -79,7 +83,10 @@ export async function runAgentCommand(
     const cap = await runCapturedCommand(sessionId, command, {
       onProgress: options?.onProgress,
       visible: !!options?.visible,
-      onAbort: options?.onStart
+      onAbort: options?.onStart,
+      // A WSL pty is always POSIX; a local one is whatever the user launched,
+      // and the sentinel has to be written in that language to come back.
+      dialect: tab.kind === 'local' ? shellDialect(tab.localShell) : 'posix'
     })
     return {
       output: cap.output,

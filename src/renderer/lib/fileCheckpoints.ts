@@ -38,11 +38,19 @@ export function checkpointFromBackupNote(
   return { terminalTabId, path, backupPath }
 }
 
+/**
+ * Last two path segments, for a checkpoint label that fits.
+ *
+ * Both separators: a local tab on Windows produces `C:\Users\me\src\app.ts`,
+ * which splitting on `/` alone leaves as a single unsplittable segment — so the
+ * label would fall through to the full path it was meant to shorten.
+ */
 export function shortCheckpointPath(path: string): string {
-  const trimmed = path.replace(/\/+$/, '')
-  const parts = trimmed.split('/').filter(Boolean)
+  const trimmed = path.replace(/[/\\]+$/, '')
+  const sep = trimmed.includes('\\') && !trimmed.includes('/') ? '\\' : '/'
+  const parts = trimmed.split(/[/\\]/).filter(Boolean)
   if (parts.length <= 2) return path
-  return `…/${parts.slice(-2).join('/')}`
+  return `…${sep}${parts.slice(-2).join(sep)}`
 }
 
 export function matchCheckpoint(

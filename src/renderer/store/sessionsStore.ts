@@ -15,17 +15,21 @@ export interface TerminalSession {
   id: string
   title: string
   /**
-   * Session backend: remote SSH (default), a local WSL pseudo-terminal, or a
-   * local serial port.
+   * Session backend: remote SSH (default), a local WSL pseudo-terminal, a shell
+   * on this machine, or a local serial port.
    *
    * This is the field that decides what the tab can DO, not just how it was
    * opened. Serial is the narrowest: bytes only, so no SFTP, no exit codes, and
    * no command channel. `describeTabOs` turns it into the sentence the model
    * reads, and `execCommand` refuses on it outright.
    */
-  kind?: 'ssh' | 'wsl' | 'serial'
+  kind?: 'ssh' | 'wsl' | 'local' | 'serial'
   /** WSL distribution name for `kind: 'wsl'` sessions (used for reconnect/title). */
   wslDistro?: string
+  /** Shell executable behind a `kind: 'local'` session (reconnect and title). */
+  localShell?: string
+  /** Directory a `kind: 'local'` session started in, replayed on reconnect. */
+  localCwd?: string
   /** Port settings for `kind: 'serial'` sessions (used for reconnect/title). */
   serialOpts?: SerialConnectOptions
   /** Board family behind a serial session, for the reset pulse and AI context. */

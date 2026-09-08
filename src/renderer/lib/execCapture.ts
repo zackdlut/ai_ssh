@@ -1,13 +1,19 @@
 /**
- * Reliable command capture for the SSH agent loop.
+ * Reliable command capture through a visible shell.
  *
  * The previous approach ran a command, slept a FIXED 1.5s, then diffed the
  * terminal buffer — which truncated slow commands, missed delayed output, and
  * could never recover an exit code. This module instead wraps the command with
  * a unique sentinel marker that prints the shell exit code and cwd AFTER the
- * command finishes, then watches the raw SSH stream until that marker appears
+ * command finishes, then watches the raw stream until that marker appears
  * (or a hard timeout / the session drops). This yields a precise output
  * boundary plus a real exit code — the signal the Verify phase needs.
+ *
+ * The wrapper is written in the shell's own language. That was invisible while
+ * every reachable shell was POSIX, but a local tab on Windows runs PowerShell,
+ * whose exit code, string interpolation, and statement separator are all
+ * spelled differently — a POSIX wrapper there produces no marker at all, so the
+ * capture waits out its stall timeout and reports a working command as hung.
  */
 import { stripAnsi } from './streamParse'
 import {
@@ -15,6 +21,10 @@ import {
   DEFAULT_COMMAND_TIMEOUT_MINUTES
 } from '../../shared/aiSettings'
 import { nextExecDeadline } from '../../shared/execTimeout'
+import type { ShellDialect } from '../../shared/shellDialect'
+
+/** Every dialect, for the artifact scanners that do not know which is in play. */
+const DIALECTS: ShellDialect[] = ['posix', 'powershell', 'cmd']
 
 export interface CommandCapture {
   /** Cleaned command output (ANSI stripped, echo/prompt/marker lines removed). */
@@ -56,9 +66,11 @@ const SLOW_COMMAND_RE =
 
 /**
  * Echoed helper head. ConPTY/readline wrap at COLUMNS, so `__m=AISSH_…` often
- * lands on the next physical line — `__ec=` alone is enough to cut.
+ * lands on the next physical line — `__ec=` alone is enough to cut. The
+ * PowerShell helper opens with `$__ok=$?` and the `cmd` one with `echo.&echo`,
+ * so each dialect has a head of its own to recognise.
  */
-const HELPER_SRC_RE = /__ec=/
+const HELPER_SRC_RE = /__ec=|\$__ok=|echo\.&echo /
 /** Prefix for sentinel marker tokens embedded in wrapped commands. */
 export const CAPTURE_MARKER_PREFIX = 'AISSH_'
 /** Printed sentinel: `AISSH_… ec=0 cwd=/tmp AISSH_…` */
@@ -111,11 +123,12 @@ const MARKER_OUT_LOOSE_RE = new RegExp(
  * fragment carries neither the marker nor the `__ec=` head.
  */
 const HELPER_TAIL_RE =
-  /\$__m|\$__ec|\$\(pwd 2>\/dev\/null\)|printf '\\n%s ec=|%s ec=%s cwd=%s|__m"|__ec"|2>\/dev\/null\)/
+  /\$__m|\$__ec|\$__ok|\$__lec|\$\(pwd 2>\/dev\/null\)|printf '\\n%s ec=|%s ec=%s cwd=%s|__m"|__ec"|2>\/dev\/null\)|\(Get-Location\)\.Path|ec=%ERRORLEVEL%/
 /** Wrap remnant of `__ec=$?` after `;` (`cmd; _`, `cmd; __e`, `cmd; __ec=`). */
-const HELPER_HEAD_RE = /;[ \t]*_{1,2}(?:e(?:c(?:=(?:\$\??)?)?)?)?$/
+const HELPER_HEAD_RE = /;[ \t]*\$?_{1,2}(?:e(?:c(?:=(?:\$\??)?)?)?|o(?:k(?:=\$?\??)?)?)?$/
 /** Anything worth line-scanning for; a chunk without these is passed straight through. */
-const ARTIFACT_HINT_RE = /AISSH_|__ec=|\$__m|\$__ec|%s ec=%s cwd=%s/
+const ARTIFACT_HINT_RE =
+  /AISSH_|__ec=|\$__m|\$__ec|\$__ok|%s ec=%s cwd=%s|\(Get-Location\)\.Path|%ERRORLEVEL%/
 
 /** Live absolute ceiling; Settings / app start push the configured value here. */
 let cachedAbsoluteMaxMs = commandAbsoluteTimeoutMs(DEFAULT_COMMAND_TIMEOUT_MINUTES)
@@ -145,6 +158,8 @@ export interface CaptureOptions {
   visible?: boolean
   /** Receives a canceller once the command is written, for Stop. */
   onAbort?: (abort: () => void) => void
+  /** Language of the shell on the other end. Defaults to POSIX. */
+  dialect?: ShellDialect
 }
 
 /** True when the command is likely to run long before producing output. */
@@ -234,8 +249,35 @@ export function interruptSessionCapture(sessionId: string): boolean {
   return true
 }
 
-function captureHelper(marker: string): string {
-  return `__ec=$?; __m=${marker}; printf '\\n%s ec=%s cwd=%s %s\\n' "$__m" "$__ec" "$(pwd 2>/dev/null)" "$__m"`
+/**
+ * The statement that prints the sentinel, in the shell's own language.
+ *
+ * All three spellings emit the identical line — `MARKER ec=N cwd=PATH MARKER` —
+ * because everything downstream (the completion regex, the artifact stripper,
+ * the parser) reads that shape and must not care which shell produced it.
+ *
+ * What differs is how each shell answers "what was the exit code". POSIX has
+ * `$?`. PowerShell's `$?` is a boolean about the last statement and
+ * `$LASTEXITCODE` only reflects native executables — it is stale, not absent,
+ * after a cmdlet — so both are consulted, in that order. Both must also be read
+ * into variables on the first statement, because assigning to `$__ec` would
+ * itself overwrite `$?`.
+ */
+function captureHelper(marker: string, dialect: ShellDialect = 'posix'): string {
+  switch (dialect) {
+    case 'powershell':
+      return (
+        `$__ok=$?; $__lec=$LASTEXITCODE; ` +
+        `$__ec=$(if($__ok){0}elseif($__lec){$__lec}else{1}); $__m='${marker}'; ` +
+        'Write-Output ("`n" + $__m + " ec=" + $__ec + " cwd=" + (Get-Location).Path + " " + $__m)'
+      )
+    case 'cmd':
+      // No variable capture: `%ERRORLEVEL%` and `%CD%` expand when cmd parses
+      // the line, and this line is only sent once the command has finished.
+      return `echo.&echo ${marker} ec=%ERRORLEVEL% cwd=%CD% ${marker}`
+    case 'posix':
+      return `__ec=$?; __m=${marker}; printf '\\n%s ec=%s cwd=%s %s\\n' "$__m" "$__ec" "$(pwd 2>/dev/null)" "$__m"`
+  }
 }
 
 /**
@@ -250,12 +292,22 @@ function captureHelper(marker: string): string {
  *
  * Commands that contain `#` or extra newlines go in a `{ …; }` group so a
  * trailing comment cannot swallow the helper.
+ *
+ * `cmd` gets the helper on a line of its own instead. It has no statement
+ * grouping worth relying on, and its `%ERRORLEVEL%` is expanded when the line
+ * is parsed — chaining with `&` would parse both at once and read the exit code
+ * of whatever ran before, rather than of this command.
  */
-function buildWrappedCommand(command: string, marker: string): string {
+function buildWrappedCommand(
+  command: string,
+  marker: string,
+  dialect: ShellDialect = 'posix'
+): string {
   const cmd = command.replace(/\s+$/, '')
-  const helper = captureHelper(marker)
+  const helper = captureHelper(marker, dialect)
+  if (dialect === 'cmd') return `${cmd}\r\n${helper}\r\n`
   if (cmd.includes('\n') || /(^|\s)#/.test(cmd)) {
-    return `{ ${cmd}\n}; ${helper}\n`
+    return dialect === 'powershell' ? `& {\n${cmd}\n}; ${helper}\n` : `{ ${cmd}\n}; ${helper}\n`
   }
   return `${cmd}; ${helper}\n`
 }
@@ -460,9 +512,12 @@ export interface MarkerCommand {
 }
 
 /** Build a sentinel-wrapped command plus the marker token to parse its result. */
-export function buildMarkerCommand(command: string): MarkerCommand {
+export function buildMarkerCommand(
+  command: string,
+  dialect: ShellDialect = 'posix'
+): MarkerCommand {
   const marker = markerToken()
-  return { wrapped: buildWrappedCommand(command, marker), marker }
+  return { wrapped: buildWrappedCommand(command, marker, dialect), marker }
 }
 
 /** Parse the exit code + cwd emitted by a sentinel marker from raw output. */
@@ -505,8 +560,10 @@ function isOrphanHelperLine(line: string, marker: string): boolean {
   // Wrap leftovers from `"$__m"` / the printf quotes: a line that is only helper punctuation.
   if (/^["'`\\;]+$/.test(t)) return true
   if (t.length >= 4) {
-    const helper = captureHelper(marker || `${CAPTURE_MARKER_PREFIX}x`)
-    if (helper.includes(t)) return true
+    const stem = marker || `${CAPTURE_MARKER_PREFIX}x`
+    for (const dialect of DIALECTS) {
+      if (captureHelper(stem, dialect).includes(t)) return true
+    }
   }
   return false
 }
@@ -524,32 +581,50 @@ function isLeadingCommandEcho(line: string, cmdTrim: string): boolean {
 }
 
 /** ConPTY wrap leftover of `cmd; helper` that still sits above real output. */
-function isLeadingWrapFragment(line: string, cmdTrim: string, marker: string): boolean {
+function isLeadingWrapFragment(
+  line: string,
+  cmdTrim: string,
+  marker: string,
+  dialect: ShellDialect = 'posix'
+): boolean {
   const t = line.trim()
   if (!t) return true
   if (isLeadingCommandEcho(line, cmdTrim) || isOrphanHelperLine(line, marker)) return true
-  const wrapSource = `${cmdTrim}; ${captureHelper(marker)}`
+  const wrapSource = `${cmdTrim}; ${captureHelper(marker, dialect)}`
   if (!wrapSource.includes(t)) return false
-  if (/__ec|__m|\$\?|printf|AISSH_|%s|2>\/dev\/null/.test(t)) return true
+  if (/__ec|__m|__ok|\$\?|printf|AISSH_|%s|2>\/dev\/null|Get-Location/.test(t)) return true
   return t.length >= 2 && t.length <= 6 && /[_$%"'\\]/.test(t)
 }
+
+/**
+ * Shell prompts, so a trailing one is not mistaken for output.
+ *
+ * The first covers `user@host:~$` and its many relatives. The other two exist
+ * because a Windows prompt has no `@`: PowerShell prints `PS C:\Users\me>` and
+ * `cmd` prints `C:\Users\me>`, neither of which the POSIX pattern can match.
+ */
+const PROMPT_RES = [/\S+@\S+.*[#$%>]\s*$/, /^PS [^\r\n]*>\s*$/, /^[A-Za-z]:\\[^\r\n]*>\s*$/]
 
 /**
  * Clean captured output: strip ANSI, drop every marker line (the echoed helper
  * and the printed sentinel), drop the echoed command line(s) at the top and any
  * trailing shell prompt, then clamp.
  */
-export function cleanCapturedOutput(raw: string, command: string, marker: string): string {
+export function cleanCapturedOutput(
+  raw: string,
+  command: string,
+  marker: string,
+  dialect: ShellDialect = 'posix'
+): string {
   let lines = stripCaptureArtifacts(stripAnsi(raw)).split(/\r?\n/)
   const cmdTrim = command.trim()
   lines = lines.filter((l) => (marker ? !l.includes(marker) : true) && !isOrphanHelperLine(l, marker))
-  while (lines.length && isLeadingWrapFragment(lines[0], cmdTrim, marker)) {
+  while (lines.length && isLeadingWrapFragment(lines[0], cmdTrim, marker, dialect)) {
     lines.shift()
   }
-  const promptRe = /\S+@\S+.*[#$%>]\s*$/
   while (lines.length) {
     const last = lines[lines.length - 1].trim()
-    if (last === '' || promptRe.test(last)) lines.pop()
+    if (last === '' || PROMPT_RES.some((re) => re.test(last))) lines.pop()
     else break
   }
   return clampOutput(lines.join('\n').trim())
@@ -585,6 +660,7 @@ export function runCapturedCommand(
 
     const timing = getCaptureTiming(command)
     const marker = markerToken()
+    const dialect = options?.dialect ?? 'posix'
     const re = markerRegex(marker)
     const startedAt = Date.now()
     const echo = options?.visible
@@ -622,7 +698,7 @@ export function runCapturedCommand(
       echo?.flush()
       const { exitCode, cwd } = parseMarker(buffer, marker)
       resolve({
-        output: cleanCapturedOutput(buffer, command, marker),
+        output: cleanCapturedOutput(buffer, command, marker, dialect),
         exitCode,
         cwd,
         timedOut: !aborted && (timedOut || timeoutInterrupt),
@@ -688,7 +764,7 @@ export function runCapturedCommand(
       abortTimer = setTimeout(() => complete(false, false), CAPTURE_INTERRUPT_SETTLE_MS)
     }
     captureAborts.set(sessionId, abort)
-    window.api.ssh.write(sessionId, buildWrappedCommand(command, marker))
+    window.api.ssh.write(sessionId, buildWrappedCommand(command, marker, dialect))
     options?.onAbort?.(abort)
   })
 }

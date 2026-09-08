@@ -8,26 +8,31 @@
  * renderer and the prompts. The rules live here instead so that adding a
  * transport means editing this file rather than finding them all again.
  *
- * The gaps are not arbitrary. SFTP is a subsystem of the SSH protocol, so only
- * SSH has it. A command channel needs something that runs commands and reports
- * an exit status, which a shell has and a microcontroller does not.
+ * The gaps are not arbitrary. A file channel needs random access to a
+ * filesystem, which SSH gets from SFTP and a local shell gets from the machine
+ * it is already running on. A command channel needs something that runs
+ * commands and reports an exit status, which a shell has and a microcontroller
+ * does not.
  */
-export type TabKind = 'ssh' | 'wsl' | 'serial' | undefined
+export type TabKind = 'ssh' | 'wsl' | 'local' | 'serial' | undefined
 
 /** A tab with no `kind` predates the field and is SSH. */
-function resolve(kind: TabKind): 'ssh' | 'wsl' | 'serial' {
+function resolve(kind: TabKind): 'ssh' | 'wsl' | 'local' | 'serial' {
   return kind ?? 'ssh'
 }
 
 /**
  * Whether the file tools work: `read_file`, `edit_file`, `write_file`,
- * `apply_patch`, the SFTP panel, and file diff previews.
+ * `apply_patch`, the file panel, and file diff previews.
  *
- * SFTP rides on the SSH connection, so a local WSL pty and a serial port both
- * lack it. WSL can fall back to shell commands; serial cannot fall back at all.
+ * Two transports have one: SSH over SFTP, and a local shell over the host's own
+ * filesystem. WSL has neither — its pty runs inside the distro, whose files the
+ * main process cannot address as local paths — so it falls back to shell
+ * commands. Serial cannot fall back at all.
  */
 export function hasFileChannel(kind: TabKind): boolean {
-  return resolve(kind) === 'ssh'
+  const k = resolve(kind)
+  return k === 'ssh' || k === 'local'
 }
 
 /**
@@ -55,6 +60,8 @@ export function describeTabLimits(kind: TabKind): string {
   switch (resolve(kind)) {
     case 'wsl':
       return 'a local WSL terminal, which has no SFTP channel. Use exec_command (cat/sed/tee) for file work on this tab.'
+    case 'local':
+      return 'a shell on this machine.'
     case 'serial':
       return 'a serial device, which has no shell: no SFTP, no commands, and no exit codes. Use serial_send to write a line and read the reply, or search_terminal to read what the device has already printed.'
     case 'ssh':

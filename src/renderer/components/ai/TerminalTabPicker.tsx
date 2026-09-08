@@ -27,6 +27,12 @@ const DEFAULT_SSH_PORT = 22
  */
 function connectionIdentity(tab: TerminalSession): string {
   if (tab.kind === 'wsl') return tab.wslDistro || tab.title || 'WSL'
+  // A local shell is identified by which shell it is; there is only one machine
+  // it could be on, so naming that would distinguish nothing.
+  if (tab.kind === 'local') {
+    const shell = tab.localShell?.replace(/\\/g, '/').split('/').pop()?.replace(/\.exe$/i, '')
+    return shell || tab.title || 'local'
+  }
   // A serial device is identified by its port and baud rate: two boards on the
   // same hub differ only there, and neither has a host or an account.
   if (tab.kind === 'serial') {

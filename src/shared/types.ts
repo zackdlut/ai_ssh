@@ -19,9 +19,9 @@ export interface ConnectionConfig {
    * boards on a USB hub, and splitting them into separate lists would mean two
    * of everything — folders, ordering, drag and drop, layout binding. So the
    * shape stays one type with a discriminant, and serial entries leave the SSH
-   * credential fields empty.
+   * credential fields empty. A local shell is hostless for the same reason.
    */
-  kind?: 'ssh' | 'serial'
+  kind?: 'ssh' | 'serial' | 'local'
   host: string
   port: number
   username: string
@@ -32,6 +32,8 @@ export interface ConnectionConfig {
   passphrase?: string
   /** Port settings for `kind: 'serial'` entries. Only `path` is required. */
   serial?: SavedSerialOptions
+  /** Shell and starting directory for `kind: 'local'` entries. Both optional. */
+  local?: SavedLocalOptions
   /** Board family, for the device icon, defaults, and AI context. */
   deviceKind?: DeviceKind
   /** Parent folder id, or null/undefined for the tree root. */
@@ -159,6 +161,30 @@ export interface WslConnectOptions {
   distro?: string
   /** Optional user to launch the shell as (`wsl -u <user>`). */
   user?: string
+}
+
+/** A shell installed on this machine, offered by the local-terminal launcher. */
+export interface LocalShellInfo {
+  /** Display name, e.g. `PowerShell 7` or `bash`. */
+  name: string
+  /** Absolute path to the executable. */
+  path: string
+  /** The platform's pick, launched when the button is clicked without a menu. */
+  isDefault?: boolean
+}
+
+/** Options for opening a shell on this machine. */
+export interface LocalConnectOptions {
+  /** Executable to launch; omit to use the platform default. */
+  shell?: string
+  /** Initial working directory; omit to start in the user's home. */
+  cwd?: string
+}
+
+/** Where a saved `kind: 'local'` entry starts its shell. */
+export interface SavedLocalOptions {
+  shell?: string
+  cwd?: string
 }
 
 /** Options for opening a local serial-port session. */
@@ -805,6 +831,8 @@ export interface LocalEntry {
   type: LocalEntryType
   size: number
   mtime: number
+  /** POSIX mode bits. Meaningless on Windows, where Node reports a stub. */
+  mode: number
 }
 
 export interface LocalListResult {
@@ -815,6 +843,20 @@ export interface LocalListResult {
 
 export interface LocalHomeResult {
   path?: string
+  error?: string
+}
+
+/**
+ * A bounded search result over the local filesystem.
+ *
+ * `lines` carries the same `path:line:text` records `grep -rnIE` prints (and
+ * bare paths for glob), so the tool that formats them does not have to know
+ * which transport produced them. `truncated` says the cap was hit, which the
+ * shell version could only convey by returning exactly `max` lines.
+ */
+export interface LocalSearchResult {
+  lines?: string[]
+  truncated?: boolean
   error?: string
 }
 

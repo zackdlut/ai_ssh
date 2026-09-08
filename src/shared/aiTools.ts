@@ -644,7 +644,7 @@ const BASE_TOOLS: AIToolDefinition[] = [
     function: {
       name: 'read_file',
       description:
-        'Read a file on the host over SFTP, returned with line numbers. Unclamped by the shell capture buffer, and pageable via offset/limit.',
+        'Read a file on the host, returned with line numbers. Bypasses the shell, so it is unclamped by the capture buffer, and pageable via offset/limit.',
       parameters: {
         type: 'object',
         properties: {

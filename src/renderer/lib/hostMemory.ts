@@ -16,6 +16,7 @@
  */
 import { useSessionsStore } from '../store/sessionsStore'
 import { hasFileChannel } from '../../shared/tabCapabilities'
+import { readText } from './fileAccess'
 
 /** Candidate locations, in priority order. The first that exists wins. */
 const MEMORY_FILENAMES = ['AGENTS.md', '.ai-terminal.md']
@@ -48,9 +49,14 @@ export function hostMemoryCandidates(username: string | undefined): string[] {
   return MEMORY_FILENAMES.map((name) => `${home}/${name}`)
 }
 
-/** True when a write to this path invalidates a host's cached memory. */
+/**
+ * True when a write to this path invalidates a host's cached memory.
+ *
+ * Both separators, because a local tab on Windows reports `C:\Users\me\AGENTS.md`
+ * and splitting that on `/` alone would yield one segment that matches nothing.
+ */
 export function isHostMemoryPath(path: string): boolean {
-  const name = path.split('/').filter(Boolean).pop()
+  const name = path.split(/[/\\]/).filter(Boolean).pop()
   return !!name && MEMORY_FILENAMES.includes(name)
 }
 
@@ -74,14 +80,12 @@ export function clearHostMemoryCache(): void {
 export async function loadHostMemory(terminalTabId: string | undefined): Promise<void> {
   if (!terminalTabId || cache.has(terminalTabId)) return
   const tab = useSessionsStore.getState().sessions.find((t) => t.id === terminalTabId)
-  // Only SSH tabs have SFTP to read the file with; an unconnected tab has
-  // nothing to read at all.
+  // A tab without a file channel has no way to read the file; an unconnected
+  // one has nothing to read at all.
   if (!tab || !hasFileChannel(tab.kind) || tab.status !== 'connected' || !tab.sessionId) return
 
   for (const path of hostMemoryCandidates(tab.username)) {
-    const res = await window.api.sftp.readText(tab.sessionId, path, {
-      maxBytes: MEMORY_MAX_CHARS * 2
-    })
+    const res = await readText(tab, path, { maxBytes: MEMORY_MAX_CHARS * 2 })
     const text = res.read?.text?.trim()
     if (res.error || !text) continue
     cache.set(terminalTabId, {

@@ -29,6 +29,7 @@ const SidePanel = lazy(() => import('./components/ai/SidePanel'))
 const SftpPanel = lazy(() => import('./components/sftp/SftpPanel'))
 const ConnectModal = lazy(() => import('./components/connection/ConnectModal'))
 const SerialConnectModal = lazy(() => import('./components/connection/SerialConnectModal'))
+const LocalShellModal = lazy(() => import('./components/connection/LocalShellModal'))
 const SettingsModal = lazy(() => import('./components/ai/SettingsModal'))
 const SkillsModal = lazy(() => import('./components/ai/SkillsModal'))
 const UserRulesModal = lazy(() => import('./components/ai/UserRulesModal'))
@@ -40,6 +41,11 @@ const StartupModal = lazy(() => import('./components/settings/StartupModal'))
 const AboutModal = lazy(() => import('./components/settings/AboutModal'))
 
 interface ConnectModalState {
+  editConn?: ConnectionConfig | null
+  parentId?: string | null
+}
+
+interface LocalModalState {
   editConn?: ConnectionConfig | null
   parentId?: string | null
 }
@@ -64,6 +70,7 @@ export default function App(): JSX.Element {
   const loadUserRules = useUserRulesStore((s) => s.load)
   const [connectModal, setConnectModal] = useState<ConnectModalState | null>(null)
   const [serialModal, setSerialModal] = useState<SerialModalState | null>(null)
+  const [localModal, setLocalModal] = useState<LocalModalState | null>(null)
   const [settingsPanel, setSettingsPanel] = useState<SettingsMenuItem | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(getConnSidebarStartupOpen)
   const paneBoxes = usePaneBoxes()
@@ -128,9 +135,11 @@ export default function App(): JSX.Element {
   // no port or baud rate, and the serial form has no host or credentials.
   const openEditConnection = (conn: ConnectionConfig): void => {
     if (conn.kind === 'serial') setSerialModal({ editConn: conn })
+    else if (conn.kind === 'local') setLocalModal({ editConn: conn })
     else setConnectModal({ editConn: conn })
   }
   const openNewSerial = (path?: string): void => setSerialModal({ path })
+  const openNewLocalShell = (): void => setLocalModal({})
 
   return (
     <div className="app">
@@ -146,6 +155,7 @@ export default function App(): JSX.Element {
             onNewConnection={openNewConnection}
             onEditConnection={openEditConnection}
             onNewSerial={openNewSerial}
+            onNewLocalShell={openNewLocalShell}
             onClose={() => setSidebarOpen(false)}
           />
         )}
@@ -201,6 +211,15 @@ export default function App(): JSX.Element {
             defaultParentId={serialModal.parentId}
             initialPath={serialModal.path}
             onClose={() => setSerialModal(null)}
+          />
+        </Suspense>
+      )}
+      {localModal && (
+        <Suspense fallback={null}>
+          <LocalShellModal
+            editConn={localModal.editConn}
+            defaultParentId={localModal.parentId}
+            onClose={() => setLocalModal(null)}
           />
         </Suspense>
       )}

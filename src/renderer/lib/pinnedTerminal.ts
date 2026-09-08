@@ -29,6 +29,7 @@ export interface MentionableTab {
   title?: string
   wslDistro?: string
   serialOpts?: { path?: string }
+  localShell?: string
   kind?: string
 }
 
@@ -36,8 +37,9 @@ export interface MentionableTab {
  * Label a terminal tab.
  *
  * Each transport has a different natural name, and falling through to `host`
- * would leave both local kinds labelled "host" with nothing after it: a WSL tab
- * has a distro, a serial tab has a port, and neither has a hostname at all.
+ * would leave every local kind labelled "host" with nothing after it: a WSL tab
+ * has a distro, a serial tab has a port, a local tab has a shell, and none of
+ * them has a hostname at all.
  */
 export function formatTerminalLabel(tab: {
   customTitle?: string
@@ -46,30 +48,40 @@ export function formatTerminalLabel(tab: {
   title?: string
   wslDistro?: string
   serialOpts?: { path?: string }
+  localShell?: string
   kind?: string
 }): string {
   const custom = tab.customTitle?.trim()
   if (custom) return custom
   if (tab.kind === 'wsl') return tab.wslDistro || tab.title || 'WSL'
+  if (tab.kind === 'local') return shortShellName(tab.localShell) || tab.title || 'local'
   if (tab.kind === 'serial') return shortSerialPath(tab.serialOpts?.path) || tab.title || 'serial'
   if (tab.username && tab.host) return `${tab.username}@${tab.host}`
   return tab.host || tab.title || 'host'
 }
 
-/** Token inserted after @, Cursor-style: the host, WSL distro, or port name. */
+/** Token inserted after @: the host, WSL distro, shell name, or port name. */
 export function mentionTokenFor(tab: MentionableTab): string {
   const raw =
     tab.kind === 'wsl'
       ? tab.customTitle || tab.wslDistro || tab.title || 'wsl'
-      : tab.kind === 'serial'
-        ? tab.customTitle || shortSerialPath(tab.serialOpts?.path) || tab.title || 'serial'
-        : tab.host || tab.customTitle || tab.title || 'host'
+      : tab.kind === 'local'
+        ? tab.customTitle || shortShellName(tab.localShell) || tab.title || 'local'
+        : tab.kind === 'serial'
+          ? tab.customTitle || shortSerialPath(tab.serialOpts?.path) || tab.title || 'serial'
+          : tab.host || tab.customTitle || tab.title || 'host'
   return sanitizeMentionToken(raw)
 }
 
 /** `/dev/ttyUSB0` reads as `ttyUSB0`; `COM3` is already short. */
 function shortSerialPath(path: string | undefined): string {
   return path?.replace(/^\/dev\//, '') ?? ''
+}
+
+/** `C:\…\pwsh.exe` and `/usr/bin/bash` both read as their basename. */
+function shortShellName(shell: string | undefined): string {
+  if (!shell) return ''
+  return shell.replace(/\\/g, '/').split('/').pop()?.replace(/\.exe$/i, '') ?? ''
 }
 
 function sanitizeMentionToken(raw: string): string {
@@ -173,6 +185,7 @@ export function filterTabsForMention<T extends MentionableTab>(tabs: T[], query:
         title: tab.title,
         wslDistro: tab.wslDistro,
         serialOpts: tab.serialOpts,
+        localShell: tab.localShell,
         kind: tab.kind
       }),
       tab.host,
@@ -180,6 +193,7 @@ export function filterTabsForMention<T extends MentionableTab>(tabs: T[], query:
       tab.customTitle,
       tab.title,
       tab.wslDistro,
+      tab.localShell,
       tab.serialOpts?.path
     ]
       .filter(Boolean)

@@ -90,9 +90,10 @@ export const useDevicesStore = create<DevicesState>((set, get) => ({
   /**
    * Probe every saved SSH device.
    *
-   * Serial entries are excluded because "reachable" is not a question that
-   * applies: the port either enumerates or it does not, which the port list
-   * already says. The fan-out cap lives in the main process.
+   * Only SSH entries: "reachable" is not a question that applies to the local
+   * transports. A serial port either enumerates or it does not, which the port
+   * list already says, and a local shell is on the machine doing the asking.
+   * The fan-out cap lives in the main process.
    */
   refreshProbes: async () => {
     if (get().probing) return

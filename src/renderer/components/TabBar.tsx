@@ -4,13 +4,13 @@ import { useAIStore } from '../store/aiStore'
 import { useSftpStore } from '../store/sftpStore'
 import { useBookmarksStore } from '../store/bookmarksStore'
 import { usePaneLayoutStore } from '../store/paneLayoutStore'
-import { closeSessions, connectFromConfig, connectWsl } from '../lib/connect'
+import { closeSessions, connectFromConfig, connectLocal, connectWsl } from '../lib/connect'
 import { readFullTerminalOutput } from '../lib/terminalRegistry'
 import { useT, type TranslationKey } from '../lib/i18n'
 import UiIcon from './UiIcon'
 import DropdownMenuItem from './DropdownMenuItem'
 import TabContextMenu, { type TabView } from './TabContextMenu'
-import type { WslDistro } from '../../shared/types'
+import type { LocalShellInfo, WslDistro } from '../../shared/types'
 import { hasFileChannel } from '../../shared/tabCapabilities'
 import { collectLeaves } from '../lib/paneLayout'
 import { TAB_DRAG_MIME } from '../lib/tabDrag'
@@ -97,6 +97,8 @@ export default function TabBar({
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [wslDistros, setWslDistros] = useState<WslDistro[]>([])
   const [wslMenuOpen, setWslMenuOpen] = useState(false)
+  const [localShells, setLocalShells] = useState<LocalShellInfo[]>([])
+  const [localMenuOpen, setLocalMenuOpen] = useState(false)
   const [menu, setMenu] = useState<TabMenuState | null>(null)
   const closeMenu = useCallback((): void => setMenu(null), [])
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -127,17 +129,21 @@ export default function TabBar({
     [paneTabs, sessions]
   )
 
-  // SFTP is an SSH subsystem; close the panel when a tab without one is active.
+  // Close the file panel when a tab that has no file channel becomes active.
   useEffect(() => {
     if (!activeHasFiles && sftpOpen) setSftpOpen(false)
   }, [activeHasFiles, sftpOpen, setSftpOpen])
 
-  // Probe installed WSL distributions once; empty on non-Windows so the button
-  // stays hidden there.
+  // Probe both local launchers once. WSL returns empty on non-Windows, which is
+  // what hides its button there; every platform has a shell, so the local one
+  // is always shown.
   useEffect(() => {
     let cancelled = false
     void window.api.wsl.list().then((list) => {
       if (!cancelled) setWslDistros(list)
+    })
+    void window.api.localShell.list().then((list) => {
+      if (!cancelled) setLocalShells(list)
     })
     return () => {
       cancelled = true
@@ -145,15 +151,18 @@ export default function TabBar({
   }, [])
 
   useEffect(() => {
-    if (!wslMenuOpen) return
-    const close = (): void => setWslMenuOpen(false)
+    if (!wslMenuOpen && !localMenuOpen) return
+    const close = (): void => {
+      setWslMenuOpen(false)
+      setLocalMenuOpen(false)
+    }
     window.addEventListener('click', close)
     window.addEventListener('scroll', close, true)
     return () => {
       window.removeEventListener('click', close)
       window.removeEventListener('scroll', close, true)
     }
-  }, [wslMenuOpen])
+  }, [wslMenuOpen, localMenuOpen])
 
   const openWsl = (distro?: string): void => {
     setWslMenuOpen(false)
@@ -166,6 +175,18 @@ export default function TabBar({
     } else {
       setWslMenuOpen((v) => !v)
     }
+  }
+
+  const openLocal = (shell?: string): void => {
+    setLocalMenuOpen(false)
+    void connectLocal({ shell })
+  }
+
+  // One shell means there is nothing to choose between, so the click opens it
+  // rather than a menu of one.
+  const handleLocalClick = (): void => {
+    if (localShells.length <= 1) openLocal(localShells[0]?.path)
+    else setLocalMenuOpen((v) => !v)
   }
 
   useEffect(() => {
@@ -407,9 +428,9 @@ export default function TabBar({
         )}
       </div>
       {wslDistros.length > 0 && (
-        <div className="wsl-launch">
+        <div className="shell-launch shell-launch--wsl">
           <button
-            className={`wsl-btn ${wslMenuOpen ? 'active' : ''}`}
+            className={`shell-btn ${wslMenuOpen ? 'active' : ''}`}
             onClick={(e) => {
               e.stopPropagation()
               handleWslClick()
@@ -422,18 +443,18 @@ export default function TabBar({
             aria-haspopup={wslDistros.length > 1 ? 'menu' : undefined}
             aria-expanded={wslDistros.length > 1 ? wslMenuOpen : undefined}
           >
-            <UiIcon name="terminal" className="wsl-btn-icon" />
-            <span className="wsl-btn-label">WSL</span>
+            <UiIcon name="terminal" className="shell-btn-icon" />
+            <span className="shell-btn-label">WSL</span>
             {wslDistros.length > 1 && (
               <UiIcon
                 name="caret-down"
-                className={`wsl-btn-caret ${wslMenuOpen ? 'open' : ''}`}
+                className={`shell-btn-caret ${wslMenuOpen ? 'open' : ''}`}
                 size="sm"
               />
             )}
           </button>
           {wslMenuOpen && wslDistros.length > 1 && (
-            <div className="recent-menu wsl-menu" role="menu" onClick={(e) => e.stopPropagation()}>
+            <div className="recent-menu shell-menu" role="menu" onClick={(e) => e.stopPropagation()}>
               <div className="recent-menu-title">
                 <UiIcon name="terminal" size="sm" className="menu-item-icon" />
                 {t('tabbar.openWsl')}
@@ -449,6 +470,57 @@ export default function TabBar({
                   <UiIcon name="terminal" className="menu-item-icon" />
                   <span className="recent-item-body">
                     <span className="recent-item-name">{d.name}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {localShells.length > 0 && (
+        <div className="shell-launch shell-launch--local">
+          <button
+            className={`shell-btn ${localMenuOpen ? 'active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              handleLocalClick()
+            }}
+            title={
+              localShells.length === 1
+                ? `${t('tabbar.openLocal')} · ${localShells[0].name}`
+                : t('tabbar.openLocal')
+            }
+            aria-haspopup={localShells.length > 1 ? 'menu' : undefined}
+            aria-expanded={localShells.length > 1 ? localMenuOpen : undefined}
+          >
+            <UiIcon name="terminal" className="shell-btn-icon" />
+            <span className="shell-btn-label">{t('tabbar.localShell')}</span>
+            {localShells.length > 1 && (
+              <UiIcon
+                name="caret-down"
+                className={`shell-btn-caret ${localMenuOpen ? 'open' : ''}`}
+                size="sm"
+              />
+            )}
+          </button>
+          {localMenuOpen && localShells.length > 1 && (
+            <div className="recent-menu shell-menu" role="menu" onClick={(e) => e.stopPropagation()}>
+              <div className="recent-menu-title">
+                <UiIcon name="terminal" size="sm" className="menu-item-icon" />
+                {t('tabbar.openLocal')}
+              </div>
+              {localShells.map((s) => (
+                <button
+                  key={s.path}
+                  className="recent-menu-item"
+                  role="menuitem"
+                  onClick={() => openLocal(s.path)}
+                  title={s.path}
+                >
+                  <UiIcon name="terminal" className="menu-item-icon" />
+                  <span className="recent-item-body">
+                    <span className="recent-item-name">{s.name}</span>
+                    <span className="recent-item-meta">{s.path}</span>
                   </span>
                 </button>
               ))}
@@ -578,7 +650,10 @@ export default function TabBar({
                 ? t('tabbar.toggleSftp')
                 : activeKind === 'serial'
                   ? t('tabbar.sftpSerialUnsupported')
-                  : t('tabbar.sftpWslUnsupported')
+                  : // WSL is now the only kind left without a file channel, but
+                    // naming it explicitly keeps the next transport from
+                    // inheriting a message that would be wrong for it.
+                    t('tabbar.sftpWslUnsupported')
             }
           >
             <UiIcon name="sftp" />

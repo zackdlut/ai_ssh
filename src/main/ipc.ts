@@ -4,10 +4,24 @@ import { mkdir, readFile, writeFile } from 'fs/promises'
 import { basename, dirname, join } from 'path'
 import { SshManager } from './ssh/manager'
 import { WslManager } from './wsl/manager'
+import { LocalShellManager } from './localShell/manager'
 import { SerialManager } from './serial/manager'
 import { probeDevice, probeDevices } from './device/probe'
 import { detectToolchains } from './toolchain/detect'
-import { deleteLocal, listLocal, localHome, renameLocal, resolveLocal } from './local/fs'
+import {
+  deleteLocal,
+  globLocal,
+  grepLocal,
+  listLocal,
+  localHome,
+  mkdirLocal,
+  readTextLocal,
+  realpathLocal,
+  renameLocal,
+  resolveLocal,
+  statLocal,
+  writeTextLocal
+} from './local/fs'
 import { AIProvider } from './ai/provider'
 import * as config from './config/store'
 import { exportBookmarks, importBookmarks } from './config/transfer'
@@ -46,6 +60,7 @@ import type {
   SshExecOptions,
   SshExecResult,
   WslConnectOptions,
+  LocalConnectOptions,
   DeviceKind,
   DeviceProbeResult,
   SerialConnectOptions,
@@ -69,6 +84,7 @@ import type {
   SftpTransferDoneEvent,
   LocalListResult,
   LocalHomeResult,
+  LocalSearchResult,
   OpenExternalResult,
   OpenPathResult,
   PickDirectoryResult,
@@ -91,6 +107,7 @@ function transferFilter(format: BookmarkTransferFormat): Electron.FileFilter {
 export interface IpcManagers {
   ssh: SshManager
   wsl: WslManager
+  localShell: LocalShellManager
   serial: SerialManager
   disposeAll: () => void
 }
@@ -100,6 +117,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
 
   const ssh = new SshManager(getWindow)
   const wsl = new WslManager(getWindow)
+  const localShell = new LocalShellManager(getWindow)
   const serial = new SerialManager(getWindow)
   const ai = new AIProvider(
     () => config.getAISettings(),
@@ -123,9 +141,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
     })
     return ssh.connect(opts)
   })
-  // write/resize/close are shared across SSH, WSL, and serial sessions; route
-  // by owner. SSH stays the fallback so an id no manager claims still reaches
-  // the code that reports a dead session.
+  // write/resize/close are shared across every transport; route by owner. SSH
+  // stays the fallback so an id no manager claims still reaches the code that
+  // reports a dead session.
   ipcMain.on('ssh:write', (_e, sessionId: string, data: string) => {
     logDebug({
       category: 'ipc',
@@ -134,11 +152,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
       data: { data: truncateForDebug(data) }
     })
     if (wsl.has(sessionId)) wsl.write(sessionId, data)
+    else if (localShell.has(sessionId)) localShell.write(sessionId, data)
     else if (serial.has(sessionId)) serial.write(sessionId, data)
     else ssh.write(sessionId, data)
   })
   ipcMain.on('ssh:resize', (_e, sessionId: string, cols: number, rows: number) => {
     if (wsl.has(sessionId)) wsl.resize(sessionId, cols, rows)
+    else if (localShell.has(sessionId)) localShell.resize(sessionId, cols, rows)
     else if (serial.has(sessionId)) serial.resize(sessionId, cols, rows)
     else ssh.resize(sessionId, cols, rows)
   })
@@ -160,16 +180,24 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
         traceId: execId,
         data: { command: truncateForDebug(command), cwd: opts?.cwd }
       })
-      return ssh.execCommand(sessionId, execId, command, opts)
+      // A local shell spawns its own process per command, so it answers here
+      // rather than falling back to the scrollback capture WSL has to use.
+      return localShell.has(sessionId)
+        ? localShell.execCommand(sessionId, execId, command, opts)
+        : ssh.execCommand(sessionId, execId, command, opts)
     }
   )
   ipcMain.on('ssh:execAbort', (_e, execId: string) => {
     logDebug({ category: 'ipc', message: 'ssh:execAbort', traceId: execId })
+    // Exec ids are unique across managers, so the one that does not own it
+    // no-ops.
     ssh.abortExec(execId)
+    localShell.abortExec(execId)
   })
   ipcMain.on('ssh:close', (_e, sessionId: string) => {
     logDebug({ category: 'ipc', message: 'ssh:close', sessionId_ssh: sessionId })
     if (wsl.has(sessionId)) wsl.close(sessionId)
+    else if (localShell.has(sessionId)) localShell.close(sessionId)
     else if (serial.has(sessionId)) serial.close(sessionId)
     else ssh.close(sessionId)
   })
@@ -194,17 +222,20 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
           error: 'Live charts need a shell. A serial device has no command channel.'
         })
       }
-      return wsl.has(sessionId)
-        ? wsl.startSampler(sessionId, samplerId, command)
-        : ssh.startSampler(sessionId, samplerId, command)
+      if (wsl.has(sessionId)) return wsl.startSampler(sessionId, samplerId, command)
+      if (localShell.has(sessionId)) {
+        return localShell.startSampler(sessionId, samplerId, command)
+      }
+      return ssh.startSampler(sessionId, samplerId, command)
     }
   )
   ipcMain.on('sampler:stop', (_e, samplerId: string) => {
     logDebug({ category: 'ipc', message: 'sampler:stop', traceId: samplerId })
-    // The id is unique across both managers, so stopping an unknown id is a
-    // no-op on the other one.
+    // The id is unique across the managers, so stopping an unknown id is a
+    // no-op on the others.
     ssh.stopSampler(samplerId)
     wsl.stopSampler(samplerId)
+    localShell.stopSampler(samplerId)
   })
 
   // --- WSL (local pseudo-terminal) ---
@@ -212,6 +243,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
   ipcMain.handle('wsl:connect', (_e, opts: WslConnectOptions) => {
     logDebug({ category: 'ipc', message: 'wsl:connect', data: { distro: opts.distro } })
     return wsl.connect(opts)
+  })
+
+  // --- Local shell (a pty on this machine) ---
+  // Note the channel prefix: `local:` already means the local *filesystem*
+  // browser, so the pty transport gets its own namespace rather than crowding
+  // into that one.
+  ipcMain.handle('localShell:list', () => localShell.listShells())
+  ipcMain.handle('localShell:connect', (_e, opts: LocalConnectOptions) => {
+    logDebug({ category: 'ipc', message: 'localShell:connect', data: { shell: opts.shell } })
+    return localShell.connect(opts)
   })
 
   // --- Serial (local USB-attached boards) ---
@@ -451,6 +492,94 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
       return { error: errMessage(err) }
     }
   })
+
+  // The agent's file tools on a `kind: 'local'` tab. These mirror the `sftp:*`
+  // handlers below, down to the result types, so the renderer can dispatch on
+  // the tab's transport without either side of the call knowing which it got.
+  // `cwd` on each of these is the tab's observed shell directory. The agent
+  // writes relative paths meaning "where I am", and only the renderer knows
+  // where that is, so it travels with every call.
+  ipcMain.handle(
+    'local:readText',
+    async (
+      _e,
+      path: string,
+      opts?: { startByte?: number; maxBytes?: number; cwd?: string }
+    ): Promise<SftpReadTextResult> => {
+      try {
+        return { read: await readTextLocal(resolveLocal(path, opts?.cwd), opts) }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
+  ipcMain.handle(
+    'local:writeText',
+    async (_e, path: string, content: string, cwd?: string): Promise<SftpOpResult> => {
+      logDebug({ category: 'ipc', message: 'local:writeText', data: { path } })
+      try {
+        await writeTextLocal(resolveLocal(path, cwd), content)
+        return { ok: true }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
+  ipcMain.handle('local:stat', async (_e, path: string, cwd?: string): Promise<SftpStatResult> => {
+    try {
+      return { stat: await statLocal(resolveLocal(path, cwd)) }
+    } catch (err) {
+      return { error: errMessage(err) }
+    }
+  })
+  ipcMain.handle('local:mkdir', async (_e, path: string, cwd?: string): Promise<SftpOpResult> => {
+    try {
+      await mkdirLocal(resolveLocal(path, cwd))
+      return { ok: true }
+    } catch (err) {
+      return { error: errMessage(err) }
+    }
+  })
+  ipcMain.handle(
+    'local:realpath',
+    async (_e, path: string, cwd?: string): Promise<SftpRealpathResult> => {
+      try {
+        return { path: await realpathLocal(resolveLocal(path, cwd)) }
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
+  ipcMain.handle(
+    'local:grep',
+    async (
+      _e,
+      root: string,
+      pattern: string,
+      opts: { cwd?: string; glob?: string; max: number }
+    ): Promise<LocalSearchResult> => {
+      try {
+        return await grepLocal(root, pattern, opts)
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
+  ipcMain.handle(
+    'local:glob',
+    async (
+      _e,
+      root: string,
+      pattern: string,
+      opts: { cwd?: string; max: number }
+    ): Promise<LocalSearchResult> => {
+      try {
+        return await globLocal(root, pattern, opts)
+      } catch (err) {
+        return { error: errMessage(err) }
+      }
+    }
+  )
 
   // --- SFTP ---
   ipcMain.handle('sftp:list', async (_e, sessionId: string, path: string): Promise<SftpListResult> => {
@@ -856,10 +985,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
   return {
     ssh,
     wsl,
+    localShell,
     serial,
     disposeAll: () => {
       ssh.disposeAll()
       wsl.disposeAll()
+      localShell.disposeAll()
       serial.disposeAll()
     }
   }

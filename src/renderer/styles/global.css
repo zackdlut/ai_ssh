@@ -1826,25 +1826,36 @@ select:focus {
   transform: rotate(180deg);
 }
 
-/* ---- WSL launcher: a local target, so it wears violet instead of the
-   signal-teal used by every remote-connection control in this bar. ---- */
-.wsl-launch {
+/* ---- Shell launchers: targets on the user's own machine, so they wear an
+   accent of their own instead of the signal-teal used by every remote-
+   connection control in this bar. Violet is WSL, azure is a native shell —
+   both derive their whole palette from `--shell-accent`, so a third local
+   transport is one modifier rather than another copy of this block. ---- */
+.shell-launch {
   position: relative;
   display: inline-flex;
   align-items: center;
   flex: none;
   margin-left: 4px;
-  --wsl-fg: var(--violet);
-  --wsl-tint: color-mix(in srgb, var(--violet) 14%, transparent);
-  --wsl-tint-strong: color-mix(in srgb, var(--violet) 20%, transparent);
-  --wsl-line: color-mix(in srgb, var(--violet) 36%, transparent);
-  --wsl-line-strong: color-mix(in srgb, var(--violet) 54%, transparent);
-  --wsl-glow: color-mix(in srgb, var(--violet) 45%, transparent);
-  --wsl-ring: color-mix(in srgb, var(--violet) 14%, transparent);
-  --wsl-ring-strong: color-mix(in srgb, var(--violet) 24%, transparent);
+  --shell-fg: var(--shell-accent);
+  --shell-tint: color-mix(in srgb, var(--shell-accent) 14%, transparent);
+  --shell-tint-strong: color-mix(in srgb, var(--shell-accent) 20%, transparent);
+  --shell-line: color-mix(in srgb, var(--shell-accent) 36%, transparent);
+  --shell-line-strong: color-mix(in srgb, var(--shell-accent) 54%, transparent);
+  --shell-glow: color-mix(in srgb, var(--shell-accent) 45%, transparent);
+  --shell-ring: color-mix(in srgb, var(--shell-accent) 14%, transparent);
+  --shell-ring-strong: color-mix(in srgb, var(--shell-accent) 24%, transparent);
 }
 
-.wsl-btn {
+.shell-launch--wsl {
+  --shell-accent: var(--violet);
+}
+
+.shell-launch--local {
+  --shell-accent: var(--azure);
+}
+
+.shell-btn {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -1863,19 +1874,19 @@ select:focus {
 
 /* Spine on the leading edge: this target is pinned to the machine, unlike the
    remote sessions that come and go beside it. Always present, brighter on use. */
-.wsl-btn::before {
+.shell-btn::before {
   content: '';
   position: absolute;
   left: 0;
   top: 0;
   bottom: 0;
   width: 2px;
-  background: var(--wsl-fg);
+  background: var(--shell-fg);
   opacity: 0.45;
   transition: opacity 0.16s ease;
 }
 
-.wsl-btn-label {
+.shell-btn-label {
   /* Mono because the label names a shell, not a feature — and it separates the
      launcher from the UI-font labels on either side. 500 is a loaded weight. */
   font-family: var(--font-mono);
@@ -1887,78 +1898,78 @@ select:focus {
   margin-right: -0.09em;
 }
 
-.wsl-btn .wsl-btn-icon {
+.shell-btn .shell-btn-icon {
   color: var(--text-faint);
   transition: color 0.16s ease;
 }
 
-.wsl-btn .wsl-btn-caret {
+.shell-btn .shell-btn-caret {
   width: 10px;
   height: 10px;
   opacity: 0.5;
   transition: transform 0.18s ease, opacity 0.16s ease;
 }
 
-.wsl-btn:hover {
+.shell-btn:hover {
   color: var(--text);
-  border-color: var(--wsl-line);
-  background: linear-gradient(180deg, var(--wsl-tint), transparent);
-  box-shadow: inset 0 1px 0 var(--control-inset-hover), 0 0 0 1px var(--wsl-ring),
-    0 8px 20px -10px var(--wsl-glow);
+  border-color: var(--shell-line);
+  background: linear-gradient(180deg, var(--shell-tint), transparent);
+  box-shadow: inset 0 1px 0 var(--control-inset-hover), 0 0 0 1px var(--shell-ring),
+    0 8px 20px -10px var(--shell-glow);
 }
-.wsl-btn:hover::before,
-.wsl-btn.active::before {
+.shell-btn:hover::before,
+.shell-btn.active::before {
   opacity: 1;
 }
-.wsl-btn:hover .wsl-btn-icon {
-  color: var(--wsl-fg);
+.shell-btn:hover .shell-btn-icon {
+  color: var(--shell-fg);
 }
-.wsl-btn:hover .wsl-btn-caret {
+.shell-btn:hover .shell-btn-caret {
   opacity: 0.8;
 }
 
-.wsl-btn.active {
-  color: var(--wsl-fg);
-  border-color: var(--wsl-line-strong);
-  background: linear-gradient(180deg, var(--wsl-tint-strong), var(--wsl-tint));
-  box-shadow: inset 0 1px 0 var(--control-inset-hover), 0 0 0 1px var(--wsl-ring-strong),
-    0 10px 26px -10px var(--wsl-glow);
+.shell-btn.active {
+  color: var(--shell-fg);
+  border-color: var(--shell-line-strong);
+  background: linear-gradient(180deg, var(--shell-tint-strong), var(--shell-tint));
+  box-shadow: inset 0 1px 0 var(--control-inset-hover), 0 0 0 1px var(--shell-ring-strong),
+    0 10px 26px -10px var(--shell-glow);
 }
-.wsl-btn.active .wsl-btn-icon {
-  color: var(--wsl-fg);
+.shell-btn.active .shell-btn-icon {
+  color: var(--shell-fg);
 }
-.wsl-btn .wsl-btn-caret.open {
+.shell-btn .shell-btn-caret.open {
   transform: rotate(180deg);
   opacity: 1;
 }
 
-.wsl-btn:focus-visible {
+.shell-btn:focus-visible {
   outline: none;
-  border-color: var(--wsl-line-strong);
+  border-color: var(--shell-line-strong);
   box-shadow: inset 0 1px 0 var(--control-inset-hover),
-    0 0 0 2px color-mix(in srgb, var(--violet) 40%, transparent);
+    0 0 0 2px color-mix(in srgb, var(--shell-accent) 40%, transparent);
 }
 
-/* Distro list: same shape as the recent-connections menu, violet highlight. */
-.recent-menu.wsl-menu {
+/* Shell list: same shape as the recent-connections menu, accent highlight. */
+.recent-menu.shell-menu {
   min-width: 184px;
-  border-color: color-mix(in srgb, var(--violet) 26%, var(--line-strong));
+  border-color: color-mix(in srgb, var(--shell-accent) 26%, var(--line-strong));
 }
-.wsl-menu .recent-menu-item:hover {
+.shell-menu .recent-menu-item:hover {
   background: linear-gradient(
     135deg,
-    color-mix(in srgb, var(--violet) 20%, transparent),
+    color-mix(in srgb, var(--shell-accent) 20%, transparent),
     color-mix(in srgb, var(--azure) 12%, transparent)
   );
 }
-.wsl-menu .recent-menu-item:hover .menu-item-icon {
-  color: var(--wsl-fg);
+.shell-menu .recent-menu-item:hover .menu-item-icon {
+  color: var(--shell-fg);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .wsl-btn,
-  .wsl-btn::before,
-  .wsl-btn .wsl-btn-caret {
+  .shell-btn,
+  .shell-btn::before,
+  .shell-btn .shell-btn-caret {
     transition: none;
   }
 }

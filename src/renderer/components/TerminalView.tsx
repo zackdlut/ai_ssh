@@ -25,6 +25,7 @@ import { extractCommands, isDangerous } from '../lib/commands'
 import { buildMarkerCommand, parseMarker, runCapturedCommand, getCaptureTiming, nextCaptureDeadline, hasCaptureMarker, formatCaptureElapsed, isSessionCaptureActive, interruptSessionCapture, registerCaptureEcho, stripCaptureArtifacts, cleanCapturedOutput, CAPTURE_INTERRUPT_SETTLE_MS } from '../lib/execCapture'
 import { getTabObservation, setTabObservation } from '../lib/terminalObservation'
 import { describeSessionOs } from '../../shared/prompts'
+import { shellDialect, type ShellDialect } from '../../shared/shellDialect'
 import {
   isFollowAppTheme,
   resolveTerminalTheme,
@@ -123,7 +124,7 @@ const SYNC_SCROLL_ECHO_MS = 500
 /** Tab fields the NL-mode context needs; a subset of TerminalSession. */
 type NlContextTab = Pick<
   TerminalSession,
-  'id' | 'host' | 'username' | 'kind' | 'wslDistro' | 'serialOpts' | 'deviceKind'
+  'id' | 'host' | 'username' | 'kind' | 'wslDistro' | 'localShell' | 'serialOpts' | 'deviceKind'
 >
 
 /** Same fields, as carried across the NL summarize hop (tab id renamed). */
@@ -161,8 +162,13 @@ async function ensureTabCwd(tabId: string, sessionId: string): Promise<string | 
  * Format captured command output for display / summary: strip ANSI, drop the
  * echoed command line and any trailing shell prompt, then trim and clamp.
  */
-function formatCaptured(raw: string, cmd: string, _username?: string, marker?: string): string {
-  return cleanCapturedOutput(raw, cmd, marker ?? '').slice(0, MAX_CAPTURE)
+function formatCaptured(
+  raw: string,
+  cmd: string,
+  marker?: string,
+  dialect: ShellDialect = 'posix'
+): string {
+  return cleanCapturedOutput(raw, cmd, marker ?? '', dialect).slice(0, MAX_CAPTURE)
 }
 
 /** Short single-command output can be shown directly without a second LLM call. */
@@ -542,7 +548,11 @@ function ConnectedTerminalView({
       new Promise((resolve) => {
         const nl = nlRef.current
         const timing = getCaptureTiming(cmd)
-        const { wrapped, marker } = buildMarkerCommand(cmd)
+        // The sentinel is written in the shell's own language; a POSIX wrapper
+        // sent to PowerShell prints no marker at all, so the capture would
+        // stall out on a command that had in fact finished.
+        const dialect = tab.kind === 'local' ? shellDialect(tab.localShell) : 'posix'
+        const { wrapped, marker } = buildMarkerCommand(cmd, dialect)
         const startedAt = Date.now()
         let progressTimer: ReturnType<typeof setInterval> | undefined
         let showingWait = false
@@ -572,7 +582,7 @@ function ConnectedTerminalView({
           if (cap.idleTimer) clearTimeout(cap.idleTimer)
           clearWaitLine()
           if (nlRef.current.capture === cap) nlRef.current.capture = undefined
-          const output = formatCaptured(cap.buffer, cmd, tab.username, marker)
+          const output = formatCaptured(cap.buffer, cmd, marker, dialect)
           const { exitCode, cwd } = parseMarker(cap.buffer, marker)
           if (cwd) {
             setTabObservation(tab.id, {
@@ -725,6 +735,7 @@ function ConnectedTerminalView({
                   username: tab.username,
                   kind: tab.kind,
                   wslDistro: tab.wslDistro,
+                  localShell: tab.localShell,
                   serialOpts: tab.serialOpts,
                   deviceKind: tab.deviceKind
                 }

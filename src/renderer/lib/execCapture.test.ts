@@ -32,6 +32,37 @@ describe('buildMarkerCommand', () => {
     const multiline = buildMarkerCommand('cd /tmp\nls')
     expect(multiline.wrapped.startsWith('{ cd /tmp\nls\n}; __ec=$?;')).toBe(true)
   })
+
+  it('writes the PowerShell helper in PowerShell, not POSIX', () => {
+    // A POSIX wrapper sent to PowerShell prints no marker at all, so the
+    // capture waits out its stall timeout on a command that already finished.
+    const { wrapped, marker } = buildMarkerCommand('Get-Location', 'powershell')
+    expect(wrapped).not.toContain('printf')
+    expect(wrapped).not.toContain('$(pwd')
+    expect(wrapped).toContain('(Get-Location).Path')
+    expect(wrapped).toContain(marker)
+  })
+
+  it('consults both PowerShell exit signals, in the order that works', () => {
+    // `$?` is a boolean about the last statement; `$LASTEXITCODE` is only set
+    // once a native executable has run, so it is stale rather than absent
+    // after a cmdlet. Reading `$?` first is what makes a failed cmdlet report
+    // failure instead of inheriting some earlier program's code.
+    const { wrapped } = buildMarkerCommand('git status', 'powershell')
+    const okAt = wrapped.indexOf('$__ok=$?')
+    const lastAt = wrapped.indexOf('$LASTEXITCODE')
+    expect(okAt).toBeGreaterThanOrEqual(0)
+    expect(lastAt).toBeGreaterThan(okAt)
+  })
+
+  it('puts the cmd helper on its own line so %ERRORLEVEL% is not stale', () => {
+    // cmd expands `%ERRORLEVEL%` when it parses the line. Chaining with `&`
+    // parses both at once, which reads the exit code of whatever ran before.
+    const { wrapped } = buildMarkerCommand('dir', 'cmd')
+    expect(wrapped).toContain('dir\r\n')
+    expect(wrapped).not.toMatch(/dir\s*&\s*echo/)
+    expect(wrapped).toContain('%ERRORLEVEL%')
+  })
 })
 
 describe('stripCaptureArtifacts', () => {
@@ -129,6 +160,35 @@ describe('cleanCapturedOutput', () => {
 
   it('does not treat a line that merely ends with the command as an echo', () => {
     expect(cleanCapturedOutput('totals\nfile.txt\n', 'ls', 'AISSH_abc')).toBe('totals\nfile.txt')
+  })
+
+  it('strips a PowerShell prompt, which has no @ for the POSIX pattern to find', () => {
+    // `/\S+@\S+.*[#$%>]\s*$/` matches `user@host:~$` and nothing on Windows, so
+    // without its own pattern the prompt is returned to the model as output.
+    const raw = `Directory: C:\\src\n${marker} ec=0 cwd=C:\\src ${marker}\nPS C:\\Users\\me> `
+    expect(cleanCapturedOutput(raw, 'Get-ChildItem', marker, 'powershell')).toBe(
+      'Directory: C:\\src'
+    )
+  })
+
+  it('strips a cmd prompt', () => {
+    const raw = `hello\n${marker} ec=0 cwd=C:\\src ${marker}\nC:\\Users\\me>`
+    expect(cleanCapturedOutput(raw, 'echo hello', marker, 'cmd')).toBe('hello')
+  })
+
+  it('drops an echoed PowerShell helper rather than showing it as output', () => {
+    const helper =
+      `$__ok=$?; $__lec=$LASTEXITCODE; $__ec=$(if($__ok){0}elseif($__lec){$__lec}else{1}); ` +
+      `$__m='${marker}'; Write-Output ("\`n" + $__m + " ec=" + $__ec + " cwd=" + (Get-Location).Path + " " + $__m)`
+    const raw =
+      `PS C:\\src> Get-ChildItem; ${helper}\n` +
+      `app.ts\n` +
+      `${marker} ec=0 cwd=C:\\src ${marker}\n` +
+      'PS C:\\src> '
+    const out = cleanCapturedOutput(raw, 'Get-ChildItem', marker, 'powershell')
+    expect(out).toBe('app.ts')
+    expect(out).not.toContain('$__ok')
+    expect(out).not.toContain('Get-Location')
   })
 })
 

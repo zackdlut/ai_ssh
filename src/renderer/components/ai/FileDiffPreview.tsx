@@ -5,6 +5,7 @@ import { computeTextDiff, type TextDiff } from '../../../shared/textDiff'
 import { applyUniqueEdit } from '../../../shared/textEdit'
 import { applyPatchWithFallback } from '../../../shared/unifiedPatch'
 import { hasFileChannel } from '../../../shared/tabCapabilities'
+import { readText } from '../../lib/fileAccess'
 
 interface Props {
   /** Terminal tab the edit targets (the tool's tab_id argument). */
@@ -60,9 +61,7 @@ export default function FileDiffPreview({
         return
       }
 
-      const res = await window.api.sftp.readText(tab.sessionId, path, {
-        maxBytes: PREVIEW_MAX_BYTES
-      })
+      const res = await readText(tab, path, { maxBytes: PREVIEW_MAX_BYTES })
       if (cancelled) return
 
       // A missing file is the normal case for write_file creating something new.

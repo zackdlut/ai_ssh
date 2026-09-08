@@ -27,6 +27,8 @@ interface Props {
   onEditConnection: (conn: ConnectionConfig) => void
   /** Open the serial dialog, optionally pre-filled with a discovered port. */
   onNewSerial: (path?: string) => void
+  /** Open the dialog that saves a local shell as a bookmark. */
+  onNewLocalShell: () => void
   onClose: () => void
 }
 
@@ -38,6 +40,11 @@ function describeConnection(c: ConnectionConfig, probe?: DeviceProbeResult): str
     const parts = [c.serial?.path ?? '(no port)']
     if (c.serial?.baudRate) parts.push(`${c.serial.baudRate} baud`)
     if (c.deviceKind) parts.push(deviceKindLabel(c.deviceKind))
+    return parts.join(' · ')
+  }
+  if (c.kind === 'local') {
+    const parts = [c.local?.shell ?? 'default shell']
+    if (c.local?.cwd) parts.push(c.local.cwd)
     return parts.join(' · ')
   }
   const address = `${c.username}@${c.host}:${c.port}`
@@ -64,6 +71,7 @@ export default function ConnectionSidebar({
   onNewConnection,
   onEditConnection,
   onNewSerial,
+  onNewLocalShell,
   onClose
 }: Props): JSX.Element {
   const {
@@ -127,10 +135,10 @@ export default function ConnectionSidebar({
   /**
    * Whether a saved entry has a live session, for the row's dot.
    *
-   * The serial branch is not a nicety: a serial entry stores no host or user,
-   * so the host comparison would be `'' === ''` and every saved serial device
-   * would light up the moment any one of them was opened. A serial session is
-   * identified by the port it holds.
+   * The hostless branches are not a nicety: neither a serial nor a local entry
+   * stores a host or user, so the host comparison would be `'' === ''` and every
+   * one of them would light up the moment any one was opened. A serial session
+   * is identified by the port it holds, and a local one by the shell it runs.
    */
   const isConnectionActive = (c: ConnectionConfig): boolean => {
     if (c.kind === 'serial') {
@@ -142,10 +150,16 @@ export default function ConnectionSidebar({
           t.serialOpts?.path === c.serial.path
       )
     }
+    if (c.kind === 'local') {
+      return tabs.some(
+        (t) => t.status === 'connected' && t.kind === 'local' && t.connectionId === c.id
+      )
+    }
     return tabs.some(
       (t) =>
         t.status === 'connected' &&
         t.kind !== 'serial' &&
+        t.kind !== 'local' &&
         !!c.host &&
         t.host === c.host &&
         t.username === c.username
@@ -402,7 +416,8 @@ export default function ConnectionSidebar({
     const conn = node.connection
     const active = isConnectionActive(conn)
     const selected = selectedId === node.id
-    const probe = conn.kind === 'serial' ? undefined : probes[conn.id]
+    // Nothing to reach over the network, so nothing to probe.
+    const probe = conn.kind === 'serial' || conn.kind === 'local' ? undefined : probes[conn.id]
     return (
       <div
         key={node.id}
@@ -468,6 +483,13 @@ export default function ConnectionSidebar({
             onClick={() => onNewSerial()}
           >
             <UiIcon name="serial" />
+          </button>
+          <button
+            className="toolbar-btn toolbar-btn--icon"
+            title={t('sidebar.newLocalShell')}
+            onClick={() => onNewLocalShell()}
+          >
+            <UiIcon name="terminal" />
           </button>
           <button className="toolbar-btn toolbar-btn--icon" title={t('sidebar.newFolder')} onClick={() => void newFolder(null)}>
             <UiIcon name="folder-plus" />
@@ -573,6 +595,9 @@ export default function ConnectionSidebar({
               <ContextMenuItem icon="serial" onClick={() => onNewSerial()}>
                 {t('sidebar.newSerial')}
               </ContextMenuItem>
+              <ContextMenuItem icon="terminal" onClick={() => onNewLocalShell()}>
+                {t('sidebar.newLocalShell')}
+              </ContextMenuItem>
               <ContextMenuItem icon="folder-new" onClick={() => void newFolder(null)}>
                 {t('sidebar.newFolder')}
               </ContextMenuItem>
@@ -610,6 +635,9 @@ export default function ConnectionSidebar({
               </ContextMenuItem>
               <ContextMenuItem icon="serial" onClick={() => onNewSerial()}>
                 {t('sidebar.newSerial')}
+              </ContextMenuItem>
+              <ContextMenuItem icon="terminal" onClick={() => onNewLocalShell()}>
+                {t('sidebar.newLocalShell')}
               </ContextMenuItem>
               <ContextMenuItem icon="folder-new" onClick={() => void newFolder(menu.node!.id)}>
                 {t('sidebar.newSubfolder')}

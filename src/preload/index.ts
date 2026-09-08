@@ -44,6 +44,9 @@ import type {
   SftpTransferDoneEvent,
   LocalListResult,
   LocalHomeResult,
+  LocalSearchResult,
+  LocalShellInfo,
+  LocalConnectOptions,
   OpenExternalResult,
   OpenPathResult,
   PickDirectoryResult,
@@ -112,6 +115,13 @@ const api = {
     connect: (opts: WslConnectOptions): Promise<ConnectResult> =>
       ipcRenderer.invoke('wsl:connect', opts)
   },
+  // A pty on this machine. Separate from `local`, which is the local
+  // filesystem: same machine, different resource.
+  localShell: {
+    list: (): Promise<LocalShellInfo[]> => ipcRenderer.invoke('localShell:list'),
+    connect: (opts: LocalConnectOptions): Promise<ConnectResult> =>
+      ipcRenderer.invoke('localShell:connect', opts)
+  },
   serial: {
     list: (): Promise<SerialListResult> => ipcRenderer.invoke('serial:list'),
     connect: (opts: SerialConnectOptions): Promise<ConnectResult> =>
@@ -148,7 +158,32 @@ const api = {
     delete: (path: string, isDir: boolean): Promise<SftpOpResult> =>
       ipcRenderer.invoke('local:delete', path, isDir),
     openPath: (path: string): Promise<OpenPathResult> =>
-      ipcRenderer.invoke('local:openPath', path)
+      ipcRenderer.invoke('local:openPath', path),
+    // Deliberately the same result types as the `sftp` methods below: the
+    // agent's file tools pick between the two by tab kind and must not have to
+    // unpack two shapes.
+    readText: (
+      path: string,
+      opts?: { startByte?: number; maxBytes?: number; cwd?: string }
+    ): Promise<SftpReadTextResult> => ipcRenderer.invoke('local:readText', path, opts),
+    writeText: (path: string, content: string, cwd?: string): Promise<SftpOpResult> =>
+      ipcRenderer.invoke('local:writeText', path, content, cwd),
+    stat: (path: string, cwd?: string): Promise<SftpStatResult> =>
+      ipcRenderer.invoke('local:stat', path, cwd),
+    mkdir: (path: string, cwd?: string): Promise<SftpOpResult> =>
+      ipcRenderer.invoke('local:mkdir', path, cwd),
+    realpath: (path: string, cwd?: string): Promise<SftpRealpathResult> =>
+      ipcRenderer.invoke('local:realpath', path, cwd),
+    grep: (
+      root: string,
+      pattern: string,
+      opts: { cwd?: string; glob?: string; max: number }
+    ): Promise<LocalSearchResult> => ipcRenderer.invoke('local:grep', root, pattern, opts),
+    glob: (
+      root: string,
+      pattern: string,
+      opts: { cwd?: string; max: number }
+    ): Promise<LocalSearchResult> => ipcRenderer.invoke('local:glob', root, pattern, opts)
   },
   sftp: {
     list: (sessionId: string, path: string): Promise<SftpListResult> =>

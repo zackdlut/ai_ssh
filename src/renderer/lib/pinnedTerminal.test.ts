@@ -3,6 +3,7 @@ import {
   applyPinnedTabId,
   applyMentionHotkey,
   filterTabsForMention,
+  formatTerminalLabel,
   findMentionSpans,
   hasTerminalMention,
   matchTabByMention,
@@ -123,6 +124,35 @@ describe('mentionTokenFor', () => {
     expect(mentionTokenFor({ kind: 'wsl', host: '', wslDistro: 'Ubuntu-22.04' })).toBe(
       'Ubuntu-22.04'
     )
+  })
+
+  it('uses the shell name for a local tab rather than the literal "host"', () => {
+    // A local tab stores no host, so without its own branch every one of them
+    // would be `@host` — unaddressable, and identical to its neighbours.
+    expect(mentionTokenFor({ kind: 'local', host: '', localShell: '/usr/bin/fish' })).toBe('fish')
+    expect(
+      mentionTokenFor({ kind: 'local', host: '', localShell: 'C:\\Program Files\\pwsh.exe' })
+    ).toBe('pwsh')
+  })
+})
+
+describe('formatTerminalLabel', () => {
+  it('labels a local tab by its shell', () => {
+    expect(
+      formatTerminalLabel({ kind: 'local', username: '', host: '', localShell: '/bin/bash' })
+    ).toBe('bash')
+  })
+
+  it('prefers a custom title over the shell name', () => {
+    expect(
+      formatTerminalLabel({
+        kind: 'local',
+        username: '',
+        host: '',
+        localShell: '/bin/bash',
+        customTitle: 'build box'
+      })
+    ).toBe('build box')
   })
 })
 

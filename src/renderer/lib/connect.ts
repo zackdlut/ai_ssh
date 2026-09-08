@@ -9,6 +9,7 @@ import type {
   ConnectionConfig,
   ConnectOptions,
   DeviceKind,
+  LocalConnectOptions,
   SerialConnectOptions
 } from '../../shared/types'
 import { identifySerialDevice } from '../../shared/deviceIdentity'
@@ -261,6 +262,74 @@ export async function connectWsl(distro?: string): Promise<string | undefined> {
 }
 
 /**
+ * Open a shell on this machine and register the session.
+ *
+ * Unlike `connectWsl`, this takes the placement arguments the SSH path has had
+ * all along. A local shell is the transport most likely to be opened into a
+ * pane the user just split — it needs no credentials, so there is nothing to
+ * stop and fill in — and without them every launch would land in a tab of its
+ * own regardless of where it was asked for.
+ *
+ * Returns an error string on failure, or undefined on success.
+ */
+export async function connectLocal(
+  opts: LocalConnectOptions = {},
+  args?: {
+    title?: string
+    terminalId?: string
+    paneId?: string
+    connectionId?: string
+  }
+): Promise<string | undefined> {
+  debugLog({
+    category: 'user.action',
+    message: 'local.connect',
+    data: { shell: opts.shell }
+  })
+  const store = useSessionsStore.getState()
+  const reuse = args?.paneId ? undefined : findIdleTerminalToReuse(args?.terminalId)
+  const title = args?.title || shellLabel(opts.shell)
+
+  if (reuse) store.setStatusById(reuse.id, 'connecting')
+
+  const result = await window.api.localShell.connect(opts)
+  if (result.error || !result.sessionId) {
+    const message = result.error ?? t(loc(), 'connect.failed')
+    if (reuse) store.setStatusById(reuse.id, 'idle', message)
+    return message
+  }
+
+  const sessionData = {
+    sessionId: result.sessionId,
+    title,
+    kind: 'local' as const,
+    localShell: opts.shell,
+    localCwd: opts.cwd,
+    status: 'connected' as const,
+    // This machine is not a host it can connect to; these stay empty so every
+    // host-shaped consumer sees "nothing to dial" rather than a fake address.
+    host: '',
+    port: 0,
+    username: '',
+    connectionId: args?.connectionId,
+    message: undefined
+  }
+  if (reuse) {
+    store.patchSession(reuse.id, sessionData)
+    store.setActive(reuse.id)
+  } else {
+    placeAndAdd({ id: genTerminalId(), ...sessionData }, args?.paneId)
+  }
+  return undefined
+}
+
+/** Tab title for a local shell: `pwsh`, `bash`, or a generic fallback. */
+function shellLabel(shell?: string): string {
+  if (!shell) return t(loc(), 'tabbar.localShell')
+  return shell.replace(/\\/g, '/').split('/').pop()?.replace(/\.exe$/i, '') || shell
+}
+
+/**
  * Open a local serial port and register the session.
  *
  * Returns an error string on failure, or undefined on success.
@@ -376,6 +445,26 @@ export async function connectFromConfig(
     return err
   }
 
+  if (c.kind === 'local') {
+    const err = await connectLocal(
+      { shell: c.local?.shell, cwd: c.local?.cwd },
+      {
+        title: c.name || undefined,
+        terminalId: into?.terminalId,
+        paneId: into?.paneId,
+        connectionId: c.id
+      }
+    )
+    if (!err) {
+      void useBookmarksStore.getState().upsertConnection({
+        ...c,
+        useCount: (c.useCount ?? 0) + 1,
+        lastUsedAt: Date.now()
+      })
+    }
+    return err
+  }
+
   const err = await connect({
     opts: {
       host: c.host,
@@ -411,6 +500,22 @@ export async function reconnectSession(terminalId: string): Promise<string | und
     if (session.sessionId) window.api.ssh.close(session.sessionId)
     store.setStatusById(terminalId, 'connecting')
     const result = await window.api.wsl.connect({ distro: session.wslDistro })
+    if (result.error || !result.sessionId) {
+      const message = result.error ?? t(loc(), 'connect.reconnectFailed')
+      store.setStatusById(terminalId, 'error', message)
+      return message
+    }
+    store.updateSession(terminalId, result.sessionId, 'connected')
+    return undefined
+  }
+
+  if (session.kind === 'local') {
+    if (session.sessionId) window.api.ssh.close(session.sessionId)
+    store.setStatusById(terminalId, 'connecting')
+    const result = await window.api.localShell.connect({
+      shell: session.localShell,
+      cwd: session.localCwd
+    })
     if (result.error || !result.sessionId) {
       const message = result.error ?? t(loc(), 'connect.reconnectFailed')
       store.setStatusById(terminalId, 'error', message)
@@ -479,6 +584,16 @@ export async function duplicateSession(
 
   if (session.kind === 'wsl') {
     return connectWsl(session.wslDistro)
+  }
+
+  // The copy starts where the original started, not where it has since been
+  // `cd`'d to: duplicating a tab means another of the same thing, and the pty's
+  // live directory is not something the renderer tracks reliably.
+  if (session.kind === 'local') {
+    return connectLocal(
+      { shell: session.localShell, cwd: session.localCwd },
+      { title: session.title, paneId, connectionId: session.connectionId }
+    )
   }
 
   // A serial port is exclusive: the OS hands it to one process, so a second

@@ -1,6 +1,7 @@
 import type { TerminalContext } from '../types'
 import type { TabKind } from '../tabCapabilities'
 import { deviceKindLabel, type DeviceKind } from '../deviceIdentity'
+import { shellDialect } from '../shellDialect'
 
 /**
  * Describe what kind of shell a tab is, for the context message's OS hint.
@@ -16,11 +17,25 @@ import { deviceKindLabel, type DeviceKind } from '../deviceIdentity'
 export function describeTabOs(
   kind: TabKind,
   wslDistro?: string,
-  serial?: { path?: string; baudRate?: number; board?: string }
+  serial?: { path?: string; baudRate?: number; board?: string },
+  local?: { shell?: string }
 ): string {
   if (kind === 'wsl') {
     const distro = wslDistro ? ` (${wslDistro})` : ''
     return `local WSL${distro} — no SFTP channel, so the file tools do not work on this tab; use exec_command`
+  }
+  // Without this the fallthrough would call a local Windows shell a remote
+  // Linux host, and the model would answer `systemctl` and `apt` to everything.
+  if (kind === 'local') {
+    const dialect = shellDialect(local?.shell)
+    const name = local?.shell ? ` (${local.shell})` : ''
+    if (dialect === 'powershell') {
+      return `a PowerShell session on the user's own Windows machine${name} — use PowerShell cmdlets, not POSIX tools: no systemctl, apt, or /etc. Paths use backslashes. The file tools DO work here.`
+    }
+    if (dialect === 'cmd') {
+      return `a Windows Command Prompt on the user's own machine${name} — cmd.exe builtins only, not POSIX tools. Paths use backslashes. The file tools DO work here.`
+    }
+    return `a ${process.platform === 'darwin' ? 'macOS' : 'Unix'} shell on the user's own machine${name} — this is their workstation, not a server, so be conservative with anything destructive. The file tools DO work here.`
   }
   if (kind === 'serial') {
     const where = serial?.path ? ` on ${serial.path}` : ''
@@ -44,12 +59,18 @@ export function describeSessionOs(tab: {
   wslDistro?: string
   deviceKind?: DeviceKind
   serialOpts?: { path?: string; baudRate?: number }
+  localShell?: string
 }): string {
-  return describeTabOs(tab.kind, tab.wslDistro, {
-    path: tab.serialOpts?.path,
-    baudRate: tab.serialOpts?.baudRate,
-    board: tab.deviceKind ? deviceKindLabel(tab.deviceKind) : undefined
-  })
+  return describeTabOs(
+    tab.kind,
+    tab.wslDistro,
+    {
+      path: tab.serialOpts?.path,
+      baudRate: tab.serialOpts?.baudRate,
+      board: tab.deviceKind ? deviceKindLabel(tab.deviceKind) : undefined
+    },
+    { shell: tab.localShell }
+  )
 }
 
 /**

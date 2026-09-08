@@ -116,7 +116,22 @@ function TransferTitleProgress({
 export default function SftpPanel(): JSX.Element {
   const { panelWidth, setPanelWidth, setPanelOpen } = useSftpStore()
   const activeSession = useSessionsStore((s) => s.sessions.find((t) => t.id === s.activeSessionId))
-  const sessionId = activeSession && activeSession.status === 'connected' ? activeSession.sessionId : null
+  /**
+   * A local tab collapses this panel to a single browser.
+   *
+   * The two panes exist to move files between two machines, and on a local tab
+   * there is only one — a second copy of the same tree, with "upload" and
+   * "download" buttons that would mean nothing. So the remote half is dropped
+   * and the local half fills the panel.
+   */
+  const localOnly = activeSession?.kind === 'local'
+  // Deliberately null on a local tab even though the pty has a live session id:
+  // every remote action already guards on this, so one assignment disables the
+  // whole SFTP half rather than each call site having to ask again.
+  const sessionId =
+    activeSession && activeSession.status === 'connected' && !localOnly
+      ? activeSession.sessionId
+      : null
   const t = useT()
 
   const [localCwd, setLocalCwd] = useState('')
@@ -614,6 +629,7 @@ export default function SftpPanel(): JSX.Element {
       {notice && <div className="sftp-notice">{notice}</div>}
 
       <div className="sftp-body" ref={bodyRef}>
+        {!localOnly && (
         <div className="sftp-pane-slot sftp-pane-slot-remote">
           {!sessionId ? (
             <div className="sftp-pane sftp-pane-empty">
@@ -680,11 +696,12 @@ export default function SftpPanel(): JSX.Element {
             />
           )}
         </div>
+        )}
 
-        {localPaneOpen && (
+        {(localPaneOpen || localOnly) && (
           <div
             className="sftp-pane-slot sftp-pane-slot-local"
-            style={{ height: localPaneHeight }}
+            style={localOnly ? { flex: 1, minHeight: 0 } : { height: localPaneHeight }}
           >
             <FileBrowserPane
               title={t('sftp.localTitle')}
@@ -704,34 +721,44 @@ export default function SftpPanel(): JSX.Element {
                 openRowContextMenu('local', entry, localSelected, localEntries, setLocalSelected, e)
               }
               onOpenFile={(entry) => void openEntry('local', entry)}
-              titleResize={{
-                resizing: splitResizing,
-                tip: t('sftp.paneSplitTip'),
-                onMouseDown: startSplitResize,
-                onDoubleClick: resetLocalPaneHeight
-              }}
+              // Nothing to resize against or collapse into when this is the
+              // only pane, so the handle and the close button both go.
+              titleResize={
+                localOnly
+                  ? undefined
+                  : {
+                      resizing: splitResizing,
+                      tip: t('sftp.paneSplitTip'),
+                      onMouseDown: startSplitResize,
+                      onDoubleClick: resetLocalPaneHeight
+                    }
+              }
               titleActions={
-                <button
-                  type="button"
-                  className="sftp-pane-title-btn"
-                  onClick={closeLocalPane}
-                  title={t('sftp.hideLocal')}
-                  aria-label={t('sftp.hideLocal')}
-                >
-                  ×
-                </button>
+                localOnly ? undefined : (
+                  <button
+                    type="button"
+                    className="sftp-pane-title-btn"
+                    onClick={closeLocalPane}
+                    title={t('sftp.hideLocal')}
+                    aria-label={t('sftp.hideLocal')}
+                  >
+                    ×
+                  </button>
+                )
               }
               renderRowActions={(entry) => (
                 <>
-                  <button
-                    className="sftp-act"
-                    onClick={() => void uploadEntry(entry)}
-                    disabled={busy || !sessionId || !remoteCwd}
-                    title={t('sftp.upload')}
-                    aria-label={t('sftp.upload')}
-                  >
-                    <UiIcon name="upload" size="sm" />
-                  </button>
+                  {!localOnly && (
+                    <button
+                      className="sftp-act"
+                      onClick={() => void uploadEntry(entry)}
+                      disabled={busy || !sessionId || !remoteCwd}
+                      title={t('sftp.upload')}
+                      aria-label={t('sftp.upload')}
+                    >
+                      <UiIcon name="upload" size="sm" />
+                    </button>
+                  )}
                   <button
                     className="sftp-act"
                     onClick={() => void renameLocalEntry(entry)}
@@ -756,7 +783,7 @@ export default function SftpPanel(): JSX.Element {
           </div>
         )}
 
-        {!localPaneOpen && (
+        {!localPaneOpen && !localOnly && (
           <div className="sftp-local-collapsed">
             <button
               type="button"
