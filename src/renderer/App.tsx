@@ -28,6 +28,7 @@ const TerminalView = lazy(() => import('./components/TerminalView'))
 const SidePanel = lazy(() => import('./components/ai/SidePanel'))
 const SftpPanel = lazy(() => import('./components/sftp/SftpPanel'))
 const ConnectModal = lazy(() => import('./components/connection/ConnectModal'))
+const SerialConnectModal = lazy(() => import('./components/connection/SerialConnectModal'))
 const SettingsModal = lazy(() => import('./components/ai/SettingsModal'))
 const SkillsModal = lazy(() => import('./components/ai/SkillsModal'))
 const UserRulesModal = lazy(() => import('./components/ai/UserRulesModal'))
@@ -43,6 +44,13 @@ interface ConnectModalState {
   parentId?: string | null
 }
 
+interface SerialModalState {
+  editConn?: ConnectionConfig | null
+  parentId?: string | null
+  /** Port to pre-select, when opened from a discovered device row. */
+  path?: string
+}
+
 export default function App(): JSX.Element {
   const { sessions, activeSessionId, setStatusBySession } = useSessionsStore()
   const panelOpen = useAIStore((s) => s.panelOpen)
@@ -55,6 +63,7 @@ export default function App(): JSX.Element {
   const loadSkills = useSkillsStore((s) => s.load)
   const loadUserRules = useUserRulesStore((s) => s.load)
   const [connectModal, setConnectModal] = useState<ConnectModalState | null>(null)
+  const [serialModal, setSerialModal] = useState<SerialModalState | null>(null)
   const [settingsPanel, setSettingsPanel] = useState<SettingsMenuItem | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(getConnSidebarStartupOpen)
   const paneBoxes = usePaneBoxes()
@@ -115,8 +124,13 @@ export default function App(): JSX.Element {
 
   const openNewConnection = (parentId: string | null): void =>
     setConnectModal({ parentId })
-  const openEditConnection = (conn: ConnectionConfig): void =>
-    setConnectModal({ editConn: conn })
+  // Which dialog to open is decided by the entry's transport: the SSH form has
+  // no port or baud rate, and the serial form has no host or credentials.
+  const openEditConnection = (conn: ConnectionConfig): void => {
+    if (conn.kind === 'serial') setSerialModal({ editConn: conn })
+    else setConnectModal({ editConn: conn })
+  }
+  const openNewSerial = (path?: string): void => setSerialModal({ path })
 
   return (
     <div className="app">
@@ -131,6 +145,7 @@ export default function App(): JSX.Element {
           <ConnectionSidebar
             onNewConnection={openNewConnection}
             onEditConnection={openEditConnection}
+            onNewSerial={openNewSerial}
             onClose={() => setSidebarOpen(false)}
           />
         )}
@@ -176,6 +191,16 @@ export default function App(): JSX.Element {
             editConn={connectModal.editConn}
             defaultParentId={connectModal.parentId}
             onClose={() => setConnectModal(null)}
+          />
+        </Suspense>
+      )}
+      {serialModal && (
+        <Suspense fallback={null}>
+          <SerialConnectModal
+            editConn={serialModal.editConn}
+            defaultParentId={serialModal.parentId}
+            initialPath={serialModal.path}
+            onClose={() => setSerialModal(null)}
           />
         </Suspense>
       )}

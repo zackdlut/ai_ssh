@@ -4,6 +4,7 @@ import { useT } from '../../lib/i18n'
 import { computeTextDiff, type TextDiff } from '../../../shared/textDiff'
 import { applyUniqueEdit } from '../../../shared/textEdit'
 import { applyPatchWithFallback } from '../../../shared/unifiedPatch'
+import { hasFileChannel } from '../../../shared/tabCapabilities'
 
 interface Props {
   /** Terminal tab the edit targets (the tool's tab_id argument). */
@@ -54,7 +55,7 @@ export default function FileDiffPreview({
     let cancelled = false
     const run = async (): Promise<void> => {
       const tab = useSessionsStore.getState().sessions.find((tt) => tt.id === tabId)
-      if (!tab?.sessionId || tab.kind === 'wsl') {
+      if (!tab?.sessionId || !hasFileChannel(tab.kind)) {
         if (!cancelled) setState({ kind: 'error', message: t('tool.diff.unavailable') })
         return
       }

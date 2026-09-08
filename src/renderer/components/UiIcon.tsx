@@ -43,6 +43,16 @@ export type UiIconName =
   | 'split-right'
   | 'split-down'
   | 'layout-grid'
+  | 'refresh'
+  // Releasing a serial port, which is a different act from closing a tab: the
+  // tab stays and the exclusive lock on the device is what is given up.
+  | 'unplug'
+  // Device families. `serial` is the fallback for a port whose board could not
+  // be identified, which is most bare USB-UART adapters.
+  | 'pi'
+  | 'esp32'
+  | 'arduino'
+  | 'serial'
 
 interface Props {
   name: UiIconName

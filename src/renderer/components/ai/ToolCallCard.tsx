@@ -30,6 +30,7 @@ type ToolCategory =
   | 'file'
   | 'plan'
   | 'agent'
+  | 'device'
 
 const TOOL_CATEGORY: Record<string, ToolCategory> = {
   open_ssh: 'connection',
@@ -60,7 +61,13 @@ const TOOL_CATEGORY: Record<string, ToolCategory> = {
   // Its own category rather than 'read': a delegation is the longest call the
   // app makes and it is the one card the user has to be able to tell apart from
   // its siblings when three hosts are surveyed at once.
-  delegate_to_host: 'agent'
+  delegate_to_host: 'agent',
+  // Not 'command': these reach a board over a wire, where the effect is
+  // physical and there is no exit code to judge it by. The card has to look
+  // different from a shell command so the user reads it as such.
+  list_devices: 'device',
+  serial_send: 'device',
+  serial_reset: 'device'
 }
 
 /** Tools whose pending card shows a live diff of the proposed change. */
@@ -186,6 +193,26 @@ function ToolGlyph({ category }: { category: ToolCategory }): JSX.Element {
             d="M6.4 9.1 13.6 5.6M6.4 10.9l7.2 3.5"
             stroke="currentColor"
             strokeWidth="1.4"
+            strokeLinecap="round"
+          />
+        </svg>
+      )}
+      {/* A chip with legs: the board itself, not a screen or a file. */}
+      {category === 'device' && (
+        <svg viewBox="0 0 20 20" fill="none">
+          <rect
+            x="6"
+            y="6"
+            width="8"
+            height="8"
+            rx="1.2"
+            stroke="currentColor"
+            strokeWidth="1.4"
+          />
+          <path
+            d="M8 6V3.5M12 6V3.5M8 14v2.5M12 14v2.5M6 8H3.5M6 12H3.5M14 8h2.5M14 12h2.5"
+            stroke="currentColor"
+            strokeWidth="1.3"
             strokeLinecap="round"
           />
         </svg>
@@ -748,7 +775,13 @@ function ToolResult({ name, result }: { name: string; result?: string }): JSX.El
     name === 'read_file' ||
     name === 'grep' ||
     name === 'glob' ||
-    name === 'update_plan'
+    name === 'update_plan' ||
+    // Device results are raw device bytes and aligned port tables. Both are
+    // column-sensitive, so they get the monospace block even when short —
+    // a one-line boot message reflowed into prose loses its meaning.
+    name === 'list_devices' ||
+    name === 'serial_send' ||
+    name === 'serial_reset'
   ) {
     return <LongTextOutput text={result} />
   }

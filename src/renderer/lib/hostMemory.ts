@@ -15,6 +15,7 @@
  * every host, forever.
  */
 import { useSessionsStore } from '../store/sessionsStore'
+import { hasFileChannel } from '../../shared/tabCapabilities'
 
 /** Candidate locations, in priority order. The first that exists wins. */
 const MEMORY_FILENAMES = ['AGENTS.md', '.ai-terminal.md']
@@ -73,8 +74,9 @@ export function clearHostMemoryCache(): void {
 export async function loadHostMemory(terminalTabId: string | undefined): Promise<void> {
   if (!terminalTabId || cache.has(terminalTabId)) return
   const tab = useSessionsStore.getState().sessions.find((t) => t.id === terminalTabId)
-  // WSL tabs have no SFTP channel; an unconnected tab has nothing to read.
-  if (!tab || tab.kind === 'wsl' || tab.status !== 'connected' || !tab.sessionId) return
+  // Only SSH tabs have SFTP to read the file with; an unconnected tab has
+  // nothing to read at all.
+  if (!tab || !hasFileChannel(tab.kind) || tab.status !== 'connected' || !tab.sessionId) return
 
   for (const path of hostMemoryCandidates(tab.username)) {
     const res = await window.api.sftp.readText(tab.sessionId, path, {
@@ -114,6 +116,6 @@ export function hostMemoryPath(terminalTabId: string | undefined): string | unde
   const entry = cache.get(terminalTabId)
   if (entry?.path) return entry.path
   const tab = useSessionsStore.getState().sessions.find((t) => t.id === terminalTabId)
-  if (!tab || tab.kind === 'wsl') return undefined
+  if (!tab || !hasFileChannel(tab.kind)) return undefined
   return hostMemoryCandidates(tab.username)[0]
 }

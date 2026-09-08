@@ -18,6 +18,7 @@ import { useSessionsStore, type TerminalSession } from '../store/sessionsStore'
 import { runAgentCommand } from './agentExec'
 import { shellQuote, type ToolResult } from './fileTools'
 import { toolResultCharBudget } from './toolBudget'
+import { describeTabLimits, hasCommandChannel } from '../../shared/tabCapabilities'
 
 /** Read subcommands `git_read` is allowed to compose. */
 export const GIT_READ_SUBCOMMANDS = ['status', 'diff', 'log', 'show', 'branch'] as const
@@ -50,6 +51,12 @@ function resolveTab(tabId: string | undefined): { tab: TerminalSession } | { err
   if (!tabId) return { error: 'tab_id is required.' }
   const tab = useSessionsStore.getState().sessions.find((t) => t.id === tabId)
   if (!tab) return { error: `No open tab with id "${tabId}".` }
+  // Every git subcommand here is a shell command, so a tab that cannot run one
+  // is rejected before its arguments are validated — the argument errors would
+  // otherwise send the model off fixing a ref name on a tab that has no git.
+  if (!hasCommandChannel(tab.kind)) {
+    return { error: `Tab "${tabId}" is ${describeTabLimits(tab.kind)}` }
+  }
   if (tab.status !== 'connected' || !tab.sessionId) {
     return { error: `Tab "${tabId}" is not connected (status: ${tab.status}).` }
   }

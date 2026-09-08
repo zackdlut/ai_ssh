@@ -7,19 +7,44 @@ import {
   CONN_SIDEBAR_MAX_WIDTH
 } from '../../store/connSidebarStore'
 import { useSessionsStore } from '../../store/sessionsStore'
+import { useDevicesStore } from '../../store/devicesStore'
 import { connectFromConfig } from '../../lib/connect'
 import { useT } from '../../lib/i18n'
 import ContextMenuItem from '../ContextMenuItem'
 import UiIcon from '../UiIcon'
-import type { BookmarkTransferFormat, ConnectionConfig } from '../../../shared/types'
+import DiscoveredDevices from './DiscoveredDevices'
+import SerialPortMenu, { SavedSerialMenuItems } from './SerialPortMenu'
+import { deviceIconName } from './deviceIcon'
+import { deviceKindLabel, type SerialPortInfo } from '../../../shared/deviceIdentity'
+import type {
+  BookmarkTransferFormat,
+  ConnectionConfig,
+  DeviceProbeResult
+} from '../../../shared/types'
 
 interface Props {
   onNewConnection: (parentId: string | null) => void
   onEditConnection: (conn: ConnectionConfig) => void
+  /** Open the serial dialog, optionally pre-filled with a discovered port. */
+  onNewSerial: (path?: string) => void
   onClose: () => void
 }
 
 type DropPos = 'before' | 'after' | 'inside'
+
+/** Row tooltip: the address for an SSH host, the port settings for a device. */
+function describeConnection(c: ConnectionConfig, probe?: DeviceProbeResult): string {
+  if (c.kind === 'serial') {
+    const parts = [c.serial?.path ?? '(no port)']
+    if (c.serial?.baudRate) parts.push(`${c.serial.baudRate} baud`)
+    if (c.deviceKind) parts.push(deviceKindLabel(c.deviceKind))
+    return parts.join(' · ')
+  }
+  const address = `${c.username}@${c.host}:${c.port}`
+  if (!probe) return address
+  if (probe.reachable) return `${address} · ${probe.latencyMs ?? '?'}ms`
+  return `${address} · ${probe.error ?? 'unreachable'}`
+}
 
 interface Menu {
   x: number
@@ -27,11 +52,18 @@ interface Menu {
   node: TreeNode | null // null => background (root)
   /** Import/export menu opened from the toolbar rather than a right-click. */
   transfer?: boolean
+  /**
+   * A discovered serial port, which is not a tree node at all: it has no id,
+   * no folder, and cannot be renamed or deleted, because it is a fact about
+   * what is plugged in rather than a record the user created.
+   */
+  port?: SerialPortInfo
 }
 
 export default function ConnectionSidebar({
   onNewConnection,
   onEditConnection,
+  onNewSerial,
   onClose
 }: Props): JSX.Element {
   const {
@@ -49,8 +81,14 @@ export default function ConnectionSidebar({
   const folders = useBookmarksStore((s) => s.folders)
   const connections = useBookmarksStore((s) => s.connections)
   const tabs = useSessionsStore((s) => s.sessions)
+  const probes = useDevicesStore((s) => s.probes)
+  const acquireDevices = useDevicesStore((s) => s.acquire)
   const { panelWidth, setPanelWidth } = useConnSidebarStore()
   const t = useT()
+
+  // Serial enumeration wakes the USB bus and probing touches every saved
+  // device, so both run only while this panel is mounted.
+  useEffect(() => acquireDevices(), [acquireDevices])
 
   const tree = getTree()
 
@@ -86,8 +124,33 @@ export default function ConnectionSidebar({
     }
   }, [menu])
 
-  const isConnectionActive = (c: ConnectionConfig): boolean =>
-    tabs.some((t) => t.status === 'connected' && t.host === c.host && t.username === c.username)
+  /**
+   * Whether a saved entry has a live session, for the row's dot.
+   *
+   * The serial branch is not a nicety: a serial entry stores no host or user,
+   * so the host comparison would be `'' === ''` and every saved serial device
+   * would light up the moment any one of them was opened. A serial session is
+   * identified by the port it holds.
+   */
+  const isConnectionActive = (c: ConnectionConfig): boolean => {
+    if (c.kind === 'serial') {
+      return tabs.some(
+        (t) =>
+          t.status === 'connected' &&
+          t.kind === 'serial' &&
+          !!c.serial?.path &&
+          t.serialOpts?.path === c.serial.path
+      )
+    }
+    return tabs.some(
+      (t) =>
+        t.status === 'connected' &&
+        t.kind !== 'serial' &&
+        !!c.host &&
+        t.host === c.host &&
+        t.username === c.username
+    )
+  }
 
   // --- ordered siblings of a parent (mirrors buildTree ordering) ---
   const childrenOf = (parentId: string | null): TreeNode[] => {
@@ -177,11 +240,20 @@ export default function ConnectionSidebar({
         setNotice({ text: t('sidebar.exportFailed', { error: result.error }), error: true })
         return
       }
+      // Say so when the format could not carry everything, rather than letting
+      // a count quietly smaller than the sidebar look like a successful export.
+      const skipped = result.skipped ?? 0
       setNotice({
-        text: t('sidebar.exportDone', {
-          exported: result.exported ?? 0,
-          path: result.path ?? ''
-        })
+        text: skipped
+          ? t('sidebar.exportDoneSkipped', {
+              exported: result.exported ?? 0,
+              skipped,
+              path: result.path ?? ''
+            })
+          : t('sidebar.exportDone', {
+              exported: result.exported ?? 0,
+              path: result.path ?? ''
+            })
       })
     } catch (e) {
       setNotice({ text: t('sidebar.exportFailed', { error: errText(e) }), error: true })
@@ -327,8 +399,10 @@ export default function ConnectionSidebar({
       )
     }
 
-    const active = isConnectionActive(node.connection)
+    const conn = node.connection
+    const active = isConnectionActive(conn)
     const selected = selectedId === node.id
+    const probe = conn.kind === 'serial' ? undefined : probes[conn.id]
     return (
       <div
         key={node.id}
@@ -340,17 +414,34 @@ export default function ConnectionSidebar({
         onDragLeave={() => setDropTarget(null)}
         onDrop={(e) => void onNodeDrop(e, node)}
         onClick={() => setSelectedId(node.id)}
-        onDoubleClick={() => void connectFromConfig(node.connection)}
+        onDoubleClick={() => void connectFromConfig(conn)}
         onContextMenu={(e) => {
           e.preventDefault()
           e.stopPropagation()
           setSelectedId(node.id)
           setMenu({ x: e.clientX, y: e.clientY, node })
         }}
-        title={`${node.connection.username}@${node.connection.host}:${node.connection.port}`}
+        title={describeConnection(conn, probe)}
       >
-        <span className={`conn-dot ${active ? 'active' : ''}`} />
-        <span className="tree-label">{node.connection.name}</span>
+        {/*
+          Three states, not two. `active` means this app has a session open;
+          `probe.reachable` means the device answers but nothing is connected —
+          which for a Pi that dropped off the network is the distinction the
+          user is looking for. A serial device gets no probe: its presence in
+          the discovered list is the answer.
+        */}
+        <span
+          className={`conn-dot ${
+            active ? 'active' : probe ? (probe.reachable ? 'reachable' : 'unreachable') : ''
+          }`}
+        />
+        {conn.deviceKind && (
+          <UiIcon name={deviceIconName(conn.deviceKind)} size="sm" className="device-icon" />
+        )}
+        <span className="tree-label">{conn.name}</span>
+        {probe?.reachable && probe.latencyMs !== undefined && (
+          <span className="device-latency">{probe.latencyMs}ms</span>
+        )}
       </div>
     )
   }
@@ -370,6 +461,13 @@ export default function ConnectionSidebar({
         <div style={{ display: 'flex', gap: 6 }}>
           <button className="toolbar-btn toolbar-btn--icon" title={t('sidebar.newConnection')} onClick={() => onNewConnection(null)}>
             <UiIcon name="plus" />
+          </button>
+          <button
+            className="toolbar-btn toolbar-btn--icon"
+            title={t('sidebar.newSerial')}
+            onClick={() => onNewSerial()}
+          >
+            <UiIcon name="serial" />
           </button>
           <button className="toolbar-btn toolbar-btn--icon" title={t('sidebar.newFolder')} onClick={() => void newFolder(null)}>
             <UiIcon name="folder-plus" />
@@ -420,12 +518,26 @@ export default function ConnectionSidebar({
           setMenu({ x: e.clientX, y: e.clientY, node: null })
         }}
       >
+        <DiscoveredDevices
+          onConfigure={(path) => onNewSerial(path)}
+          onPortMenu={(e, port) => {
+            e.preventDefault()
+            e.stopPropagation()
+            setMenu({ x: e.clientX, y: e.clientY, node: null, port })
+          }}
+        />
+
         {tree.length === 0 ? (
           <div className="conn-empty" style={{ whiteSpace: 'pre-line' }}>
             {t('sidebar.empty')}
           </div>
         ) : (
-          tree.map((node) => renderNode(node, 0))
+          <div className="device-section">
+            <div className="device-section-header device-section-header--static">
+              <span className="device-section-title">{t('devices.saved')}</span>
+            </div>
+            {tree.map((node) => renderNode(node, 0))}
+          </div>
         )}
       </div>
 
@@ -446,10 +558,20 @@ export default function ConnectionSidebar({
 
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
-          {menu.node === null && !menu.transfer && (
+          {menu.port && (
+            <SerialPortMenu
+              port={menu.port}
+              onConfigure={(path) => onNewSerial(path)}
+              onNotice={(text, error) => setNotice({ text, error })}
+            />
+          )}
+          {menu.node === null && !menu.transfer && !menu.port && (
             <>
               <ContextMenuItem icon="connect" onClick={() => onNewConnection(null)}>
                 {t('sidebar.newConnection')}
+              </ContextMenuItem>
+              <ContextMenuItem icon="serial" onClick={() => onNewSerial()}>
+                {t('sidebar.newSerial')}
               </ContextMenuItem>
               <ContextMenuItem icon="folder-new" onClick={() => void newFolder(null)}>
                 {t('sidebar.newFolder')}
@@ -485,6 +607,9 @@ export default function ConnectionSidebar({
             <>
               <ContextMenuItem icon="connect" onClick={() => onNewConnection(menu.node!.id)}>
                 {t('sidebar.newConnectionHere')}
+              </ContextMenuItem>
+              <ContextMenuItem icon="serial" onClick={() => onNewSerial()}>
+                {t('sidebar.newSerial')}
               </ContextMenuItem>
               <ContextMenuItem icon="folder-new" onClick={() => void newFolder(menu.node!.id)}>
                 {t('sidebar.newSubfolder')}
@@ -525,6 +650,15 @@ export default function ConnectionSidebar({
               <ContextMenuItem icon="delete" onClick={() => void deleteConnection(menu.node!.id)}>
                 {t('common.delete')}
               </ContextMenuItem>
+              {/* A saved serial device gets the same live actions as a
+                  discovered port, so the two rows do not disagree about what
+                  can be done to one board. */}
+              {(menu.node as { connection: ConnectionConfig }).connection.kind === 'serial' && (
+                <SavedSerialMenuItems
+                  conn={(menu.node as { connection: ConnectionConfig }).connection}
+                  onNotice={(text, error) => setNotice({ text, error })}
+                />
+              )}
             </>
           )}
         </div>

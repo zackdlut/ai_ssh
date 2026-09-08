@@ -31,16 +31,23 @@ export function importBookmarks(
   return { imported, updated, skipped, foldersCreated, folders, connections }
 }
 
-/** Render the saved bookmarks in the requested format. */
+/**
+ * Render the saved bookmarks in the requested format.
+ *
+ * `skipped` counts entries the format cannot represent, which is how a serial
+ * device is reported when exporting SuperPuTTY XML — its schema has no field
+ * for a port path. JSON is lossless and never skips.
+ */
 export function exportBookmarks(format: BookmarkTransferFormat): {
   text: string
   exported: number
+  skipped: number
 } {
   const current = { folders: getFolders(), connections: getConnections() }
   if (format === 'json') {
     const { json, exported } = buildConnectionBundle(current)
-    return { text: json, exported }
+    return { text: json, exported, skipped: 0 }
   }
-  const { xml, exported } = buildSessionsXml(current)
-  return { text: xml, exported }
+  const { xml, exported, skipped } = buildSessionsXml(current)
+  return { text: xml, exported, skipped }
 }

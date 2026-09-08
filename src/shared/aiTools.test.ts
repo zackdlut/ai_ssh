@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   AI_SETTINGS_INTENT,
+  DEVICE_TOOL_NAMES,
   SETTINGS_INTENT,
   buildAITools,
+  hasDeviceIntent,
   hasSettingsIntent,
   isAutoApprovedTool,
   isParallelSafeTool,
@@ -271,5 +273,78 @@ describe('normalizeCopilotAgentMode', () => {
     expect(normalizeCopilotAgentMode('agent')).toBe('agent')
     expect(normalizeCopilotAgentMode(undefined)).toBe('agent')
     expect(normalizeCopilotAgentMode('other')).toBe('agent')
+  })
+})
+
+describe('device tools on-demand loading', () => {
+  it('withholds all three until deviceIntent is set', () => {
+    const off = toolNamesFor('full')
+    for (const tool of DEVICE_TOOL_NAMES) expect(off, tool).not.toContain(tool)
+    const on = toolNamesFor('full', { deviceIntent: true })
+    for (const tool of DEVICE_TOOL_NAMES) expect(on, tool).toContain(tool)
+  })
+
+  it('offers list_devices but not the serial writes in plan mode', () => {
+    // Plan mode may survey what is plugged in; it may not drive a board.
+    const names = toolNamesFor('full', { deviceIntent: true, planMode: true })
+    expect(names).toContain('list_devices')
+    expect(names).not.toContain('serial_send')
+    expect(names).not.toContain('serial_reset')
+  })
+
+  it('reaches the core tier, where a serial task has no other option', () => {
+    // A serial tab cannot use exec_command at all, so gating the device tools
+    // by tier as well as by intent would leave the small-model path with no way
+    // to touch a board.
+    const names = toolNamesFor('core', { deviceIntent: true })
+    expect(names).toContain('serial_send')
+  })
+
+  it('declares the missing exit code in the schemas that lack one', () => {
+    // The model's whole success criterion changes on a serial line. If this
+    // ever stops being stated in the schema, it starts reporting silence as
+    // failure and a reboot as a crash.
+    const tools = buildAITools('full', { deviceIntent: true })
+    for (const name of ['serial_send', 'serial_reset']) {
+      const desc = tools.find((t) => t.function.name === name)!.function.description
+      expect(desc, name).toMatch(/no exit code/i)
+    }
+  })
+})
+
+describe('DEVICE_INTENT', () => {
+  it('fires on the vocabulary of board work, in both languages', () => {
+    for (const req of [
+      'why does my esp32 keep rebooting',
+      'the serial output is garbage',
+      'what baud rate should I use',
+      'decode this backtrace',
+      'arduino upload keeps failing',
+      'list devices',
+      'what is plugged in right now',
+      'the board is in a boot loop',
+      'check the firmware on the raspberry pi',
+      '串口没有输出',
+      '波特率应该设成多少',
+      '开发板一直重启',
+      '帮我看看设备列表'
+    ]) {
+      expect(hasDeviceIntent(req), req).toBe(true)
+    }
+  })
+
+  it('stays off for ordinary host work', () => {
+    // The cost of a false positive is three tool schemas on every turn of a
+    // task that can never call them — which is the thing the gate exists for.
+    for (const req of [
+      'restart nginx and tail the error log',
+      'why is this container out of memory',
+      'commit the changes on the deploy branch',
+      'find every file that mentions the old api key',
+      'the disk is full on the database server',
+      '帮我看看这个服务为什么起不来'
+    ]) {
+      expect(hasDeviceIntent(req), req).toBe(false)
+    }
   })
 })

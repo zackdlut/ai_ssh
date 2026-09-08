@@ -145,3 +145,50 @@ describe('unmetStepsPrompt', () => {
     expect(text).toContain('exited 3')
   })
 })
+
+describe('evidence from a transport with no exit code', () => {
+  const sent = (command: string, output: string): ExecEvidence => ({
+    command,
+    exitCode: null,
+    noExitCode: true,
+    output
+  })
+
+  const serialStep = (expectOutput?: string): PlanItem =>
+    step({
+      title: '确认固件已连上 Wi-Fi',
+      verify: { command: 'status', ...(expectOutput ? { expectOutput } : {}) }
+    })
+
+  it('verifies a serial step from its output alone', () => {
+    // A serial line has no exit code to compare, so holding it to the default
+    // `exit 0` would fail every serial step on a technicality and leave a
+    // serial-only task permanently unverifiable.
+    expect(verifyPlanStep(serialStep('WiFi connected'), [sent('status', 'WiFi connected, ip=1.2.3.4')])).toEqual({
+      kind: 'passed'
+    })
+  })
+
+  it('still fails when the output contradicts the assertion', () => {
+    expect(verifyPlanStep(serialStep('WiFi connected'), [sent('status', 'WiFi disconnected')]).kind).toBe(
+      'failed'
+    )
+  })
+
+  it('refuses to pass a step it has no way to check', () => {
+    // No code to compare and no pattern to match leaves nothing to verify
+    // against. Calling that "passed" would launder a guess into evidence.
+    const state = verifyPlanStep(serialStep(), [sent('status', 'anything at all')])
+    expect(state.kind).toBe('failed')
+    expect(state.kind === 'failed' && state.reason).toMatch(/no exit code/i)
+  })
+
+  it('does not excuse a shell command whose exit code went missing', () => {
+    // `exitCode: null` on an exec tool means a dropped session ate the code,
+    // which must still fail — the flag marks transports that never have one,
+    // not runs where it was lost.
+    expect(verifyPlanStep(step(), [ran('systemctl is-active nginx', null, 'active')]).kind).toBe(
+      'failed'
+    )
+  })
+})

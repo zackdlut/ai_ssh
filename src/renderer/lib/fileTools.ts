@@ -18,6 +18,7 @@ import { runAgentCommand } from './agentExec'
 import { toolResultCharBudget } from './toolBudget'
 import { computeTextDiff, formatDiffStat } from '../../shared/textDiff'
 import { applyUniqueEdit, type EditOutcome } from '../../shared/textEdit'
+import { describeTabLimits, hasFileChannel } from '../../shared/tabCapabilities'
 import { applyPatchWithFallback, type PatchApplyOutcome } from '../../shared/unifiedPatch'
 import { checkpointFromBackupNote } from './fileCheckpoints'
 import { invalidateHostMemory, isHostMemoryPath } from './hostMemory'
@@ -62,18 +63,16 @@ interface ResolvedTab {
 }
 
 /**
- * Resolve a tab_id to a live SFTP-capable session. WSL tabs are local pseudo
- * terminals with no SFTP channel, so they are rejected with a pointer to the
- * tool that does work there.
+ * Resolve a tab_id to a live SFTP-capable session. Only SSH tabs have one — a
+ * WSL pty and a serial port are both rejected with a pointer to whatever does
+ * work there instead.
  */
 function resolveSftpTab(tabId: string | undefined): ResolvedTab | { error: string } {
   if (!tabId) return { error: 'tab_id is required.' }
   const tab = useSessionsStore.getState().sessions.find((t) => t.id === tabId)
   if (!tab) return { error: `No open tab with id "${tabId}".` }
-  if (tab.kind === 'wsl') {
-    return {
-      error: `Tab "${tabId}" is a local WSL terminal, which has no SFTP channel. Use exec_command (cat/sed/tee) for file work on this tab.`
-    }
+  if (!hasFileChannel(tab.kind)) {
+    return { error: `Tab "${tabId}" is ${describeTabLimits(tab.kind)}` }
   }
   if (tab.status !== 'connected' || !tab.sessionId) {
     return { error: `Tab "${tabId}" is not connected (status: ${tab.status}).` }

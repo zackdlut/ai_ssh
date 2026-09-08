@@ -1,6 +1,27 @@
+import type { DeviceKind, SerialNewline, SerialPortInfo } from './deviceIdentity'
+
+export type {
+  DeviceKind,
+  DeviceIdentity,
+  SerialNewline,
+  SerialPortInfo
+} from './deviceIdentity'
+
 export interface ConnectionConfig {
   id: string
   name: string
+  /**
+   * Transport this entry opens. Absent means `ssh`, which is what every entry
+   * written before the field existed is.
+   *
+   * A serial device has no host, port, or user, but it does belong in the same
+   * tree as the SSH ones: an embedded project is one Raspberry Pi and two
+   * boards on a USB hub, and splitting them into separate lists would mean two
+   * of everything — folders, ordering, drag and drop, layout binding. So the
+   * shape stays one type with a discriminant, and serial entries leave the SSH
+   * credential fields empty.
+   */
+  kind?: 'ssh' | 'serial'
   host: string
   port: number
   username: string
@@ -9,6 +30,10 @@ export interface ConnectionConfig {
   /** Path to a private key file, or the key contents. */
   privateKey?: string
   passphrase?: string
+  /** Port settings for `kind: 'serial'` entries. Only `path` is required. */
+  serial?: SavedSerialOptions
+  /** Board family, for the device icon, defaults, and AI context. */
+  deviceKind?: DeviceKind
   /** Parent folder id, or null/undefined for the tree root. */
   parentId?: string | null
   /** Sort order within the parent. */
@@ -94,6 +119,14 @@ export interface ImportSessionsResult {
 export interface ExportSessionsResult {
   /** Connections written to the file. */
   exported?: number
+  /**
+   * Connections the chosen format cannot represent and that were left out.
+   *
+   * Non-zero only for SuperPuTTY XML, whose schema is SSH-only: a serial device
+   * has no host or port to write. Surfaced so the export does not quietly lose
+   * devices the user can still see in the sidebar.
+   */
+  skipped?: number
   /** The file that was written. */
   path?: string
   /** True when the user dismissed the file picker. */
@@ -126,6 +159,97 @@ export interface WslConnectOptions {
   distro?: string
   /** Optional user to launch the shell as (`wsl -u <user>`). */
   user?: string
+}
+
+/** Options for opening a local serial-port session. */
+export interface SerialConnectOptions {
+  /** `COM3` on Windows, `/dev/ttyUSB0` or `/dev/ttyACM0` elsewhere. */
+  path: string
+  baudRate: number
+  dataBits?: 5 | 6 | 7 | 8
+  stopBits?: 1 | 1.5 | 2
+  parity?: 'none' | 'even' | 'odd' | 'mark' | 'space'
+  /** Hardware flow control. Off unless the device asks for it. */
+  rtscts?: boolean
+  /**
+   * Modem control lines to assert on open. See `SERIAL_SIGNAL_NOTE`: these
+   * decide whether an ESP32 runs or sits in reset, so they are never guessed
+   * silently — `identifySerialDevice` supplies a per-board default.
+   */
+  dtr?: boolean
+  rts?: boolean
+  /** Terminator appended to submitted lines. Defaults to `crlf`. */
+  newline?: SerialNewline
+  /** Echo typed characters locally, since serial devices do not echo. */
+  echo?: boolean
+}
+
+/**
+ * Serial settings as PERSISTED, where only the port path is required.
+ *
+ * A saved device is deliberately allowed to be underspecified: every other
+ * setting has a per-board default that `identifySerialDevice` supplies at
+ * connect time, so an entry written by an older build — or by hand, or by an
+ * import that carried only a path — still opens correctly instead of being
+ * rejected for missing a baud rate it never needed to store.
+ */
+export type SavedSerialOptions = Partial<Omit<SerialConnectOptions, 'path'>> & { path: string }
+
+export interface SerialListResult {
+  ports?: SerialPortInfo[]
+  error?: string
+}
+
+/** Serial ports appeared or disappeared; the device list should refresh. */
+export interface SerialPortsEvent {
+  ports: SerialPortInfo[]
+}
+
+/** Result of asserting or clearing the modem control lines on a live session. */
+export interface SerialSignalResult {
+  ok?: true
+  error?: string
+  /**
+   * The lines' state after the call.
+   *
+   * Returned rather than inferred because a reset is a SEQUENCE whose final
+   * step differs per board, and a menu that shows DTR as a checkbox would
+   * otherwise have to reimplement that sequence to know where it landed —
+   * two copies of the same table, one of which would go stale.
+   */
+  dtr?: boolean
+  rts?: boolean
+}
+
+/**
+ * Reachability of a saved SSH device, from a TCP connect to its port.
+ *
+ * A connect is all this claims: a device that answers on 22 is powered and on
+ * the network, which is what the status dot means. It is deliberately not a
+ * login attempt — probing every saved device on a timer must not lock accounts
+ * or spend the user's credentials.
+ */
+export interface DeviceProbeResult {
+  reachable: boolean
+  /** Round-trip time of the TCP handshake, when it succeeded. */
+  latencyMs?: number
+  error?: string
+}
+
+/** An external CLI the app can drive, and whether this machine has it. */
+export interface ToolchainInfo {
+  /** Stable id, e.g. `esptool`. */
+  id: string
+  /** Command that was probed. */
+  command: string
+  found: boolean
+  /** First version-looking token from the tool's own output. */
+  version?: string
+}
+
+export interface ToolchainDetectResult {
+  tools?: ToolchainInfo[]
+  error?: string
 }
 
 export type SshStatus = 'idle' | 'connecting' | 'connected' | 'closed' | 'error'
@@ -489,6 +613,12 @@ export interface AIChatRequest {
    */
   aiSettingsIntent?: boolean
   /**
+   * Whether this turn's task concerns a physical device, so the serial tools
+   * are sent. Same reason as the flags above: main rebuilds the tool list, so
+   * a renderer-only decision would never reach the model.
+   */
+  deviceIntent?: boolean
+  /**
    * Plan mode: main rebuilds the tool list independently of the renderer prompt
    * gate, so this flag must ride on the request or Plan turns still receive
    * write tools.
@@ -807,6 +937,23 @@ export interface InstalledSkill {
   sourcePath: string
   /** Timestamp (ms) when the skill was installed. */
   installedAt: number
+  /**
+   * Folder name of the bundled skill this came from, for skills shipped with
+   * the app. Identity has to survive both an app update and the dev/packaged
+   * path difference, which neither `dir` nor `sourcePath` does — without it the
+   * "already installed" check would break on the next release.
+   */
+  builtinId?: string
+}
+
+/** A skill shipped with the app, offered for one-click install. */
+export interface BuiltinSkill {
+  /** Folder name under resources/skills, and the install identity. */
+  id: string
+  name: string
+  description: string
+  /** Whether this one is already installed, so the UI offers no duplicate. */
+  installed: boolean
 }
 
 /** Result of installing a skill (folder picker may be cancelled). */

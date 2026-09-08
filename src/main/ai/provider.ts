@@ -515,6 +515,7 @@ export class AIProvider {
       hasSkills: this.getSkills().some((s) => s.enabled),
       settingsIntent: req.settingsIntent,
       aiSettingsIntent: req.aiSettingsIntent,
+      deviceIntent: req.deviceIntent,
       planMode: req.planMode,
       executeMode: req.executeMode
     })

@@ -48,6 +48,32 @@ export function folderNamePath(
   return path
 }
 
+/**
+ * Whether two entries point at the same thing, for the duplicate check.
+ *
+ * Identity depends on the transport, and this cannot fall back to comparing
+ * host/port/user for everything: a serial entry leaves all three empty, so
+ * every serial device would look like a duplicate of the first one and an
+ * import of a hub full of boards would keep exactly one. A serial device is
+ * addressed by its port path, so that is what gets compared.
+ */
+function sameTarget(
+  a: Pick<ConnectionConfig, 'kind' | 'host' | 'port' | 'username' | 'serial'>,
+  b: Pick<ConnectionConfig, 'kind' | 'host' | 'port' | 'username' | 'serial'>
+): boolean {
+  const aKind = a.kind ?? 'ssh'
+  const bKind = b.kind ?? 'ssh'
+  if (aKind !== bKind) return false
+  if (aKind === 'serial') {
+    return !!a.serial?.path && a.serial.path === b.serial?.path
+  }
+  return (
+    a.host === b.host &&
+    a.port === b.port &&
+    a.username.toLowerCase() === b.username.toLowerCase()
+  )
+}
+
 export function mergeIncoming(
   items: MergeItem[],
   current: BookmarkState,
@@ -107,11 +133,7 @@ export function mergeIncoming(
 
     // Don't shadow a connection the user already created in this same folder.
     const duplicate = connections.some(
-      (c) =>
-        (c.parentId ?? null) === parentId &&
-        c.host === item.fields.host &&
-        c.port === item.fields.port &&
-        c.username.toLowerCase() === item.fields.username.toLowerCase()
+      (c) => (c.parentId ?? null) === parentId && sameTarget(c, item.fields)
     )
     if (duplicate) {
       skipped++

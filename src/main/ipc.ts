@@ -4,6 +4,9 @@ import { mkdir, readFile, writeFile } from 'fs/promises'
 import { basename, dirname, join } from 'path'
 import { SshManager } from './ssh/manager'
 import { WslManager } from './wsl/manager'
+import { SerialManager } from './serial/manager'
+import { probeDevice, probeDevices } from './device/probe'
+import { detectToolchains } from './toolchain/detect'
 import { deleteLocal, listLocal, localHome, renameLocal, resolveLocal } from './local/fs'
 import { AIProvider } from './ai/provider'
 import * as config from './config/store'
@@ -43,6 +46,12 @@ import type {
   SshExecOptions,
   SshExecResult,
   WslConnectOptions,
+  DeviceKind,
+  DeviceProbeResult,
+  SerialConnectOptions,
+  SerialListResult,
+  SerialSignalResult,
+  ToolchainDetectResult,
   CopilotChatState,
   ExportSessionsResult,
   ImportSessionsResult,
@@ -82,6 +91,7 @@ function transferFilter(format: BookmarkTransferFormat): Electron.FileFilter {
 export interface IpcManagers {
   ssh: SshManager
   wsl: WslManager
+  serial: SerialManager
   disposeAll: () => void
 }
 
@@ -90,6 +100,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
 
   const ssh = new SshManager(getWindow)
   const wsl = new WslManager(getWindow)
+  const serial = new SerialManager(getWindow)
   const ai = new AIProvider(
     () => config.getAISettings(),
     () => config.getLocale(),
@@ -112,7 +123,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
     })
     return ssh.connect(opts)
   })
-  // write/resize/close are shared across SSH and WSL sessions; route by owner.
+  // write/resize/close are shared across SSH, WSL, and serial sessions; route
+  // by owner. SSH stays the fallback so an id no manager claims still reaches
+  // the code that reports a dead session.
   ipcMain.on('ssh:write', (_e, sessionId: string, data: string) => {
     logDebug({
       category: 'ipc',
@@ -121,10 +134,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
       data: { data: truncateForDebug(data) }
     })
     if (wsl.has(sessionId)) wsl.write(sessionId, data)
+    else if (serial.has(sessionId)) serial.write(sessionId, data)
     else ssh.write(sessionId, data)
   })
   ipcMain.on('ssh:resize', (_e, sessionId: string, cols: number, rows: number) => {
     if (wsl.has(sessionId)) wsl.resize(sessionId, cols, rows)
+    else if (serial.has(sessionId)) serial.resize(sessionId, cols, rows)
     else ssh.resize(sessionId, cols, rows)
   })
   // Agent commands run on their own channel so they never share the user's
@@ -155,6 +170,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
   ipcMain.on('ssh:close', (_e, sessionId: string) => {
     logDebug({ category: 'ipc', message: 'ssh:close', sessionId_ssh: sessionId })
     if (wsl.has(sessionId)) wsl.close(sessionId)
+    else if (serial.has(sessionId)) serial.close(sessionId)
     else ssh.close(sessionId)
   })
 
@@ -171,6 +187,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
         traceId: samplerId,
         data: { command: truncateForDebug(command) }
       })
+      // A serial port carries bytes, not commands: there is nothing to run a
+      // metric collector in, so say so instead of failing as "session not found".
+      if (serial.has(sessionId)) {
+        return Promise.resolve({
+          error: 'Live charts need a shell. A serial device has no command channel.'
+        })
+      }
       return wsl.has(sessionId)
         ? wsl.startSampler(sessionId, samplerId, command)
         : ssh.startSampler(sessionId, samplerId, command)
@@ -189,6 +212,70 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
   ipcMain.handle('wsl:connect', (_e, opts: WslConnectOptions) => {
     logDebug({ category: 'ipc', message: 'wsl:connect', data: { distro: opts.distro } })
     return wsl.connect(opts)
+  })
+
+  // --- Serial (local USB-attached boards) ---
+  ipcMain.handle('serial:list', async (): Promise<SerialListResult> => {
+    try {
+      return { ports: await serial.listPorts() }
+    } catch (e) {
+      return { error: errMessage(e) }
+    }
+  })
+  ipcMain.handle('serial:connect', (_e, opts: SerialConnectOptions) => {
+    logDebug({
+      category: 'ipc',
+      message: 'serial:connect',
+      data: { path: opts.path, baudRate: opts.baudRate, dtr: opts.dtr, rts: opts.rts }
+    })
+    return serial.connect(opts)
+  })
+  ipcMain.handle(
+    'serial:setSignals',
+    (
+      _e,
+      sessionId: string,
+      signals: { dtr?: boolean; rts?: boolean }
+    ): Promise<SerialSignalResult> => {
+      logDebug({
+        category: 'ipc',
+        message: 'serial:setSignals',
+        sessionId_ssh: sessionId,
+        data: signals
+      })
+      return serial.setSignals(sessionId, signals)
+    }
+  )
+  ipcMain.handle(
+    'serial:reset',
+    (_e, sessionId: string, kind?: DeviceKind): Promise<SerialSignalResult> => {
+      logDebug({ category: 'ipc', message: 'serial:reset', sessionId_ssh: sessionId, data: { kind } })
+      return serial.resetDevice(sessionId, kind)
+    }
+  )
+  // The renderer starts the watcher when the device list is visible, so a
+  // hidden panel is not enumerating USB on a timer.
+  ipcMain.on('serial:startWatch', () => serial.startWatch())
+  ipcMain.on('serial:stopWatch', () => serial.stopWatch())
+
+  // --- Device reachability + host toolchains ---
+  ipcMain.handle(
+    'device:probe',
+    (_e, host: string, port: number): Promise<DeviceProbeResult> => probeDevice(host, port)
+  )
+  ipcMain.handle(
+    'device:probeMany',
+    (
+      _e,
+      targets: { id: string; host: string; port: number }[]
+    ): Promise<Record<string, DeviceProbeResult>> => probeDevices(targets ?? [])
+  )
+  ipcMain.handle('toolchain:detect', async (): Promise<ToolchainDetectResult> => {
+    try {
+      return { tools: await detectToolchains() }
+    } catch (e) {
+      return { error: errMessage(e) }
+    }
   })
 
   // --- AI (streaming) ---
@@ -714,9 +801,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
         path = result.filePath
       }
       try {
-        const { text, exported } = exportBookmarks(format)
+        const { text, exported, skipped } = exportBookmarks(format)
         await writeFile(path, text, 'utf8')
-        return { exported, path }
+        return { exported, skipped, path }
       } catch (err) {
         return { error: errMessage(err), path }
       }
@@ -745,6 +832,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
       return { error: errMessage(err) }
     }
   })
+  ipcMain.handle('skills:listBuiltin', () => skills.listBuiltinSkills())
+  ipcMain.handle('skills:installBuiltin', async (_e, id: string): Promise<SkillInstallResult> => {
+    try {
+      const skill = await skills.installBuiltinSkill(id)
+      return { skill, skills: skills.listSkills() }
+    } catch (err) {
+      return { error: errMessage(err) }
+    }
+  })
   ipcMain.handle('skills:remove', (_e, id: string) => skills.removeSkill(id))
   ipcMain.handle('skills:setEnabled', (_e, id: string, enabled: boolean) =>
     skills.setSkillEnabled(id, enabled)
@@ -760,9 +856,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): IpcManagers 
   return {
     ssh,
     wsl,
+    serial,
     disposeAll: () => {
       ssh.disposeAll()
       wsl.disposeAll()
+      serial.disposeAll()
     }
   }
 }

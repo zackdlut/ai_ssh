@@ -24,6 +24,9 @@ export const READONLY_TOOLS = new Set([
   'diff_panes',
   'get_app_settings',
   'read_skill',
+  // Reads app state plus a port enumeration and a TCP connect. Touches no
+  // device: opening no port and authenticating nowhere.
+  'list_devices',
   'read_file',
   'grep',
   'glob',
@@ -61,6 +64,15 @@ export const PLAN_MODE_TOOLS = new Set([
 ])
 
 /**
+ * Tools that act on a physical board over a serial line.
+ *
+ * Grouped because they share a constraint nothing else on the surface has: the
+ * result carries no exit code, so success can only be judged from the device's
+ * own output. Consumers that reason about exit status have to special-case them.
+ */
+export const SERIAL_ACTION_TOOLS = new Set(['serial_send', 'serial_reset'])
+
+/**
  * Read-only tools that fully render their result as a rich card the user asked
  * to see (list cards / the settings card). When a turn runs only these, the
  * card IS the answer: the agent loop must not nudge a silent follow-up turn into
@@ -89,7 +101,14 @@ export const HOST_MUTATING_TOOLS = new Set([
   'edit_file',
   'apply_patch',
   'write_file',
-  'git_commit'
+  'git_commit',
+  // Both drive a physical board. `serial_send` is here because a line written
+  // to a device is not a read — it can start a motor or rewrite NVS — and
+  // `serial_reset` reboots the thing outright. Membership also serializes them
+  // per tab, which matters more on serial than on SSH: two overlapping writes
+  // to one UART interleave into a single corrupted line.
+  'serial_send',
+  'serial_reset'
 ])
 
 /**
@@ -214,6 +233,13 @@ export interface ToolSurfaceOptions {
    */
   aiSettingsIntent?: boolean
   /**
+   * Whether this turn's request is about a physical device at all (see
+   * DEVICE_INTENT). When false, list_devices / serial_send / serial_reset and
+   * their prompt paragraphs are withheld — most turns are about a remote host,
+   * where all three are inapplicable.
+   */
+  deviceIntent?: boolean
+  /**
    * Restrict the advertised surface to read tools + update_plan + exec_command.
    * Write tools are omitted so the prompt never explains how to call them.
    */
@@ -252,6 +278,14 @@ export function buildAITools(tier: ToolTier, opts: ToolSurfaceOptions = {}): AIT
     ? withSkills.filter((t) => PLAN_MODE_TOOLS.has(t.function.name))
     : withSkills
   if (opts.executeMode && !opts.planMode) gated = applyExecuteModeTools(gated)
+  if (opts.deviceIntent) {
+    // list_devices is a read, so Plan mode keeps it; the two that drive a board
+    // are withheld there, exactly like every other write tool.
+    gated = [
+      ...gated,
+      ...DEVICE_TOOLS.filter((t) => !opts.planMode || PLAN_MODE_TOOLS.has(t.function.name))
+    ]
+  }
   if (!opts.settingsIntent) return gated
   const next = [...gated, GET_APP_SETTINGS_TOOL]
   if (!opts.planMode) {
@@ -1010,6 +1044,28 @@ export function hasSettingsIntent(userIntent: string): boolean {
 }
 
 /**
+ * Requests that need the embedded-device tool surface.
+ *
+ * Anchored on device and board vocabulary rather than on anything that occurs
+ * in ordinary remote work. `port` and `reset` are deliberately absent as bare
+ * words: a port is a TCP port on most turns of this app, and "reset" turns up
+ * in `git reset` and password resets, so either one alone would gate nothing.
+ * `serial` is included bare because in this app's vocabulary it has no other
+ * meaning.
+ *
+ * A miss is cheap and self-correcting: the user is looking at a serial tab, so
+ * the terminal context already tells the model the tab has no shell and names
+ * `serial_send` as the way in, and the next message re-tests the intent.
+ */
+export const DEVICE_INTENT =
+  /\b(?:serial|baud(?:\s?rate)?|esp(?:32|8266)|esptool|arduino|avrdude|uart|tty(?:usb|acm|s)?\d*|com\d+|raspberry\s*pi|orange\s*pi|rp2040|pico|micropython|firmware|dev\s?kit|dtr|rts|boot\s?loop|backtrace|flash(?:ed|ing)?\s+(?:the\s+)?(?:board|device|firmware|chip)|(?:reset|reboot|power[\s-]?cycle)\s+(?:the\s+)?(?:board|device|chip|module)|list\s+devices?|what(?:'s|\s+is)\s+(?:plugged|connected)|plugged\s+in)\b|串口|波特率|开发板|单片机|固件|烧录|刷机|树莓派|香橙派|设备列表|复位|重启开发板/i
+
+/** Whether a user request should load the embedded-device tool surface. */
+export function hasDeviceIntent(userIntent: string): boolean {
+  return DEVICE_INTENT.test(userIntent)
+}
+
+/**
  * update_app_settings, with or without the heavyweight `ai` branch. The tool
  * keeps ONE name across both shapes: the dispatcher, approval policy, result
  * card and i18n labels all key off the name, and a task that started on the slim
@@ -1127,6 +1183,78 @@ function buildUpdateAppSettingsTool(withAI: boolean): AIToolDefinition {
 
 const UPDATE_APP_SETTINGS_SLIM = buildUpdateAppSettingsTool(false)
 const UPDATE_APP_SETTINGS_FULL = buildUpdateAppSettingsTool(true)
+
+/**
+ * Embedded-device tools, withheld until the turn is about devices.
+ *
+ * These are the three things the rest of the surface physically cannot do. A
+ * serial port has no shell, so `exec_command` and `run_in_terminal` have
+ * nothing to run and no exit code to report; writing a line and reading the
+ * reply is the only interaction there is. They are gated behind DEVICE_INTENT
+ * for the same reason the settings tools are: three schemas and their prompt
+ * paragraphs on every turn is a real cost to pay for a capability most turns
+ * have no use for.
+ */
+const DEVICE_TOOLS: AIToolDefinition[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'list_devices',
+      description: `List the embedded and remote devices this app knows about: saved devices from the sidebar, serial ports currently plugged in (with the board each appears to be), reachability for saved SSH devices, and which embedded toolchains are installed on the user's machine. Use it to answer "what is connected" and to find the tab_id or port to work with. ${SNAPSHOT_NOTE}`,
+      parameters: { type: 'object', properties: {}, additionalProperties: false }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'serial_send',
+      description:
+        'Write one line to a serial device and return whatever it prints back within a short window. This is the ONLY way to interact with a serial tab: it has no shell, so exec_command and run_in_terminal cannot work there. The reply is raw device output with NO exit code — success or failure has to be judged from the text itself. Sending an empty line is valid and is the usual way to wake a prompt.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tab_id: TAB_ID_PARAM,
+          data: {
+            type: 'string',
+            description:
+              'The line to send, without a terminator — the session\'s configured line ending is appended. Pass "" to send just the line ending.'
+          },
+          capture_ms: {
+            type: 'number',
+            description:
+              'How long to collect output after sending, in milliseconds (default 2000, max 15000). Raise it for a command that takes a while to answer, e.g. a Wi-Fi scan.'
+          }
+        },
+        required: ['tab_id', 'data'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'serial_reset',
+      description:
+        'Reboot the board attached to a serial tab by pulsing its reset line, then return the boot log it prints. This is usually the highest-value single action when diagnosing an embedded board: the boot log carries the reset reason, a panic backtrace from the previous crash, and the firmware version, none of which are visible once the device is running. The reset pulse is chosen from the board family, and the result has NO exit code.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tab_id: TAB_ID_PARAM,
+          capture_ms: {
+            type: 'number',
+            description:
+              'How long to collect the boot log, in milliseconds (default 3000, max 15000).'
+          }
+        },
+        required: ['tab_id'],
+        additionalProperties: false
+      }
+    }
+  }
+]
+
+/** Device tools, for the dispatcher and the tests. */
+export const DEVICE_TOOL_NAMES = DEVICE_TOOLS.map((t) => t.function.name)
 
 /**
  * The canonical full tool surface without settings tools. Settings ride along

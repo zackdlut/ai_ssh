@@ -1,8 +1,8 @@
 import { app } from 'electron'
-import { cp, mkdir, readFile, rm } from 'fs/promises'
+import { cp, mkdir, readdir, readFile, rm } from 'fs/promises'
 import { basename, join } from 'path'
 import { getSkills, setSkills } from '../config/store'
-import type { InstalledSkill } from '../../shared/types'
+import type { BuiltinSkill, InstalledSkill } from '../../shared/types'
 
 /** Hard cap on the SKILL.md body returned to the model, to protect the context budget. */
 const MAX_SKILL_BODY = 12000
@@ -55,6 +55,78 @@ export function listSkills(): InstalledSkill[] {
  * parse its metadata, copy the whole folder into userData/skills/<id>, and
  * persist the metadata record.
  */
+/**
+ * Where the skills shipped with the app live.
+ *
+ * `extraResources` puts them beside the packaged app, while in development they
+ * are still in the repo — and `app.getAppPath()` points at `out/` in a dev run,
+ * so the repo root is one level up from it.
+ */
+function builtinSkillsRoot(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'skills')
+    : join(app.getAppPath(), 'resources', 'skills')
+}
+
+/**
+ * The bundled skills, each flagged with whether it is already installed.
+ *
+ * A missing or unreadable directory yields an empty list rather than an error:
+ * bundled skills are an offer, and a build that shipped without them should
+ * leave the rest of the skills UI working.
+ */
+export async function listBuiltinSkills(): Promise<BuiltinSkill[]> {
+  const root = builtinSkillsRoot()
+  let entries: string[]
+  try {
+    entries = (await readdir(root, { withFileTypes: true }))
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+  } catch {
+    return []
+  }
+
+  const installed = new Set(getSkills().map((s) => s.builtinId).filter(Boolean))
+  const out: BuiltinSkill[] = []
+  for (const id of entries) {
+    let text: string
+    try {
+      text = await readFile(join(root, id, 'SKILL.md'), 'utf8')
+    } catch {
+      continue
+    }
+    const parsed = parseSkillMd(text)
+    out.push({
+      id,
+      name: parsed.name || id,
+      description: parsed.description || '',
+      installed: installed.has(id)
+    })
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
+ * Install one bundled skill by its folder name.
+ *
+ * It goes through the same copy-into-userData path as a user's own folder, so a
+ * bundled skill can be edited or removed afterwards like any other — the app's
+ * copy is a starting point, not a managed file.
+ */
+export async function installBuiltinSkill(id: string): Promise<InstalledSkill> {
+  // The id indexes a directory, so a traversal in it would read outside the
+  // bundle. Only a plain folder name is ever valid here.
+  if (!/^[A-Za-z0-9._-]+$/.test(id) || id === '.' || id === '..') {
+    throw new Error(`"${id}" is not a valid built-in skill id.`)
+  }
+  const existing = getSkills().find((s) => s.builtinId === id)
+  if (existing) return existing
+  const skill = await installSkill(join(builtinSkillsRoot(), id))
+  const tagged: InstalledSkill = { ...skill, builtinId: id }
+  setSkills(getSkills().map((s) => (s.id === skill.id ? tagged : s)))
+  return tagged
+}
+
 export async function installSkill(sourceDir: string): Promise<InstalledSkill> {
   const srcMd = join(sourceDir, 'SKILL.md')
   let text: string

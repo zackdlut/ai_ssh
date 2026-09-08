@@ -16,7 +16,7 @@
  * safe rather than merely fail to look dangerous.
  */
 import { isDangerous } from './dangerousCommands'
-import { isAutoApprovedTool } from './aiTools'
+import { isAutoApprovedTool, SERIAL_ACTION_TOOLS } from './aiTools'
 import type { AutonomyMode, CopilotAgentMode } from './types'
 
 export const DEFAULT_AUTONOMY_MODE: AutonomyMode = 'balanced'
@@ -208,6 +208,24 @@ export function decideToolCall(input: PolicyInput): ToolDecision {
     if (isReadOnlyCommand(command)) return mode === 'conservative' ? 'ask' : 'auto'
     if (sessionAllowlist?.has(tool)) return 'auto'
     return 'ask'
+  }
+
+  /**
+   * Writing to a physical board is the one effect on this surface that the app
+   * cannot undo and the user may not be able to either. A line sent over a UART
+   * can drive a relay, move an actuator, or rewrite a config partition, and
+   * `serial_reset` reboots hardware outright — an autonomous run that resets a
+   * board mid-duty-cycle has consequences outside the computer.
+   *
+   * So autonomy mode alone never makes these silent, which is why the branch
+   * sits above the `autonomous` catch-all rather than below it. A session
+   * allowlist entry still applies: that is the user explicitly granting this
+   * tool for this chat from the approval card, which is a decision they made
+   * rather than one the mode made for them.
+   */
+  if (SERIAL_ACTION_TOOLS.has(tool)) {
+    if (sessionAllowlist?.has(tool)) return 'auto'
+    return mode === 'conservative' ? 'deny' : 'ask'
   }
 
   if (mode === 'autonomous') return 'auto'

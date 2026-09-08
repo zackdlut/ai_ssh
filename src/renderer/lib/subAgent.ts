@@ -21,7 +21,11 @@
  * - A step budget, with a forced tools-off summary turn at the end. A loop with
  *   nobody watching must terminate on its own.
  */
-import { buildSubAgentSystemPrompt, buildContextMessage, describeTabOs } from '../../shared/prompts'
+import {
+  buildSubAgentSystemPrompt,
+  buildContextMessage,
+  describeSessionOs
+} from '../../shared/prompts'
 import { SUB_AGENT_TOOLS } from '../../shared/aiTools'
 import { decideToolCall } from '../../shared/toolPolicy'
 import { planRecovery } from './turnRecovery'
@@ -122,7 +126,7 @@ function hostContextMessage(terminalTabId: string): string | null {
     recentOutput: readTerminalOutput(tab.id, COPILOT_CONTEXT_MAX_LINES),
     host: tab.host,
     username: tab.username,
-    osHint: describeTabOs(tab.kind, tab.wslDistro),
+    osHint: describeSessionOs(tab),
     cwd: getTabObservation(tab.id)?.cwd
   })
 }

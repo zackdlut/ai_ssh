@@ -5,7 +5,13 @@ import { findLeaf } from './paneLayout'
 import { t } from './i18n'
 import { useLocaleStore } from '../store/localeStore'
 import { debugLog } from './debugLog'
-import type { ConnectionConfig, ConnectOptions } from '../../shared/types'
+import type {
+  ConnectionConfig,
+  ConnectOptions,
+  DeviceKind,
+  SerialConnectOptions
+} from '../../shared/types'
+import { identifySerialDevice } from '../../shared/deviceIdentity'
 
 function loc() {
   return useLocaleStore.getState().locale
@@ -122,12 +128,28 @@ export function closePaneWithSession(paneId: string): void {
   if (terminalId) closeSessions([terminalId])
 }
 
+/**
+ * Recover the credentials for a session that has none, by matching a saved
+ * connection on host/user/port.
+ *
+ * Both guards are load-bearing now that a saved entry need not be an SSH host.
+ * A serial entry stores no host, user, or port, and neither does a blank tab —
+ * so without them an idle "new tab" would match the first saved serial device
+ * and be dialled as SSH against an empty address.
+ */
 function resolveConnectOpts(session: TerminalSession): ConnectOptions | undefined {
   if (session.connectOpts) return session.connectOpts
+  if (!session.host) return undefined
   const port = session.port || 22
-  const conn = useBookmarksStore.getState().connections.find(
-    (c) => c.host === session.host && c.username === session.username && (c.port || 22) === port
-  )
+  const conn = useBookmarksStore
+    .getState()
+    .connections.find(
+      (c) =>
+        (c.kind ?? 'ssh') === 'ssh' &&
+        c.host === session.host &&
+        c.username === session.username &&
+        (c.port || 22) === port
+    )
   if (!conn) return undefined
   return {
     host: conn.host,
@@ -239,15 +261,121 @@ export async function connectWsl(distro?: string): Promise<string | undefined> {
 }
 
 /**
+ * Open a local serial port and register the session.
+ *
+ * Returns an error string on failure, or undefined on success.
+ */
+export async function connectSerial(
+  opts: SerialConnectOptions,
+  args?: {
+    title?: string
+    terminalId?: string
+    paneId?: string
+    connectionId?: string
+    deviceKind?: DeviceKind
+  }
+): Promise<string | undefined> {
+  debugLog({
+    category: 'user.action',
+    message: 'serial.connect',
+    data: { path: opts.path, baudRate: opts.baudRate }
+  })
+  const store = useSessionsStore.getState()
+  const reuse = args?.paneId ? undefined : findIdleTerminalToReuse(args?.terminalId)
+  const title = args?.title || `${shortPortName(opts.path)} · ${opts.baudRate}`
+
+  if (reuse) store.setStatusById(reuse.id, 'connecting')
+
+  const result = await window.api.serial.connect(opts)
+  if (result.error || !result.sessionId) {
+    const message = result.error ?? t(loc(), 'connect.failed')
+    if (reuse) store.setStatusById(reuse.id, 'idle', message)
+    return message
+  }
+
+  const sessionData = {
+    sessionId: result.sessionId,
+    title,
+    kind: 'serial' as const,
+    serialOpts: opts,
+    deviceKind: args?.deviceKind,
+    status: 'connected' as const,
+    // A serial device has no network identity; these stay empty so every
+    // host-shaped consumer sees "nothing to talk to" rather than a fake host.
+    host: '',
+    port: 0,
+    username: '',
+    connectionId: args?.connectionId,
+    message: undefined
+  }
+  if (reuse) {
+    store.patchSession(reuse.id, sessionData)
+    store.setActive(reuse.id)
+  } else {
+    placeAndAdd({ id: genTerminalId(), ...sessionData }, args?.paneId)
+  }
+  return undefined
+}
+
+/** `COM3` stays as-is; `/dev/ttyUSB0` becomes `ttyUSB0` for a tab title. */
+function shortPortName(path: string): string {
+  return path.replace(/^\/dev\//, '')
+}
+
+/**
+ * Port settings for a saved serial entry, filling anything it predates from the
+ * board's own defaults rather than the library's.
+ */
+function serialOptsFromConfig(c: ConnectionConfig): SerialConnectOptions {
+  const saved = c.serial
+  const path = saved?.path ?? ''
+  const fallback = identifySerialDevice({ path })
+  return {
+    path,
+    baudRate: saved?.baudRate ?? fallback.baudRate,
+    dataBits: saved?.dataBits,
+    stopBits: saved?.stopBits,
+    parity: saved?.parity,
+    rtscts: saved?.rtscts,
+    dtr: saved?.dtr ?? fallback.dtr,
+    rts: saved?.rts ?? fallback.rts,
+    newline: saved?.newline ?? fallback.newline,
+    echo: saved?.echo
+  }
+}
+
+/**
  * Connect using a saved connection config.
  *
  * `into` names a pane or an idle session to dial; without it the connection
  * opens a tab of its own.
+ *
+ * Branching on `kind` first is what keeps a serial entry from being dialled as
+ * SSH: its host/user fields are empty by design, so the SSH path would fail
+ * with a confusing "connect ECONNREFUSED" on an empty address.
  */
 export async function connectFromConfig(
   c: ConnectionConfig,
   into?: { terminalId?: string; paneId?: string }
 ): Promise<string | undefined> {
+  if (c.kind === 'serial') {
+    const err = await connectSerial(serialOptsFromConfig(c), {
+      title: c.name || shortPortName(c.serial?.path ?? ''),
+      terminalId: into?.terminalId,
+      paneId: into?.paneId,
+      connectionId: c.id,
+      deviceKind: c.deviceKind
+    })
+    if (!err) {
+      void useBookmarksStore.getState().upsertConnection({
+        ...c,
+        useCount: (c.useCount ?? 0) + 1,
+        lastUsedAt: Date.now()
+      })
+    }
+    return err
+  }
+
   const err = await connect({
     opts: {
       host: c.host,
@@ -283,6 +411,24 @@ export async function reconnectSession(terminalId: string): Promise<string | und
     if (session.sessionId) window.api.ssh.close(session.sessionId)
     store.setStatusById(terminalId, 'connecting')
     const result = await window.api.wsl.connect({ distro: session.wslDistro })
+    if (result.error || !result.sessionId) {
+      const message = result.error ?? t(loc(), 'connect.reconnectFailed')
+      store.setStatusById(terminalId, 'error', message)
+      return message
+    }
+    store.updateSession(terminalId, result.sessionId, 'connected')
+    return undefined
+  }
+
+  // Reopening is the common case on serial, not the exceptional one: a board
+  // that resets itself takes the port down with it, and a native-USB ESP32
+  // re-enumerates on every reset.
+  if (session.kind === 'serial') {
+    const opts = session.serialOpts
+    if (!opts) return t(loc(), 'connect.noSerialPortReconnect')
+    if (session.sessionId) window.api.ssh.close(session.sessionId)
+    store.setStatusById(terminalId, 'connecting')
+    const result = await window.api.serial.connect(opts)
     if (result.error || !result.sessionId) {
       const message = result.error ?? t(loc(), 'connect.reconnectFailed')
       store.setStatusById(terminalId, 'error', message)
@@ -333,6 +479,13 @@ export async function duplicateSession(
 
   if (session.kind === 'wsl') {
     return connectWsl(session.wslDistro)
+  }
+
+  // A serial port is exclusive: the OS hands it to one process, so a second
+  // pane on the same device cannot exist. Say that, rather than opening a
+  // session that immediately fails with "access denied".
+  if (session.kind === 'serial') {
+    return t(loc(), 'connect.serialNoDuplicate')
   }
 
   const opts = resolveConnectOpts(session)

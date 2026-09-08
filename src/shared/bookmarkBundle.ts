@@ -1,6 +1,6 @@
 import { folderNamePath, mergeIncoming } from './bookmarkMerge'
 import type { BookmarkState, MergeItem, MergeResult } from './bookmarkMerge'
-import type { BookmarkFolder, ConnectionConfig } from './types'
+import type { BookmarkFolder, ConnectionConfig, SavedSerialOptions } from './types'
 
 /**
  * Native JSON transfer format. Unlike the SuperPuTTY XML this is lossless: it
@@ -68,18 +68,33 @@ export function parseConnectionBundle(text: string): ParsedBundle {
   let dropped = 0
   const connections: ConnectionConfig[] = []
   for (const entry of raw.connections) {
-    if (!isRecord(entry) || !str(entry.host)) {
+    if (!isRecord(entry)) {
       dropped++
       continue
     }
+    // What makes an entry usable depends on what it is. An SSH entry with no
+    // host cannot be dialled, but a serial entry never has one — its address is
+    // the port path, so that is what has to be present instead.
+    const serial = parseSerial(entry.serial)
+    const isSerial = entry.kind === 'serial'
+    if (isSerial ? !serial : !str(entry.host)) {
+      dropped++
+      continue
+    }
+
     const conn: Record<string, unknown> = {
-      id: str(entry.id) || `${str(entry.username)}@${str(entry.host)}`,
-      name: str(entry.name) || str(entry.host),
+      id: str(entry.id) || defaultId(entry, serial),
+      name: str(entry.name) || (isSerial ? (serial?.path ?? 'serial') : str(entry.host)),
       host: str(entry.host),
-      port: toPort(entry.port),
+      port: isSerial ? 0 : toPort(entry.port),
       username: str(entry.username),
       parentId: str(entry.parentId) || null
     }
+    if (isSerial) {
+      conn.kind = 'serial'
+      conn.serial = serial
+    }
+    optional(conn, 'deviceKind', entry.deviceKind)
     optional(conn, 'password', entry.password)
     optional(conn, 'privateKey', entry.privateKey)
     optional(conn, 'passphrase', entry.passphrase)
@@ -90,6 +105,38 @@ export function parseConnectionBundle(text: string): ParsedBundle {
   }
 
   return { folders, connections, dropped }
+}
+
+function defaultId(entry: Record<string, unknown>, serial: SavedSerialOptions | null): string {
+  if (serial) return `serial:${serial.path}`
+  return `${str(entry.username)}@${str(entry.host)}`
+}
+
+/**
+ * Read serial port settings from an imported entry.
+ *
+ * The path is the only field required, because it is the only one that cannot
+ * be reconstructed: everything else has a per-board default that
+ * `identifySerialDevice` can supply at connect time. Returns null when there is
+ * no usable path, which is what marks the entry unimportable.
+ */
+function parseSerial(raw: unknown): SavedSerialOptions | null {
+  if (!isRecord(raw)) return null
+  const path = str(raw.path)
+  if (!path) return null
+
+  const opts: Record<string, unknown> = { path }
+  const baudRate = typeof raw.baudRate === 'number' ? raw.baudRate : Number.NaN
+  if (Number.isFinite(baudRate) && baudRate > 0) opts.baudRate = baudRate
+  for (const key of ['dataBits', 'stopBits'] as const) {
+    if (typeof raw[key] === 'number') opts[key] = raw[key]
+  }
+  if (typeof raw.parity === 'string') opts.parity = raw.parity
+  for (const key of ['rtscts', 'dtr', 'rts', 'echo'] as const) {
+    if (typeof raw[key] === 'boolean') opts[key] = raw[key]
+  }
+  if (typeof raw.newline === 'string') opts.newline = raw.newline
+  return opts as unknown as SavedSerialOptions
 }
 
 /**

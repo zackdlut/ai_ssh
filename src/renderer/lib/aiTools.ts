@@ -5,7 +5,7 @@
  * the SSH bridge. All results are sanitized (never echo secrets back to the
  * model).
  */
-import { useSessionsStore } from '../store/sessionsStore'
+import { useSessionsStore, type TerminalSession } from '../store/sessionsStore'
 import { useBookmarksStore } from '../store/bookmarksStore'
 import { useThemeStore } from '../store/themeStore'
 import { useLocaleStore } from '../store/localeStore'
@@ -15,11 +15,14 @@ import { useSkillsStore } from '../store/skillsStore'
 import { useUserRulesStore } from '../store/userRulesStore'
 import { connect, connectFromConfig } from './connect'
 import { applyPatch, editFile, globFiles, grepFiles, readFile, writeFile } from './fileTools'
+import { listDevices, serialReset, serialSend } from './deviceTools'
 import { gitCommit, gitRead } from './gitTools'
 import { updatePlan } from './planTool'
 import { formatCaptureElapsed, isSessionCaptureActive, refreshCommandTimeoutMinutes } from './execCapture'
 import { runAgentCommand } from './agentExec'
 import { isInteractiveTuiCommand } from '../../shared/interactiveCommands'
+import { describeTabLimits, hasCommandChannel } from '../../shared/tabCapabilities'
+import { deviceKindLabel } from '../../shared/deviceIdentity'
 import { getTabObservation, setTabObservation } from './terminalObservation'
 import { snapshotTabMarkers, applyPinnedTabId, formatTerminalLabel } from './pinnedTerminal'
 import { readFullTerminalOutput } from './terminalRegistry'
@@ -357,6 +360,21 @@ async function moveConnectionToFolder(args: Record<string, unknown>): Promise<To
   }
 }
 
+/**
+ * Refuse a tool that needs a command channel on a tab that has none.
+ *
+ * Failing here beats letting the capture run its full window and come back
+ * empty, which reads like the command ran and printed nothing — and on serial
+ * it would cost a turn spent concluding the device is dead.
+ */
+function rejectWithoutCommandChannel(
+  tab: TerminalSession,
+  tabId: string
+): ToolResult | undefined {
+  if (hasCommandChannel(tab.kind)) return undefined
+  return { ok: false, error: `Tab "${tabId}" is ${describeTabLimits(tab.kind)}` }
+}
+
 async function execCommand(
   args: Record<string, unknown>,
   ctx?: ToolExecContext,
@@ -370,6 +388,8 @@ async function execCommand(
   if (tab.status !== 'connected' || !tab.sessionId) {
     return { ok: false, error: `Tab "${tabId}" is not connected (status: ${tab.status}).` }
   }
+  const noShell = rejectWithoutCommandChannel(tab, tabId)
+  if (noShell) return noShell
 
   if (opts?.visible) {
     if (tab.nlMode) {
@@ -528,6 +548,8 @@ async function delegateToHost(
   if (tab.status !== 'connected' || !tab.sessionId) {
     return { ok: false, error: `Tab "${tabId}" is not connected (status: ${tab.status}).` }
   }
+  const noShell = rejectWithoutCommandChannel(tab, tabId)
+  if (noShell) return noShell
   const label = formatTerminalLabel(tab)
 
   // One canceller is registered with the parent, not two. The sub-agent
@@ -1012,6 +1034,12 @@ async function dispatchToolCall(
       return updateAppSettings(args)
     case 'read_skill':
       return readSkill(args)
+    case 'list_devices':
+      return listDevices()
+    case 'serial_send':
+      return serialSend(args)
+    case 'serial_reset':
+      return serialReset(args)
     default:
       return { ok: false, error: `Unknown tool "${name}".` }
   }
@@ -1088,11 +1116,15 @@ export function buildToolContextMessage(
   /** Tier whose tools this turn sends, or undefined when tools are disabled. */
   tier: ToolTier | undefined,
   /** Terminal tab the current chat task is pinned to. */
-  pinnedTabId?: string
+  pinnedTabId?: string,
+  /** Whether this turn carries the device tools, so their section is worth it. */
+  deviceIntent?: boolean
 ): string | undefined {
   // A turn with no tools can act on no id, so the whole snapshot is dead weight.
   if (!tier) return undefined
-  const available = new Set(toolNamesFor(tier, { hasSkills: hasEnabledSkills() }))
+  const available = new Set(
+    toolNamesFor(tier, { hasSkills: hasEnabledSkills(), deviceIntent })
+  )
   const wantsConnections = ['open_ssh', 'create_ssh_config', 'update_ssh_config', 'list_ssh_configs', 'move_connection_to_folder'].some(
     (n) => available.has(n)
   )
@@ -1123,7 +1155,18 @@ export function buildToolContextMessage(
                     : ` (exit ${obs.lastExitCode})`
                 }`
               : ''
-          return `- tab_id=${t.id} | ${t.username}@${t.host}:${t.port} | ${t.status}${
+          // Each transport is addressed differently, and a serial tab has no
+          // host, user, or port to print — rendering it as `@:0` would both
+          // read as broken and hide the one thing that identifies it.
+          const identity =
+            t.kind === 'serial'
+              ? `serial ${t.serialOpts?.path ?? '(unknown port)'}${
+                  t.serialOpts?.baudRate ? ` @ ${t.serialOpts.baudRate}` : ''
+                }${t.deviceKind ? ` (${deviceKindLabel(t.deviceKind)})` : ''} — no shell`
+              : t.kind === 'wsl'
+                ? `wsl ${t.wslDistro ?? '(default distro)'}`
+                : `${t.username}@${t.host}:${t.port}`
+          return `- tab_id=${t.id} | ${identity} | ${t.status}${
             snapshotTabMarkers(t.id, activeSessionId, pinnedTabId)
           }${cwd}${last}`
         })
@@ -1137,7 +1180,11 @@ export function buildToolContextMessage(
     ? configs
         .map((c) => {
           const parent = folderName(c.parentId)
-          return `- config_id=${c.id} | ${c.name} | ${c.username}@${c.host}:${c.port}${
+          const target =
+            c.kind === 'serial'
+              ? `serial ${c.serial?.path ?? '(no port)'}`
+              : `${c.username}@${c.host}:${c.port}`
+          return `- config_id=${c.id} | ${c.name} | ${target}${
             c.password ? ' | has-password' : ''
           }${c.privateKey ? ' | has-key' : ''}${
             parent ? ` | folder=${parent} (folder_id=${c.parentId})` : ' | folder=(top level)'

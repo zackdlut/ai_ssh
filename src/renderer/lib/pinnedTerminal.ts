@@ -28,31 +28,48 @@ export interface MentionableTab {
   customTitle?: string
   title?: string
   wslDistro?: string
+  serialOpts?: { path?: string }
   kind?: string
 }
 
+/**
+ * Label a terminal tab.
+ *
+ * Each transport has a different natural name, and falling through to `host`
+ * would leave both local kinds labelled "host" with nothing after it: a WSL tab
+ * has a distro, a serial tab has a port, and neither has a hostname at all.
+ */
 export function formatTerminalLabel(tab: {
   customTitle?: string
   username: string
   host: string
   title?: string
   wslDistro?: string
+  serialOpts?: { path?: string }
   kind?: string
 }): string {
   const custom = tab.customTitle?.trim()
   if (custom) return custom
   if (tab.kind === 'wsl') return tab.wslDistro || tab.title || 'WSL'
+  if (tab.kind === 'serial') return shortSerialPath(tab.serialOpts?.path) || tab.title || 'serial'
   if (tab.username && tab.host) return `${tab.username}@${tab.host}`
   return tab.host || tab.title || 'host'
 }
 
-/** Token inserted after @, Cursor-style: the host (or WSL distro) name. */
+/** Token inserted after @, Cursor-style: the host, WSL distro, or port name. */
 export function mentionTokenFor(tab: MentionableTab): string {
   const raw =
     tab.kind === 'wsl'
       ? tab.customTitle || tab.wslDistro || tab.title || 'wsl'
-      : tab.host || tab.customTitle || tab.title || 'host'
+      : tab.kind === 'serial'
+        ? tab.customTitle || shortSerialPath(tab.serialOpts?.path) || tab.title || 'serial'
+        : tab.host || tab.customTitle || tab.title || 'host'
   return sanitizeMentionToken(raw)
+}
+
+/** `/dev/ttyUSB0` reads as `ttyUSB0`; `COM3` is already short. */
+function shortSerialPath(path: string | undefined): string {
+  return path?.replace(/^\/dev\//, '') ?? ''
 }
 
 function sanitizeMentionToken(raw: string): string {
@@ -155,13 +172,15 @@ export function filterTabsForMention<T extends MentionableTab>(tabs: T[], query:
         host: tab.host ?? '',
         title: tab.title,
         wslDistro: tab.wslDistro,
+        serialOpts: tab.serialOpts,
         kind: tab.kind
       }),
       tab.host,
       tab.username,
       tab.customTitle,
       tab.title,
-      tab.wslDistro
+      tab.wslDistro,
+      tab.serialOpts?.path
     ]
       .filter(Boolean)
       .join(' ')

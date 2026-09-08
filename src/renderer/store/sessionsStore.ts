@@ -1,5 +1,10 @@
 import { create } from 'zustand'
-import type { ConnectOptions, SshStatus } from '../../shared/types'
+import type {
+  ConnectOptions,
+  DeviceKind,
+  SerialConnectOptions,
+  SshStatus
+} from '../../shared/types'
 
 /**
  * One terminal session: a pty (local or remote) plus the metadata the UI needs
@@ -9,10 +14,22 @@ import type { ConnectOptions, SshStatus } from '../../shared/types'
 export interface TerminalSession {
   id: string
   title: string
-  /** Session backend: remote SSH (default) or a local WSL pseudo-terminal. */
-  kind?: 'ssh' | 'wsl'
+  /**
+   * Session backend: remote SSH (default), a local WSL pseudo-terminal, or a
+   * local serial port.
+   *
+   * This is the field that decides what the tab can DO, not just how it was
+   * opened. Serial is the narrowest: bytes only, so no SFTP, no exit codes, and
+   * no command channel. `describeTabOs` turns it into the sentence the model
+   * reads, and `execCommand` refuses on it outright.
+   */
+  kind?: 'ssh' | 'wsl' | 'serial'
   /** WSL distribution name for `kind: 'wsl'` sessions (used for reconnect/title). */
   wslDistro?: string
+  /** Port settings for `kind: 'serial'` sessions (used for reconnect/title). */
+  serialOpts?: SerialConnectOptions
+  /** Board family behind a serial session, for the reset pulse and AI context. */
+  deviceKind?: DeviceKind
   /** Absent until an SSH session is opened (idle session). */
   sessionId?: string
   status: SshStatus
@@ -42,6 +59,13 @@ interface SessionsState {
   setActive: (id: string | null) => void
   setStatusBySession: (sessionId: string, status: SshStatus, message?: string) => void
   setStatusById: (id: string, status: SshStatus, message?: string) => void
+  /**
+   * Record where DTR/RTS ended up, so the sidebar can show them as toggles.
+   *
+   * The main process owns the real lines; this mirrors what it reported back.
+   * Ignored for a tab with no `serialOpts`, since there is nothing to mirror.
+   */
+  setSerialSignals: (id: string, signals: { dtr?: boolean; rts?: boolean }) => void
   updateSession: (id: string, sessionId: string, status: SshStatus) => void
   setNlMode: (id: string, on: boolean) => void
   toggleNlMode: (id: string) => void
@@ -91,6 +115,12 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     set((s) => ({
       sessions: s.sessions.map((t) =>
         t.id === id ? { ...t, sessionId, status, message: undefined } : t
+      )
+    })),
+  setSerialSignals: (id, signals) =>
+    set((s) => ({
+      sessions: s.sessions.map((t) =>
+        t.id === id && t.serialOpts ? { ...t, serialOpts: { ...t.serialOpts, ...signals } } : t
       )
     })),
   setNlMode: (id, on) =>

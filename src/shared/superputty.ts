@@ -213,11 +213,22 @@ const EOL = '\r\n'
  * flattened back into the `SessionId` path, and passwords/keys go back into
  * `ExtraArgs`, so the result round-trips through `parseSessionsXml`.
  */
-export function buildSessionsXml(current: BookmarkState): { xml: string; exported: number } {
+export function buildSessionsXml(current: BookmarkState): {
+  xml: string
+  exported: number
+  skipped: number
+} {
   const { folders, connections } = current
   const usedIds = new Set<string>()
 
-  const rows = connections.map((conn) => {
+  // Every row in this schema is an SSH session with a Host and a Port. A serial
+  // device has neither, and there is no attribute to put a port path in, so
+  // exporting one would silently produce an entry that reconnects to nothing.
+  // They are reported as skipped instead; the JSON bundle carries them intact.
+  const exportable = connections.filter((c) => (c.kind ?? 'ssh') === 'ssh')
+  const skipped = connections.length - exportable.length
+
+  const rows = exportable.map((conn) => {
     const name = conn.name || conn.host
     const path = [...folderNamePath(folders, conn.parentId), name]
 
@@ -253,6 +264,7 @@ export function buildSessionsXml(current: BookmarkState): { xml: string; exporte
 
   return {
     xml: [...XML_HEADER_LINES, ...lines, '</ArrayOfSessionData>'].join(EOL),
-    exported: rows.length
+    exported: rows.length,
+    skipped
   }
 }

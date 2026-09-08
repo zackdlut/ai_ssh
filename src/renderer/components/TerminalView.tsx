@@ -24,7 +24,7 @@ import { askAboutSelection } from '../lib/aiService'
 import { extractCommands, isDangerous } from '../lib/commands'
 import { buildMarkerCommand, parseMarker, runCapturedCommand, getCaptureTiming, nextCaptureDeadline, hasCaptureMarker, formatCaptureElapsed, isSessionCaptureActive, interruptSessionCapture, registerCaptureEcho, stripCaptureArtifacts, cleanCapturedOutput, CAPTURE_INTERRUPT_SETTLE_MS } from '../lib/execCapture'
 import { getTabObservation, setTabObservation } from '../lib/terminalObservation'
-import { describeTabOs } from '../../shared/prompts'
+import { describeSessionOs } from '../../shared/prompts'
 import {
   isFollowAppTheme,
   resolveTerminalTheme,
@@ -121,7 +121,10 @@ const DIRECT_ANSWER_MAX = 200
 const SYNC_SCROLL_ECHO_MS = 500
 
 /** Tab fields the NL-mode context needs; a subset of TerminalSession. */
-type NlContextTab = Pick<TerminalSession, 'id' | 'host' | 'username' | 'kind' | 'wslDistro'>
+type NlContextTab = Pick<
+  TerminalSession,
+  'id' | 'host' | 'username' | 'kind' | 'wslDistro' | 'serialOpts' | 'deviceKind'
+>
 
 /** Same fields, as carried across the NL summarize hop (tab id renamed). */
 type NlSummarizeContext = Omit<NlContextTab, 'id'> & { tabId: string }
@@ -132,7 +135,7 @@ function buildNlContext(term: Terminal, tab: NlContextTab): TerminalContext {
     recentOutput: serializeBuffer(term, NL_CONTEXT_MAX_LINES),
     host: tab.host,
     username: tab.username,
-    osHint: describeTabOs(tab.kind, tab.wslDistro),
+    osHint: describeSessionOs(tab),
     cwd: getTabObservation(tab.id)?.cwd
   }
 }
@@ -721,7 +724,9 @@ function ConnectedTerminalView({
                   host: tab.host,
                   username: tab.username,
                   kind: tab.kind,
-                  wslDistro: tab.wslDistro
+                  wslDistro: tab.wslDistro,
+                  serialOpts: tab.serialOpts,
+                  deviceKind: tab.deviceKind
                 }
               },
               loc()

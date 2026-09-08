@@ -11,6 +11,7 @@ import UiIcon from './UiIcon'
 import DropdownMenuItem from './DropdownMenuItem'
 import TabContextMenu, { type TabView } from './TabContextMenu'
 import type { WslDistro } from '../../shared/types'
+import { hasFileChannel } from '../../shared/tabCapabilities'
 import { collectLeaves } from '../lib/paneLayout'
 import { TAB_DRAG_MIME } from '../lib/tabDrag'
 
@@ -104,7 +105,8 @@ export default function TabBar({
   const [dragOverId, setDragOverId] = useState<string | null>(null)
 
   const recent = recentOpen ? getRecentConnections(5) : []
-  const activeIsWsl = sessions.find((tt) => tt.id === activeSessionId)?.kind === 'wsl'
+  const activeKind = sessions.find((tt) => tt.id === activeSessionId)?.kind
+  const activeHasFiles = hasFileChannel(activeKind)
 
   const views = useMemo<TabView[]>(
     () =>
@@ -125,10 +127,10 @@ export default function TabBar({
     [paneTabs, sessions]
   )
 
-  // SFTP relies on the SSH channel; close the panel when a WSL tab is active.
+  // SFTP is an SSH subsystem; close the panel when a tab without one is active.
   useEffect(() => {
-    if (activeIsWsl && sftpOpen) setSftpOpen(false)
-  }, [activeIsWsl, sftpOpen, setSftpOpen])
+    if (!activeHasFiles && sftpOpen) setSftpOpen(false)
+  }, [activeHasFiles, sftpOpen, setSftpOpen])
 
   // Probe installed WSL distributions once; empty on non-Windows so the button
   // stays hidden there.
@@ -570,8 +572,14 @@ export default function TabBar({
           <button
             className={`toolbar-btn tabbar-action-btn ${sftpOpen ? 'active' : ''}`}
             onClick={toggleSftp}
-            disabled={activeIsWsl}
-            title={activeIsWsl ? t('tabbar.sftpWslUnsupported') : t('tabbar.toggleSftp')}
+            disabled={!activeHasFiles}
+            title={
+              activeHasFiles
+                ? t('tabbar.toggleSftp')
+                : activeKind === 'serial'
+                  ? t('tabbar.sftpSerialUnsupported')
+                  : t('tabbar.sftpWslUnsupported')
+            }
           >
             <UiIcon name="sftp" />
             <span>{t('tabbar.sftp')}</span>

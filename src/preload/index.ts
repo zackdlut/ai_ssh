@@ -27,6 +27,7 @@ import type {
   ConnectResult,
   ExportSessionsResult,
   ImportSessionsResult,
+  BuiltinSkill,
   InstalledSkill,
   SkillInstallResult,
   SkillReadResult,
@@ -55,7 +56,14 @@ import type {
   SshExecResult,
   SshStatusEvent,
   WslConnectOptions,
-  WslDistro
+  WslDistro,
+  DeviceKind,
+  DeviceProbeResult,
+  SerialConnectOptions,
+  SerialListResult,
+  SerialPortsEvent,
+  SerialSignalResult,
+  ToolchainDetectResult
 } from '../shared/types'
 import type { DebugLogPayload, DebugLogSettings } from '../shared/debugLog'
 
@@ -103,6 +111,32 @@ const api = {
     list: (): Promise<WslDistro[]> => ipcRenderer.invoke('wsl:list'),
     connect: (opts: WslConnectOptions): Promise<ConnectResult> =>
       ipcRenderer.invoke('wsl:connect', opts)
+  },
+  serial: {
+    list: (): Promise<SerialListResult> => ipcRenderer.invoke('serial:list'),
+    connect: (opts: SerialConnectOptions): Promise<ConnectResult> =>
+      ipcRenderer.invoke('serial:connect', opts),
+    setSignals: (
+      sessionId: string,
+      signals: { dtr?: boolean; rts?: boolean }
+    ): Promise<SerialSignalResult> =>
+      ipcRenderer.invoke('serial:setSignals', sessionId, signals),
+    reset: (sessionId: string, kind?: DeviceKind): Promise<SerialSignalResult> =>
+      ipcRenderer.invoke('serial:reset', sessionId, kind),
+    // Serial has no hot-plug event on any platform, so the main process polls.
+    // Only while something is listening: start when the device list is shown.
+    startWatch: (): void => ipcRenderer.send('serial:startWatch'),
+    stopWatch: (): void => ipcRenderer.send('serial:stopWatch'),
+    onPorts: (cb: (e: SerialPortsEvent) => void): Unsubscribe => on('serial:ports', cb)
+  },
+  device: {
+    probe: (host: string, port: number): Promise<DeviceProbeResult> =>
+      ipcRenderer.invoke('device:probe', host, port),
+    probeMany: (
+      targets: { id: string; host: string; port: number }[]
+    ): Promise<Record<string, DeviceProbeResult>> =>
+      ipcRenderer.invoke('device:probeMany', targets),
+    toolchains: (): Promise<ToolchainDetectResult> => ipcRenderer.invoke('toolchain:detect')
   },
   local: {
     home: (): Promise<LocalHomeResult> => ipcRenderer.invoke('local:home'),
@@ -244,6 +278,9 @@ const api = {
   skills: {
     list: (): Promise<InstalledSkill[]> => ipcRenderer.invoke('skills:list'),
     install: (): Promise<SkillInstallResult> => ipcRenderer.invoke('skills:install'),
+    listBuiltin: (): Promise<BuiltinSkill[]> => ipcRenderer.invoke('skills:listBuiltin'),
+    installBuiltin: (id: string): Promise<SkillInstallResult> =>
+      ipcRenderer.invoke('skills:installBuiltin', id),
     remove: (id: string): Promise<InstalledSkill[]> => ipcRenderer.invoke('skills:remove', id),
     setEnabled: (id: string, enabled: boolean): Promise<InstalledSkill[]> =>
       ipcRenderer.invoke('skills:setEnabled', id, enabled),

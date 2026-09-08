@@ -27,6 +27,13 @@ const DEFAULT_SSH_PORT = 22
  */
 function connectionIdentity(tab: TerminalSession): string {
   if (tab.kind === 'wsl') return tab.wslDistro || tab.title || 'WSL'
+  // A serial device is identified by its port and baud rate: two boards on the
+  // same hub differ only there, and neither has a host or an account.
+  if (tab.kind === 'serial') {
+    const path = tab.serialOpts?.path?.replace(/^\/dev\//, '')
+    if (!path) return tab.title || 'serial'
+    return tab.serialOpts?.baudRate ? `${path} · ${tab.serialOpts.baudRate}` : path
+  }
   if (!tab.host) return tab.title || ''
   const user = tab.username ? `${tab.username}@` : ''
   const port = tab.port && tab.port !== DEFAULT_SSH_PORT ? `:${tab.port}` : ''

@@ -9,12 +9,16 @@ interface Props {
 export default function SkillsModal({ onClose }: Props): JSX.Element {
   const t = useT()
   const skills = useSkillsStore((s) => s.skills)
+  const builtins = useSkillsStore((s) => s.builtins)
   const installing = useSkillsStore((s) => s.installing)
+  const installingBuiltin = useSkillsStore((s) => s.installingBuiltin)
   const load = useSkillsStore((s) => s.load)
   const install = useSkillsStore((s) => s.install)
+  const installBuiltin = useSkillsStore((s) => s.installBuiltin)
   const remove = useSkillsStore((s) => s.remove)
   const setEnabled = useSkillsStore((s) => s.setEnabled)
   const [error, setError] = useState<string | null>(null)
+  const available = builtins.filter((b) => !b.installed)
 
   useEffect(() => {
     void load()
@@ -23,6 +27,12 @@ export default function SkillsModal({ onClose }: Props): JSX.Element {
   const handleInstall = async (): Promise<void> => {
     setError(null)
     const res = await install()
+    if (res.error) setError(res.error)
+  }
+
+  const handleInstallBuiltin = async (id: string): Promise<void> => {
+    setError(null)
+    const res = await installBuiltin(id)
     if (res.error) setError(res.error)
   }
 
@@ -63,6 +73,37 @@ export default function SkillsModal({ onClose }: Props): JSX.Element {
                   </button>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Only what is not yet installed: a section that keeps listing a
+              skill already shown above reads as a duplicate, not an offer. */}
+          {available.length > 0 && (
+            <div className="skills-builtin">
+              <div className="skills-builtin-head">{t('settings.skills.builtin')}</div>
+              <div className="context-hint">{t('settings.skills.builtinHint')}</div>
+              <div className="skills-list">
+                {available.map((b) => (
+                  <div key={b.id} className="skills-item">
+                    <div className="skills-item-body">
+                      <div className="skills-item-name">{b.name}</div>
+                      <div className="skills-item-desc">
+                        {b.description || t('settings.skills.noDescription')}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="skills-item-add"
+                      onClick={() => void handleInstallBuiltin(b.id)}
+                      disabled={installingBuiltin !== null}
+                    >
+                      {installingBuiltin === b.id
+                        ? t('settings.skills.installing')
+                        : t('settings.skills.builtinAdd')}
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

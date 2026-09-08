@@ -25,6 +25,12 @@ files:
   - '!**/node_modules/{sharp,@img,png-to-ico,pngjs}/**'
 asarUnpack:
   - '**/*.{node,dll,exe}'
+# Skills shipped with the app. They are copied into userData on install, so they
+# only have to be readable at that moment — outside the asar keeps them
+# inspectable and editable by anyone who wants to adapt one.
+extraResources:
+  - from: resources/skills
+    to: skills
 electronLanguages:
   - en-US
   - zh-CN
@@ -35,6 +41,10 @@ linux:
   files:
     - package.json
     - '!**/node_modules/node-pty/prebuilds/**'
+    # serialport ships N-API prebuilds for every platform it supports; a linux
+    # x64 build loads only prebuilds/linux-x64. Keep both libc variants: which
+    # one node-gyp-build picks is decided on the user's machine, not here.
+    - '!**/node_modules/@serialport/bindings-cpp/prebuilds/{android-*,darwin-*,win32-*,linux-arm,linux-arm64}/**'
   target:
     - target: zip
       arch:
@@ -51,6 +61,7 @@ win:
     - '!**/node_modules/node-pty/prebuilds/darwin-*/**'
     - '!**/node_modules/node-pty/prebuilds/win32-arm64/**'
     - '!**/node_modules/node-pty/build/**'
+    - '!**/node_modules/@serialport/bindings-cpp/prebuilds/{android-*,darwin-*,linux-*,win32-arm64,win32-ia32}/**'
   target:
     - target: zip
       arch:

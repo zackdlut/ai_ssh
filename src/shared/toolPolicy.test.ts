@@ -204,3 +204,37 @@ describe('decideToolCall', () => {
     ).toBe('ask')
   })
 })
+
+describe('serial action tools', () => {
+  it('never runs silently on autonomy mode alone', () => {
+    // The catch-all for `autonomous` is `auto`, so without an explicit branch
+    // above it these would drive a board with no click. A reset interrupts
+    // whatever the device is doing, and a write can move a motor — neither is
+    // recoverable by an undo the way a tab or a saved config is.
+    for (const tool of ['serial_send', 'serial_reset']) {
+      expect(decideToolCall({ tool, mode: 'autonomous' }), tool).toBe('ask')
+      expect(decideToolCall({ tool, mode: 'balanced' }), tool).toBe('ask')
+      expect(decideToolCall({ tool, mode: 'conservative' }), tool).toBe('deny')
+    }
+  })
+
+  it('honours a session grant the user made themselves', () => {
+    // Debugging a board is repetitive — the same line sent a dozen times while
+    // narrowing a fault. "Allow for this chat" has to actually stick, or the
+    // approval card becomes the thing being debugged.
+    const allow = new Set(['serial_send'])
+    expect(decideToolCall({ tool: 'serial_send', mode: 'balanced', sessionAllowlist: allow })).toBe(
+      'auto'
+    )
+    // The grant is per tool, so it does not spread to the reset.
+    expect(decideToolCall({ tool: 'serial_reset', mode: 'balanced', sessionAllowlist: allow })).toBe(
+      'ask'
+    )
+  })
+
+  it('runs the read-only device survey without asking', () => {
+    for (const mode of ['conservative', 'balanced', 'autonomous'] as const) {
+      expect(decideToolCall({ tool: 'list_devices', mode }), mode).toBe('auto')
+    }
+  })
+})

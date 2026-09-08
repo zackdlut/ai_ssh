@@ -22,7 +22,7 @@ import {
   buildContextMessage,
   buildCopilotSystemPrompt,
   buildUserRulesSystemMessage,
-  describeTabOs,
+  describeSessionOs,
   CHART_INTENT,
   MERMAID_INTENT,
   buildChartTurnNudge,
@@ -47,6 +47,7 @@ import {
   toolNamesFor,
   toolTierForProfile,
   AI_SETTINGS_INTENT,
+  hasDeviceIntent,
   hasSettingsIntent,
   type ToolSurfaceOptions,
   type ToolTier
@@ -88,6 +89,7 @@ import {
 } from './toolTrace'
 import { buildPlanContextMessage } from './planTool'
 import { claimVerifyCheckpoint, recordTaskEvidence, taskEvidence } from './taskEvidence'
+import { isSerialTab } from '../../shared/tabCapabilities'
 import { unmetPlanSteps, unmetStepsPrompt } from '../../shared/planVerify'
 import { parseExecToolResult, parsedExitCode } from './execResult'
 import { buildHostMemoryMessage, loadHostMemory } from './hostMemory'
@@ -172,6 +174,11 @@ interface LoopState {
    * Decided once and held, like mermaidIntent.
    */
   aiSettingsIntent?: boolean
+  /**
+   * Whether this task is about a physical device, so the serial tools ride
+   * along. Decided once and held, like the other intent flags.
+   */
+  deviceIntent?: boolean
   /**
    * The raw user instruction that kicked off this loop. Used by the Verify step
    * to decide, after a display-only tool turn, whether the request was pure
@@ -280,7 +287,7 @@ function squeezeBudget(budget: number, squeeze = 1): number {
 const toolSchemaTokens = new Map<string, number>()
 
 function toolSurfaceKey(tier: ToolTier, surface: ToolSurfaceOptions): string {
-  return `${tier}:${!!surface.hasSkills}:${!!surface.settingsIntent}:${!!surface.aiSettingsIntent}:${!!surface.planMode}:${!!surface.executeMode}`
+  return `${tier}:${!!surface.hasSkills}:${!!surface.settingsIntent}:${!!surface.aiSettingsIntent}:${!!surface.deviceIntent}:${!!surface.planMode}:${!!surface.executeMode}`
 }
 
 function toolTokens(tier: ToolTier, surface: ToolSurfaceOptions): number {
@@ -346,9 +353,17 @@ function toolSurfaceFor(
     hasSkills: hasEnabledSkills(),
     settingsIntent: hasSettingsIntent(userIntent ?? ''),
     aiSettingsIntent: AI_SETTINGS_INTENT.test(userIntent ?? ''),
+    deviceIntent: hasDeviceIntent(userIntent ?? ''),
     planMode: agentMode === 'plan',
     executeMode: agentMode === 'execute'
   }
+}
+
+/** Whether the tab a task is pinned to is a serial console. */
+function isSerialSession(tabId: string | undefined): boolean {
+  if (!tabId) return false
+  const tab = useSessionsStore.getState().sessions.find((s) => s.id === tabId)
+  return !!tab && isSerialTab(tab.kind)
 }
 
 function isPlanMode(tabId: string): boolean {
@@ -431,27 +446,42 @@ function capToolResult(text: string, cap: number): string {
 const EVIDENCE_OUTPUT_CHARS = 4000
 
 /**
- * Record what a shell command actually did, so a plan step's verify assertion
- * is checked against the transcript rather than against the model's account of
- * it. Only the exec tools qualify: an assertion is a command that ran, and the
- * whole point is that the evidence is independent of what the model claims.
+ * Record what an action actually did, so a plan step's verify assertion is
+ * checked against the transcript rather than against the model's account of it.
+ * Only tools that put something on a wire qualify: an assertion is an action
+ * that ran, and the whole point is that the evidence is independent of what the
+ * model claims.
+ *
+ * `serial_send` counts too. A serial-only task has no exec tool available at
+ * all, so without this every `update_plan` verify would go unsatisfiable and
+ * trip the "unverified plan" fallback on a task that was in fact verified — by
+ * the only means the transport allows. Its evidence is flagged `noExitCode`, so
+ * `verifyPlanStep` judges it on `expectOutput` alone.
  */
 function recordExecEvidence(loop: LoopState, call: ToolCallView, result: string): void {
-  if (call.name !== 'exec_command' && call.name !== 'run_in_terminal') return
+  const isExec = call.name === 'exec_command' || call.name === 'run_in_terminal'
+  const isSerial = call.name === 'serial_send'
+  if (!isExec && !isSerial) return
   if (call.status !== 'done') return
   let command: string
   try {
-    const args = JSON.parse(call.args) as { command?: unknown }
-    if (typeof args.command !== 'string' || !args.command.trim()) return
-    command = args.command
+    // A serial write has no command, only the line written — which is exactly
+    // what an assertion about a serial step would name.
+    const args = JSON.parse(call.args) as { command?: unknown; data?: unknown }
+    const field = isSerial ? args.data : args.command
+    if (typeof field !== 'string' || !field.trim()) return
+    command = field
   } catch {
     return
   }
-  const parsed = parseExecToolResult(result)
+  // Only the exec path speaks the exit-code envelope this parses; serial output
+  // is raw device bytes, so it is recorded as-is with no code to extract.
+  const parsed = isSerial ? undefined : parseExecToolResult(result)
   recordTaskEvidence(loop.tabId, {
     command,
-    exitCode: parsedExitCode(parsed.exitCode),
-    output: parsed.output.slice(0, EVIDENCE_OUTPUT_CHARS)
+    exitCode: parsed ? parsedExitCode(parsed.exitCode) : null,
+    noExitCode: isSerial,
+    output: (parsed?.output ?? result).slice(0, EVIDENCE_OUTPUT_CHARS)
   })
 }
 
@@ -771,6 +801,11 @@ function startTurn(loop: LoopState, epilogue = false): void {
   loop.mermaidIntent ??= !chartTurn && MERMAID_INTENT.test(loop.userIntent ?? '')
   loop.settingsIntent ??= hasSettingsIntent(loop.userIntent ?? '')
   loop.aiSettingsIntent ??= AI_SETTINGS_INTENT.test(loop.userIntent ?? '')
+  // A serial tab makes the device tools relevant regardless of wording: the
+  // user is already looking at a board, and asking "why is it rebooting" reads
+  // as a plain debugging question with no keyword to match on.
+  loop.deviceIntent ??=
+    hasDeviceIntent(loop.userIntent ?? '') || isSerialSession(loop.contextTabId)
   const chat = ai.chatTabs.find((t) => t.id === loop.tabId)
   const agentMode = chat?.agentMode ?? 'agent'
   const planMode = agentMode === 'plan'
@@ -779,6 +814,7 @@ function startTurn(loop: LoopState, epilogue = false): void {
     hasSkills: hasEnabledSkills(),
     settingsIntent: loop.settingsIntent,
     aiSettingsIntent: loop.aiSettingsIntent,
+    deviceIntent: loop.deviceIntent,
     planMode,
     executeMode
   }
@@ -802,7 +838,7 @@ function startTurn(loop: LoopState, epilogue = false): void {
   // conversation both preserves the cacheable prefix and gives these facts
   // recency over the long system prompt.
   const suffix = buildTurnStateMessage([
-    buildToolContextMessage(loop.toolTier, chat?.pinnedTabId),
+    buildToolContextMessage(loop.toolTier, chat?.pinnedTabId, loop.deviceIntent),
     buildTaskMemoryMessage(loop.tabId),
     buildPlanContextMessage(loop.tabId),
     loop.fileContext
@@ -898,6 +934,7 @@ function startTurn(loop: LoopState, epilogue = false): void {
     promptSections,
     settingsIntent: loop.settingsIntent,
     aiSettingsIntent: loop.aiSettingsIntent,
+    deviceIntent: loop.deviceIntent,
     planMode,
     executeMode
   })
@@ -1819,7 +1856,7 @@ function readTabContext(tabId: string, maxLines: number): TerminalContext | unde
     recentOutput: readTerminalOutput(tab.id, maxLines),
     host: tab.host,
     username: tab.username,
-    osHint: describeTabOs(tab.kind, tab.wslDistro),
+    osHint: describeSessionOs(tab),
     cwd: getTabObservation(tab.id)?.cwd
   }
 }
@@ -2169,7 +2206,7 @@ function fixedOverheadSegments(
   const terminal = buildContextMessage(context) ?? ''
   const tools = tier ? toolsDefinitionText(tier, surface) : ''
   const injections = [
-    buildToolContextMessage(tier, pinnedTabId),
+    buildToolContextMessage(tier, pinnedTabId, surface.deviceIntent),
     buildSkillsContextMessage(),
     buildHostMemoryMessage(pinnedTabId),
     chatTabId ? buildTaskMemoryMessage(chatTabId) : undefined,
@@ -2210,6 +2247,7 @@ export function computeActiveTabBudget(params: {
     hasSkills: hasEnabledSkills(),
     settingsIntent: true,
     aiSettingsIntent: true,
+    deviceIntent: true,
     planMode: agentMode === 'plan',
     executeMode: agentMode === 'execute'
   }

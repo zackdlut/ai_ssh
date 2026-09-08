@@ -23,6 +23,13 @@ export interface ExecEvidence {
   command: string
   exitCode: number | null
   output: string
+  /**
+   * The transport cannot produce an exit code at all — a serial line carries
+   * bytes to a board, with no process to exit. Distinct from `exitCode: null`,
+   * which means a shell command's code was expected but went missing (a dropped
+   * session), and must still fail an assertion.
+   */
+  noExitCode?: boolean
 }
 
 export type StepVerifyState =
@@ -79,11 +86,24 @@ export function verifyPlanStep(item: PlanItem, evidence: readonly ExecEvidence[]
   const run = matches[matches.length - 1]
   if (!run) return { kind: 'missing' }
 
-  const expected = check.expectExitCode ?? 0
-  if (run.exitCode !== expected) {
+  // Evidence from a transport with no exit code can only be judged on its
+  // output. Holding it to the default `exit 0` would fail every serial step on
+  // a technicality and leave the task permanently unverifiable — so on that
+  // path `expectOutput` is the whole assertion.
+  if (!run.noExitCode) {
+    const expected = check.expectExitCode ?? 0
+    if (run.exitCode !== expected) {
+      return {
+        kind: 'failed',
+        reason: `\`${run.command}\` exited ${run.exitCode ?? 'unknown'}, but the step expects ${expected}`
+      }
+    }
+  } else if (!check.expectOutput) {
+    // Nothing left to check against: no code to compare and no pattern to
+    // match. Calling that "passed" would launder a guess into evidence.
     return {
       kind: 'failed',
-      reason: `\`${run.command}\` exited ${run.exitCode ?? 'unknown'}, but the step expects ${expected}`
+      reason: `\`${run.command}\` ran over a serial line, which has no exit code — give the step an expect_output pattern so it can be verified from the device's output`
     }
   }
 
