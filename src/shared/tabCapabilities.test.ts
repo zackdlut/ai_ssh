@@ -135,6 +135,30 @@ describe('describeTabOs', () => {
     expect(text).toMatch(/no exit code/i)
   })
 
+  it('survives the renderer, which has no `process` global', () => {
+    /*
+     * This module is imported by the renderer, whose main world gets no
+     * `process` binding — so `process.platform` there is a ReferenceError that
+     * takes down the turn assembly calling it, with no error surfacing anywhere
+     * because the callers are all `void`-ed promises. Every other test in this
+     * file runs under Node, where the global exists and the bug is invisible.
+     */
+    const saved = Object.getOwnPropertyDescriptor(globalThis, 'process')
+    // @ts-expect-error deleting a global to emulate the renderer's main world
+    delete globalThis.process
+    try {
+      expect(typeof process).toBe('undefined')
+      for (const shell of [undefined, '/bin/bash', 'pwsh.exe', 'cmd.exe']) {
+        expect(() => describeTabOs('local', undefined, undefined, { shell })).not.toThrow()
+      }
+      expect(describeTabOs('local', undefined, undefined, { shell: '/bin/bash' })).toMatch(
+        /own machine/
+      )
+    } finally {
+      if (saved) Object.defineProperty(globalThis, 'process', saved)
+    }
+  })
+
   it('reads cleanly when the board is unidentified', () => {
     // A CH340 is shared between ESP32 and Arduino clones and cannot be told
     // apart, so an unlabelled serial tab is a normal case, not a broken one.

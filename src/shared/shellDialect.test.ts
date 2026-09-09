@@ -25,6 +25,21 @@ describe('shellDialect', () => {
     // shell, and POSIX is what every pre-existing caller already assumed.
     expect(shellDialect('/usr/local/bin/fish')).toBe('posix')
   })
+
+  it('falls back without a shell path in the renderer, which has no `process`', () => {
+    // The pathless branch is the only one that asks what platform this is, and
+    // the renderer imports this module: a bare `process.platform` there throws
+    // rather than returning undefined.
+    const saved = Object.getOwnPropertyDescriptor(globalThis, 'process')
+    // @ts-expect-error deleting a global to emulate the renderer's main world
+    delete globalThis.process
+    try {
+      expect(() => shellDialect(undefined)).not.toThrow()
+      expect(shellDialect(undefined)).toBe('posix')
+    } finally {
+      if (saved) Object.defineProperty(globalThis, 'process', saved)
+    }
+  })
 })
 
 describe('wrapExecCommand', () => {

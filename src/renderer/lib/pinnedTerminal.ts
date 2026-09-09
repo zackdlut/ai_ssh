@@ -31,6 +31,13 @@ export interface MentionableTab {
   serialOpts?: { path?: string }
   localShell?: string
   kind?: string
+  /**
+   * 1-based index painted on a split pane header. Absent when the tab is not
+   * split, so a lone session is never forced to `@host-1`.
+   */
+  paneNumber?: number
+  /** Leaf count of the tab that owns `paneNumber`, for "2/4" labels. */
+  paneCount?: number
 }
 
 /**
@@ -118,18 +125,18 @@ function mentionTokenCandidates(tab: MentionableTab): string[] {
  * worth typing; later ones take the first candidate nobody has claimed, falling
  * back to a numeric suffix when even the port cannot tell them apart.
  *
- * Tokens therefore depend on the order of the list, which is the session order:
- * they only move when the tabs themselves do.
+ * Split panes already paint that number on the header. When duplicates have to
+ * be numbered, the suffix is that index (`@host` for pane 1, `@host-2` for pane
+ * 2) rather than "nth duplicate in session-list order", so typing `@host-2`
+ * names the pane whose corner says 2. Unsplit duplicates still number from
+ * list order, the way they always did.
  */
 export function uniqueMentionTokens(tabs: readonly MentionableTab[]): string[] {
   const candidates = tabs.map(mentionTokenCandidates)
   const taken = new Set<string>()
   return candidates.map((mine, index) => {
     const [base] = mine
-    if (!taken.has(base)) {
-      taken.add(base)
-      return base
-    }
+    const pane = tabs[index]?.paneNumber
     /*
      * The sessions sharing this name. A candidate that one of them could answer
      * to just as well does not say which session is meant, so it is no use as a
@@ -137,13 +144,32 @@ export function uniqueMentionTokens(tabs: readonly MentionableTab[]): string[] {
      * have to end up numbered rather than one of them claiming `user@host`.
      */
     const rivals = candidates.filter((other, i) => i !== index && other[0] === base)
+    const splitDuplicate = pane != null && rivals.length > 0
+    // Pane 1 keeps the bare host (the unmarked original). Later panes skip it
+    // even when it is still free, so pane 3 is `@host-3` rather than `@host-2`.
+    if (!taken.has(base) && !(splitDuplicate && pane !== 1)) {
+      taken.add(base)
+      return base
+    }
     const token =
       mine.find(
         (candidate) => !taken.has(candidate) && !rivals.some((other) => other.includes(candidate))
-      ) ?? nextNumberedToken(base, taken)
+      ) ?? numberedMentionToken(base, splitDuplicate ? pane : undefined, taken)
     taken.add(token)
     return token
   })
+}
+
+function numberedMentionToken(
+  base: string,
+  pane: number | undefined,
+  taken: ReadonlySet<string>
+): string {
+  if (pane != null) {
+    const numbered = pane === 1 ? base : `${base}-${pane}`
+    if (!taken.has(numbered)) return numbered
+  }
+  return nextNumberedToken(base, taken)
 }
 
 function nextNumberedToken(base: string, taken: ReadonlySet<string>): string {
@@ -194,7 +220,8 @@ export function filterTabsForMention<T extends MentionableTab>(tabs: T[], query:
       tab.title,
       tab.wslDistro,
       tab.localShell,
-      tab.serialOpts?.path
+      tab.serialOpts?.path,
+      tab.paneNumber != null ? String(tab.paneNumber) : undefined
     ]
       .filter(Boolean)
       .join(' ')

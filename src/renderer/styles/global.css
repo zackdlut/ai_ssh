@@ -2846,6 +2846,12 @@ select:focus {
   color: var(--signal);
 }
 
+.mention-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .mention-name {
   font-family: var(--font-mono);
   font-size: 13px;

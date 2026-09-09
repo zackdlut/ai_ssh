@@ -12,6 +12,8 @@
  * user typed by hand (`C:\Program Files\Git\bin\bash.exe`) is classified by
  * what it is rather than by the platform it runs on.
  */
+import { hostPlatform } from './hostPlatform'
+
 export type ShellDialect = 'posix' | 'powershell' | 'cmd'
 
 /** Sentinel that carries the post-command working directory out of stdout. */
@@ -25,7 +27,7 @@ export const EXEC_CWD_MARKER = '__AISSH_CWD__:'
  * every pre-existing caller assumed.
  */
 export function shellDialect(shellPath?: string): ShellDialect {
-  if (!shellPath) return process.platform === 'win32' ? 'powershell' : 'posix'
+  if (!shellPath) return hostPlatform() === 'win32' ? 'powershell' : 'posix'
   const base = shellPath
     .replace(/\\/g, '/')
     .split('/')

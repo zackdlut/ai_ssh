@@ -2,6 +2,7 @@ import type { TerminalContext } from '../types'
 import type { TabKind } from '../tabCapabilities'
 import { deviceKindLabel, type DeviceKind } from '../deviceIdentity'
 import { shellDialect } from '../shellDialect'
+import { hostPlatform } from '../hostPlatform'
 
 /**
  * Describe what kind of shell a tab is, for the context message's OS hint.
@@ -35,7 +36,7 @@ export function describeTabOs(
     if (dialect === 'cmd') {
       return `a Windows Command Prompt on the user's own machine${name} — cmd.exe builtins only, not POSIX tools. Paths use backslashes. The file tools DO work here.`
     }
-    return `a ${process.platform === 'darwin' ? 'macOS' : 'Unix'} shell on the user's own machine${name} — this is their workstation, not a server, so be conservative with anything destructive. The file tools DO work here.`
+    return `a ${hostPlatform() === 'darwin' ? 'macOS' : 'Unix'} shell on the user's own machine${name} — this is their workstation, not a server, so be conservative with anything destructive. The file tools DO work here.`
   }
   if (kind === 'serial') {
     const where = serial?.path ? ` on ${serial.path}` : ''

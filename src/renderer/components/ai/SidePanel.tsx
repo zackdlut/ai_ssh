@@ -104,6 +104,7 @@ export default function SidePanel(): JSX.Element {
   const activeSessionId = useSessionsStore((s) => s.activeSessionId)
   const activeSession = terminalTabs.find((t) => t.id === activeSessionId)
   const paneTabs = usePaneLayoutStore((s) => s.tabs)
+  const activePaneTabId = usePaneLayoutStore((s) => s.activeTabId)
 
   const [resizing, setResizing] = useState(false)
   const [picker, setPicker] = useState<PickerReason | null>(null)
@@ -165,8 +166,8 @@ export default function SidePanel(): JSX.Element {
   const contextTab = contextTabId ? terminalTabs.find((t) => t.id === contextTabId) : undefined
 
   const mentionableTabs = useMemo(
-    () => selectMentionableTerminals(terminalTabs, paneTabs),
-    [terminalTabs, paneTabs]
+    () => selectMentionableTerminals(terminalTabs, paneTabs, activePaneTabId),
+    [terminalTabs, paneTabs, activePaneTabId]
   )
   /*
    * Tokens come from the whole mentionable list, never from the filtered view:

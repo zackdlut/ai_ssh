@@ -231,6 +231,44 @@ describe('uniqueMentionTokens', () => {
       ['b', 'deploy@10.0.0.7']
     ])
   })
+
+  it('numbers split duplicates with the pane header index, not session-list order', () => {
+    // Session store order is a, b, c; the layout shows c in pane 1.
+    expect(
+      uniqueMentionTokens([
+        { id: 'a', username: 'root', host: '10.0.0.7', port: 22, paneNumber: 2 },
+        { id: 'b', username: 'root', host: '10.0.0.7', port: 22, paneNumber: 3 },
+        { id: 'c', username: 'root', host: '10.0.0.7', port: 22, paneNumber: 1 }
+      ])
+    ).toEqual(['10.0.0.7-2', '10.0.0.7-3', '10.0.0.7'])
+  })
+
+  it('uses the visible pane index when the first duplicate is not pane 1', () => {
+    expect(
+      uniqueMentionTokens([
+        { id: 'a', username: 'root', host: '10.0.0.7', port: 22, paneNumber: 3 },
+        { id: 'b', username: 'root', host: '10.0.0.7', port: 22, paneNumber: 2 }
+      ])
+    ).toEqual(['10.0.0.7-3', '10.0.0.7-2'])
+  })
+
+  it('still prefers a distinct title over the pane number', () => {
+    expect(
+      uniqueMentionTokens([
+        { id: 'a', username: 'root', host: '10.0.0.7', port: 22, title: 'web', paneNumber: 1 },
+        { id: 'b', username: 'root', host: '10.0.0.7', port: 22, title: 'db', paneNumber: 2 }
+      ])
+    ).toEqual(['10.0.0.7', 'db'])
+  })
+
+  it('does not suffix a uniquely named session just because it sits in pane 2', () => {
+    expect(
+      uniqueMentionTokens([
+        { id: 'a', username: 'root', host: 'prod.example.com', port: 22, paneNumber: 1 },
+        { id: 'b', username: 'root', host: '10.0.0.7', port: 22, paneNumber: 2 }
+      ])
+    ).toEqual(['prod.example.com', '10.0.0.7'])
+  })
 })
 
 describe('parseAtQuery / filterTabsForMention', () => {
@@ -252,6 +290,16 @@ describe('parseAtQuery / filterTabsForMention', () => {
   it('filters by host as you type', () => {
     expect(filterTabsForMention(tabs, 'prod').map((t) => t.id)).toEqual(['a'])
     expect(filterTabsForMention(tabs, 'staging').map((t) => t.id)).toEqual(['b'])
+  })
+
+  it('filters split duplicates by the pane header number', () => {
+    const split = [
+      { id: 'a', username: 'root', host: '10.0.0.7', port: 22, paneNumber: 1 },
+      { id: 'b', username: 'root', host: '10.0.0.7', port: 22, paneNumber: 2 },
+      { id: 'c', username: 'root', host: '10.0.0.7', port: 22, paneNumber: 3 }
+    ]
+    expect(filterTabsForMention(split, '3').map((t) => t.id)).toEqual(['c'])
+    expect(filterTabsForMention(split, '10.0.0.7-2').map((t) => t.id)).toEqual(['b'])
   })
 })
 

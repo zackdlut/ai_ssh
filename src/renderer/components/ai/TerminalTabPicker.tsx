@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react'
-import type { TerminalSession } from '../../store/sessionsStore'
+import type { MentionableSession } from '../../lib/mentionableTerminals'
 import { mentionTokenFor } from '../../lib/pinnedTerminal'
 import { useT } from '../../lib/i18n'
 
 interface Props {
-  tabs: TerminalSession[]
+  tabs: MentionableSession[]
   /** Unique `@` tokens by terminal id, derived from the whole mentionable list. */
   tokens: ReadonlyMap<string, string>
   activeSessionId: string | null
@@ -25,7 +25,7 @@ const DEFAULT_SSH_PORT = 22
  * this stays literal — no custom title standing in for the account — and keeps
  * the port whenever it is not the one everybody assumes.
  */
-function connectionIdentity(tab: TerminalSession): string {
+function connectionIdentity(tab: MentionableSession): string {
   if (tab.kind === 'wsl') return tab.wslDistro || tab.title || 'WSL'
   // A local shell is identified by which shell it is; there is only one machine
   // it could be on, so naming that would distinguish nothing.
@@ -47,7 +47,7 @@ function connectionIdentity(tab: TerminalSession): string {
 }
 
 /** The name the user or the saved connection gave this session, if it has one. */
-function connectionName(tab: TerminalSession): string {
+function connectionName(tab: MentionableSession): string {
   return (tab.customTitle?.trim() || tab.title?.trim()) ?? ''
 }
 
@@ -88,6 +88,9 @@ export default function TerminalTabPicker({
             const isPinned = tab.id === pinnedTabId
             const selected = index === highlightIndex
             const tags = [
+              tab.paneNumber != null && tab.paneCount != null
+                ? t('pane.groupIndex', { index: tab.paneNumber, count: tab.paneCount })
+                : null,
               identity && identity !== token ? identity : null,
               name && name !== identity && name !== token ? name : null,
               isActive ? t('copilot.mentionActive') : null,
@@ -106,7 +109,12 @@ export default function TerminalTabPicker({
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => onSelect(tab.id)}
               >
-                <span className="mention-name">@{token}</span>
+                <span className="mention-name-row">
+                  {tab.paneNumber != null ? (
+                    <span className="pane-header-index">{tab.paneNumber}</span>
+                  ) : null}
+                  <span className="mention-name">@{token}</span>
+                </span>
                 <span className="mention-desc">{tags.join(' · ')}</span>
               </button>
             )
